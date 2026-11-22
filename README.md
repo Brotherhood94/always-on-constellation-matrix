@@ -1,4 +1,4 @@
-# Constellation Matrix VPS
+# Always-on Constellation via Matrix Protocol
 
 **Build and run a private workspace for always-on AI agents.**
 
