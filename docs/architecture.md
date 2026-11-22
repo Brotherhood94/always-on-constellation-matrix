@@ -1,73 +1,91 @@
 # Architecture
 
-The handoff reports Ubuntu 24.04.5 and two Docker Compose projects, `matrix-stack` and `matrix-agents`. Host Tailscale Serve exposes Synapse at tailnet HTTPS 443 through loopback port 18008, which maps to container port 8008. The dashboard is served over HTTPS 8443 and polls Docker inventory every minute. The handoff does not identify the TLS termination component or the dashboard ingress path. Synapse and PostgreSQL share an internal database network. The bots use `matrix-stack_clients`.
+The VPS runs two Docker Compose projects. `matrix-stack` contains Synapse, PostgreSQL, and Monitor. `matrix-agents` contains the VPS agents and Dot bridge. Host Tailscale Serve provides private HTTPS. It proxies Matrix client requests on port 443 to Synapse on host loopback port 18008 and serves the resource dashboard directory on port 8443. Synapse reaches PostgreSQL on an internal database network. The Matrix containers share the private `matrix-stack_clients` network.
 
-Public registration and federation are disabled in the reported live deployment. Tailnet HTTPS gives authorized clients private access to the homeserver. Matrix federation is server-to-server communication and is independently disabled. The agent room and the alert room are invite-only and encrypted. Element Desktop and Element X are the desktop and mobile clients.
+Synapse has public registration and federation disabled. `Agents` and `VPS Alerts` are invite-only rooms with end-to-end encryption. Element Desktop and Element X use the homeserver on the tailnet. The optional Secure MCP Tunnel carries Dot traffic to the bridge through a Unix socket from an outbound VPS connection.
 
 ```mermaid
 flowchart LR
-    Clients["Element Desktop / Element X"] -->|"Tailnet HTTPS 443"| Serve["Host Tailscale Serve"]
-    Serve --> Loopback["Host loopback port 18008"]
-    Loopback -->|"Container port 8008"| Synapse["Synapse"]
-    Dashboard["Dashboard (HTTPS 8443)"]
-    Dashboard -->|"Polls every minute"| Inventory["Docker inventory"]
-    Synapse ---|"Internal database network"| Postgres["PostgreSQL"]
-    Synapse ---|"matrix-stack_clients"| Connector["Shared Matrix connector"]
-    Connector --- Workers["Analyst / Reviewer / Coder"]
-    Workers --> ACP["Local ACP with Codex backend"]
-    Plugin["Dot private plugin"] --> Tunnel["OpenAI Secure MCP Tunnel"]
-    Tunnel -->|"Authenticated Unix socket"| Bridge["Dot bridge"]
-    Bridge --> Device["Separate Dot Matrix device"]
-    Device -->|"Agent room thread"| Synapse
+    Element["Element Desktop and Element X"] -->|"Tailnet HTTPS 443"| Serve["Host Tailscale Serve"]
+    Browser["Resource dashboard browser"] -->|"Tailnet HTTPS 8443"| Serve
+    Serve -->|"Loopback 18008 to container 8008"| Synapse["Synapse"]
+    Serve --> Dashboard["Static resource dashboard"]
+    subgraph VPS["VPS services"]
+        Synapse ---|"Internal database network"| Postgres["PostgreSQL"]
+        Synapse ---|"Encrypted Agents room"| Agents["Manager, Analyst, Coder, Reviewer"]
+        Agents --> ACP["Local ACP and per-agent Codex session"]
+        Synapse ---|"Encrypted VPS Alerts room"| Monitor["Monitor"]
+        Collector["Host resource collector"] --> Dashboard
+        Collector -->|"Durable alert queue"| Monitor
+        Bridge["Dot bridge and Matrix device"] --> Synapse
+    end
+    Plugin["Dot private plugin"] --- Tunnel["Secure MCP Tunnel"]
+    Tunnel ---|"Authenticated Unix socket"| Bridge
+    External["External host worker"] -->|"Outbound tailnet HTTPS 443"| Serve
 ```
 
-The Dot path uses an outbound OpenAI Secure MCP Tunnel v0.0.21. The tunnel runtime credential authorizes tunnel use. The bridge independently authenticates requests over its Unix socket. The separate Dot Matrix device uses the Dot Matrix account invited to the agent room. Keep all credential material out of this template.
+## Agent roles
 
-The documented Dot operations are `publish_plan(task_id,title,plan,first_agent)` and scoped `get_task(task_id)`. Reuse the task ID when retrying the same publication. After an uncertain result, use the scoped lookup for the same task ID and record what it returns. The handoff leaves duplicate Matrix post behavior on retry unverified.
+| Agent | Responsibility | Runtime in the reference deployment |
+| --- | --- | --- |
+| Manager | Owns one assigned task, sets acceptance criteria, delegates work, checks the evidence, and closes the thread. | Codex ACP on the VPS, GPT-6.2 Astra with `high` effort |
+| Analyst | Investigates requests, prepares plans, and contributes analysis to a handoff. | Codex ACP on the VPS, GPT-6.2 Sol with `medium` effort |
+| Coder | Implements changes in its workspace. An optional GitHub integration can publish authorized work. | Codex ACP on the VPS, GPT-6.2 Sol with `medium` effort |
+| Reviewer | Checks shared material independently and returns findings to the delegating agent. | Codex ACP on the VPS, GPT-6.2 Sol with `medium` effort |
+| External Worker | Runs host-specific work with the permissions of its host account and exchanges results in Matrix. Register the deployment's actual worker identity. | Constellation Agent Instance with Amplifier and GPT-6.2 Sol on a separate Linux host |
+| Dot | Publishes plans with one starting agent and reads status, replies, and the outcome of its own threads. | Private ChatGPT plugin, Secure MCP Tunnel, and a separate Matrix device |
+| Monitor | Delivers resource alerts and recovery notices in `VPS Alerts`. | Dedicated Matrix bot on the VPS |
 
-Analyst, Reviewer, and Coder have distinct state and persistent per-worker workspace and state under `/srv/agents/<agent>`. Workers run as UID 991 with a read-only container root and without a general shell. A workspace persists across threads, while each worker has one ACP session per thread. The local ACP backend is Codex. Unified is outside this deployment path. Model and effort are configurable.
+Each VPS worker runs as UID 991 with a read-only container root, separate writable workspace and private state, and its own Matrix device. An ACP session follows the Matrix thread. Workspaces persist across threads. The external worker uses a dedicated Linux user and a user-level service. Agents share evidence and files through Matrix.
 
-The connector validates the room, authorized sender, a real `m.mentions` entry paired with the actual target mention in new text, and a single target per turn. Quote-only mentions and messages with two targets do not dispatch. A turn can hand off to one peer in the same thread. A delegated review returns to its delegator. For a review return that continues the chain, include a single-target handoff to the delegator in the review reply. The chain stops at reply six or at the first reply without a handoff. Confirm which replies count toward the cap against the connector source and acceptance tests. SQLite persists the cursor, queued work, session information, and prepared replies. Stable Matrix transaction IDs are used for retrying sends.
+## Shared Matrix policies
+
+- **Dispatch.** An authorized sender activates a registered agent with one real Matrix mention in new text in `Agents`. A typed name, a quote-only mention, and multiple agent targets leave the workers idle.
+- **Direct information and status.** The named agent answers the requester in the same thread with a real Matrix mention. This reply uses no handoff and consumes no managed task turn.
+- **Handoffs.** A reply passes work to at most one agent in the same thread. A delegated review returns to its delegator. A chain uses up to six agent replies and ends when a reply has no handoff. For managed work, the connector validates the route against encrypted events and reserves the final available reply for Manager. Worker failures return to Manager. An ordinary wait leaves the task open.
+- **Activity and outcome.** The connector adds 👀 when the runtime confirms work has started and clears it when the reply is delivered. Whole-task completion or a blocker produces a single final notification mentioning Dot and the configured owner. The original assignment receives ✅ for completion or ❌ for a blocker. The final message gives the result and verification, or the blocker, who can resolve it, and the next step.
+- **Readable replies.** Lead with the answer. The connector renders common Markdown as Matrix rich text, including lists, bold, emphasis, code, and descriptive links. Keep a plain-text fallback.
+- **Encrypted attachments.** VPS agents can read and send referenced attachments up to **60 MB per file (60,000,000 bytes)**. In Element, reply to an uploaded file with the agent mention and request. The connector carries outgoing references through handoffs, and reports refusals in the thread. Element reports rejected user uploads.
+- **Durability.** SQLite persists thread sessions, queued work, prepared replies, and reactions. A delivery retry keeps its Matrix transaction ID. A Dot publication retry keeps the same task ID. `get_task` reads only threads opened by that Dot bridge.
+
+## Managed review in one thread
 
 ```mermaid
 sequenceDiagram
-    participant Dot as Dot private plugin
-    participant Tunnel as OpenAI Secure MCP Tunnel
-    participant Bridge as Dot bridge
-    participant Room as Agent room thread
-    participant Router as Shared Matrix connector
+    participant Dot
+    participant Bridge as Private Dot bridge
+    participant Room as Agents thread
+    participant Manager
     participant Coder
     participant Reviewer
-    Note over Dot,Bridge: Request flow over the outbound tunnel
-    Dot->>Tunnel: publish_plan with stable task ID
-    Tunnel->>Bridge: Request over authenticated Unix socket
-    Bridge->>Room: Publish via separate Dot Matrix device
-    Room->>Router: Thread event with first agent mention
-    Note over Router: Validate room, sender, m.mentions, and one target in new text
-    Router->>Coder: Dispatch in thread-scoped ACP session
-    Coder->>Router: Reply with Reviewer handoff
-    Router->>Room: Send Coder reply
-    Room->>Router: Review request event
-    Router->>Reviewer: Dispatch review
-    Reviewer->>Router: Findings with handoff to Coder
-    Router->>Room: Send Reviewer reply
-    Room->>Router: Review return event
-    Router->>Coder: Resume thread-scoped ACP session
-    Coder->>Router: Reply without handoff
-    Router->>Room: Send final Coder reply
-    Note over Room,Router: Stop at first reply without handoff or at reply six
-    Dot->>Tunnel: get_task for the same task ID
-    Tunnel->>Bridge: Scoped lookup over authenticated Unix socket
+    Dot->>Bridge: Publish a plan with one Manager mention
+    Bridge->>Room: Open the encrypted assignment
+    Room->>Manager: Dispatch the original assignment
+    Manager->>Room: 1. Assign implementation to Coder
+    Room->>Coder: Deliver goal and acceptance checks
+    Coder->>Room: 2. Return the change and evidence to Manager
+    Room->>Manager: Deliver evidence
+    Manager->>Room: 3. Ask Reviewer to verify the change
+    Room->>Reviewer: Deliver the review request
+    Reviewer->>Room: 4. Return findings to Manager
+    Room->>Manager: Deliver the review findings
+    Manager->>Room: 5. Close with the verified outcome
+    Note over Room: The original assignment receives a terminal reaction
+    Dot->>Bridge: Retrieve outcome using the same task ID
+    Bridge-->>Dot: Return status and verified result
 ```
 
-## Reported version pins
+A task that needs all three specialist roles can use Manager → Analyst → Coder → Reviewer → Coder → Manager. The connector preserves this authorized route and its six-reply budget.
+
+## Reference version pins
 
 | Component | Version |
 | --- | --- |
+| Ubuntu | 24.04.5 LTS |
 | Synapse | v1.165.0 |
 | PostgreSQL | 17.12-bookworm |
 | Node | 24.22.3-trixie-slim |
 | Constellation Runtime | 0.15.14 |
 | Codex | 0.171.0 |
-| Adapter | 2.9.0 |
+| Codex ACP adapter | 2.9.0 |
 | OpenAI Secure MCP Tunnel | v0.0.21 |

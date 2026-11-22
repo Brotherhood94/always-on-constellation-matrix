@@ -1,43 +1,50 @@
 # Deployment and recovery runbook
 
-The stages below record the deployment handoff for future deployment. Confirm the paired source archives, their installation instructions, and support for this VPS before execution. The references to entry points are for operator planning.
+## Prerequisites
 
-## Preparation
+1. Obtain matching `matrix-stack` and `matrix-agents` installer sources (the latter has been distributed as `matrix-agents-pilot.tar.gz`) from the authorized distribution. A full build needs the revision that contains the Manager service, the shared connector policies, and Manager backup coverage. Check the bundle contents before installation. Obtain the separate Dot and external-worker deployment sources if you plan to enable them.
+2. Prepare an Ubuntu 24.04 VPS with root console access, active host Tailscale, a tailnet HTTPS name, and cgroup v2. Confirm port 18008 is free on loopback and that Tailnet Serve ports 443 and 8443 are available. Keep a separate root console available for recovery.
+3. Confirm the permanent Synapse `server_name` before creating accounts. Use the deployment's tailnet DNS name for the reported setup. It forms part of every local Matrix ID. Record real operator values privately.
 
-1. Obtain the paired `matrix-stack` and `matrix-agents-pilot` source archives. Verify availability, provenance, and the paired revisions against the authorized distribution. Before any privileged install stage, confirm the installer entry points and syntax, supported configuration schema, and required artifacts in those revisions.
-2. Choose the permanent Synapse `server_name` before installation. Record deployment parameters in an operator-controlled location.
-3. Verify tailnet membership and private routing, HTTPS readiness for 443 and 8443, and cgroup v2 on the target host.
+| Example value | Use |
+| --- | --- |
+| `<SERVER_NAME>` | Permanent homeserver name and HTTPS hostname |
+| `<OWNER_HANDLE>` | Personal Synapse handle without the leading `@` |
+| `@manager:<SERVER_NAME>` | One example of a full Matrix ID for an invitation |
+| `<EXTERNAL_HOST>` | Separate Linux host for the external worker, if used |
+| `<TUNNEL_ID>` | Secure MCP Tunnel associated with the private ChatGPT workspace |
+| `<TASK_ID>` | Unique ID for one plan. Reuse it when retrying the same publication. |
 
-| Parameter | Placeholder | Purpose |
-| --- | --- | --- |
-| Synapse server name | `<SERVER_NAME>` | Permanent homeserver identity |
-| Owner handle | `<OWNER_HANDLE>` | Owner input to the stack installer |
-| Worker Matrix IDs | `<AGENT_MATRIX_ID>` | Repeat for Analyst, Reviewer, and Coder room invitations |
-| Dot Matrix ID | `<DOT_MATRIX_ID>` | Invite the separate Dot device's account to the agent room |
-| Tunnel ID | `<TUNNEL_ID>` | Associate the bridge with the authorized tunnel |
-| Task ID | `<TASK_ID>` | Reuse the same opaque ID for retries of a single publication |
+## 1. Install Matrix and connect Element
 
-## Matrix stack and workers
+1. From the paired `matrix-stack` source directory in the root console, run `bash ./install '<OWNER_HANDLE>'`, replacing the placeholder. The installer sets up Docker and Compose if needed, creates private rooms and accounts, and configures persistence, Tailscale Serve, and systemd. Enter passwords at the installer prompt.
+2. With Tailscale connected, choose **Sign In** and a custom homeserver in Element Desktop on the Mac. Use `https://<SERVER_NAME>` and the personal Synapse credentials. Save the Element recovery key in the password manager.
+3. Sign in to the same homeserver and account in Element X on the iPhone. Verify the new device and confirm encrypted messages and attachments work in both directions. Set `VPS Alerts` to notify for all messages and pin the private dashboard URL, `https://<SERVER_NAME>:8443/`.
+4. From the source directory, run `bash ./verify-phase1` as root. Confirm encrypted test alert delivery, private endpoint access, resource accounting, and isolated restore. Schedule a separate reboot check before adding workers.
 
-1. From the root console, use the source-provided `matrix-stack` install stage with the owner handle and complete `verify-phase1`.
-2. Onboard a desktop with Element Desktop and a mobile device with Element X. Verify the intended accounts and devices, encrypted room access, and receipt of an encrypted alert.
-3. Use the `matrix-agents` install stages in order. The reported entry points are `install-analyst`, `install-reviewer`, and `install-agent coder`. Invite the worker Matrix IDs to the agent room.
-4. Connect each worker using the source-provided `/opt/matrix-agents/connect-codex <agent>` entry point and permitted device authentication. Verify the Codex-backed ACP connection and room dispatch for each worker.
+## 2. Provision the VPS agents
 
-## Dot
+1. From the matching `matrix-agents` source directory, provision Analyst, Reviewer, Coder, and Manager in order using `bash ./install-analyst`, `bash ./install-reviewer`, `bash ./install-agent coder`, and `bash ./install-agent manager`.
+2. After provisioning each identity, invite its full Matrix ID to `Agents` in Element and run `/opt/matrix-agents/connect-codex <agent>` as root. Complete the dedicated device sign-in and confirm the configured model and effort pass the probe. Use the model configuration from the matching Compose revision.
+3. Check that each worker is available in the dashboard. Confirm its separate workspace and persistent private state under `/srv/agents/<agent>`. Run the applicable checks in [Acceptance](acceptance.md#checks-for-each-deployment).
+4. For a separate external worker, install its host-specific Constellation Agent Instance and Matrix connector under a dedicated Linux user. Enable the applicable user services for startup. Register the agent identity in the shared router and dashboard inventory, join `Agents`, and verify an encrypted round trip and a managed handoff. Use the external deployment source and preserve per-host workspace, credentials, and backup scope.
 
-1. Obtain the official OpenAI Secure MCP Tunnel v0.0.21 binary and verify its official checksum. Confirm the Dot deployment inputs through the authorized instructions before proceeding.
-2. Set up the root-protected `/etc/matrix-dot` and the authenticated Unix bridge socket. The reported association entry point is `/opt/matrix-dot/connect-tunnel <TUNNEL_ID>`. The reported grants were Tunnels Read + Manage for association and Tunnels Read + Use for the runtime credential. Confirm the current permission labels and grants before provisioning.
-3. Invite the separate Dot Matrix identity to the agent room and configure the private workspace connector. Verify tunnel and bridge authentication independently, then check the scoped operations from [Architecture](architecture.md) and record the result in [Acceptance](acceptance.md).
+## 3. Connect Dot and optional GitHub access
 
-## Optional Coder GitHub integration
+1. Where Dot is needed, use the matching Dot deployment bundle to install the bridge, Matrix identity, and tunnel service. Invite its Matrix account to `Agents`. Run `/opt/matrix-dot/connect-tunnel <TUNNEL_ID>` in the root console and supply the runtime key at the hidden prompt. Confirm the loopback readiness path at `http://127.0.0.1:18786/readyz`.
+2. Connect the tunnel as a private plugin in the intended ChatGPT workspace. The app uses the workspace's tunnel association and a separate file-backed header between the tunnel client and the local bridge. Refresh the plugin after changes to the starter-agent schema. Test a plan addressed to Manager and retrieve its result by task ID.
+3. If Coder needs GitHub, use `bash ./enable-coder-github` from the matching source on the VPS. The deployed integration uses a dedicated classic credential with `repo` and `workflow` scopes. The connector rejects repository deletion and the token excludes `delete_repo`. GitHub account permissions and repository rules govern each operation. Keep the credential in the separate read-only mount, rotate it with `/opt/matrix-agents/connect-github`, and verify access with an authorized `GET /user`.
 
-Give Coder a dedicated runtime credential. Use the integration installer from the paired source for setup, rotation, and recovery if it is available. Confirm its entry point and procedure in that revision before configuring the integration. Keep the runtime credential outside Restic and recover it separately through the credential provisioner. Broader repository access supports account-wide operations and increases the impact of compromise. Where the intended operations permit it, prefer access limited to selected repositories and the minimum required permissions. The reported connector blocks repository deletion, and the reported runtime token lacks repository deletion permission. Those controls apply to Coder's integration. GitHub Actions credentials have their own permissions.
+## 4. Monitor and recover
 
-## Monitoring and recovery
+| Resource | Sample | Alert | Recovery |
+| --- | --- | --- | --- |
+| CPU | Every minute | Above 50% for five samples | Below 45% for five samples |
+| RAM | Every minute | Above 50% for five samples | Below 45% for five samples |
+| Disk | Hourly | Above 25% | Below 22.5% |
 
-- Check `matrix-stack.service`, `matrix-monitor.service`, `matrix-backup.timer`, and `matrix-dot-tunnel.service` where Dot is present. The reported readiness endpoint is loopback TCP 18786, path `/readyz`.
-- CPU and RAM are sampled every minute via cgroup v2. The trigger and clear thresholds are 50% and 45%, with five samples. Disk is sampled hourly with trigger and clear thresholds of 25% and 22.5%. The alert outbox is durable and encrypted. Monitoring applies no resource caps.
-- Restic stores backups locally in `/var/backups/matrix`. The reported schedule is nightly at 03:30 in the configured deployment time zone with retention of seven successful snapshots. Reported coverage includes a PostgreSQL dump, Synapse identity and media, and encrypted bot state and queues. Verify post-Dot/Coder coverage as an open acceptance check.
-- The local repository shares the VPS failure domain. The tunnel runtime key is external to the backup and must be recovered separately through the authorized credential process.
-- Restore into isolation and confirm snapshot coverage and device isolation before starting restored components. Keep existing and restored Matrix devices from running concurrently. Validate service readiness, Synapse identity and media, encrypted rooms, worker state and queued work, and the separately recovered Dot connection before returning to service.
+Thresholds measure the project's share of VPS resources. The collector tracks the project's cgroup v2 CPU and memory usage and the allocated disk space for its data, volumes, logs, and local backups. The private dashboard retains 30 days of samples and lists the agents, host, model, and effort when available. A registered external worker appears in inventory. The resource samples cover the VPS workload. The durable Monitor queue sends one encrypted notice at alert and recovery transitions.
+
+- **Restart.** `sudo systemctl restart matrix-stack.service` brings up both local Compose projects with their configured services. Check `matrix-monitor.service`, `matrix-backup.timer`, and `matrix-dot-tunnel.service` when Dot is enabled. Check the external worker's user services separately.
+- **Back up.** Restic stores the latest seven successful encrypted snapshots locally in `/var/backups/matrix`. The persistent timer runs nightly at 03:30 in the configured time zone. Snapshots include PostgreSQL, Synapse configuration, signing identity and media, local Matrix encryption state, queues, and configured local agent workspaces and ACP state. A local snapshot shares the VPS failure domain. Preserve the Restic password, Element recovery key, Dot tunnel credential, and any GitHub credential through the authorized recovery process.
+- **Restore.** Run the paired isolated restore check. Verify the snapshot, data, and original server identity, and keep restored and live copies of a Matrix device from running concurrently. Reconnect independently provisioned integrations and verify them before switching service. Exercise reboot and mobile alert delivery for the complete deployment during the agreed maintenance window.
