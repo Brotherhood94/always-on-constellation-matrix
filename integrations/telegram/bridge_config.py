@@ -108,9 +108,15 @@ def update_allowlist(root, operation, peer, receiver):
     if not re.fullmatch(r'(?:user|chat|channel):[1-9][0-9]{0,18}', peer) or not re.fullmatch(r'[1-9][0-9]{0,18}', receiver):
         raise SystemExit('Specify the verified peer and Telegram login ID. Forum topic IDs are unsupported.')
     path = root / 'bridge/config.yaml'
-    config = load(path)
+    try:
+        config = json.load(sys.stdin)
+        portal_filter = config['bridge']['portal_create_filter']
+        entries = portal_filter['list']
+    except (json.JSONDecodeError, KeyError, TypeError):
+        raise SystemExit('Unable to read the bridge portal creation filter.') from None
+    if portal_filter.get('mode') != 'allow' or not isinstance(entries, list):
+        raise SystemExit('The bridge must use an explicit portal allowlist.')
     target = {'id': peer, 'receiver': receiver}
-    entries = config['bridge']['portal_create_filter']['list']
     if operation == 'allow' and target not in entries:
         entries.append(target)
     if operation == 'disallow' and target in entries:

@@ -25,6 +25,25 @@ docker run --rm --network none --entrypoint /usr/bin/mautrix-telegram "$images" 
     --entrypoint python3 "$py" -B /src/bridge_config.py generate /state /state/dummy.json
 docker run --rm --network none -v "$state:/state" --user 991:991 --entrypoint /usr/bin/mautrix-telegram "$images" \
   -g -c /state/bridge/config.yaml -r /state/bridge/registration.yaml
+
+bridge_config_json() {
+  docker run --rm --network none -v "$state:/state:ro" --entrypoint yq "$images" -o=json . /state/bridge/config.yaml
+}
+
+update_portal() {
+  bridge_config_json |
+    docker run --rm -i --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" \
+      -B /src/bridge_config.py "$1" /state user:1001 2002
+}
+
+config_before=$(bridge_config_json | shasum -a 256)
+update_portal allow
+update_portal allow
+bridge_config_json | python3 -c 'import json, sys; assert json.load(sys.stdin)["bridge"]["portal_create_filter"]["list"] == [{"id": "user:1001", "receiver": "2002"}]'
+update_portal disallow
+[[ $(bridge_config_json | shasum -a 256) == "$config_before" ]]
+echo 'The generated YAML supports idempotent allow and disallow and preserves the rest of the configuration.'
+
 docker run --rm --network none -v "$state:/state" --entrypoint /bin/sh "$syn" -c 'python -m synapse.app.homeserver --server-name telegram.test --config-path /state/synapse/homeserver.yaml --generate-config --report-stats=no --data-directory /state/synapse'
 docker run --rm -i --network none -v "$state:/state" --entrypoint python "$syn" - <<'PY'
 from pathlib import Path

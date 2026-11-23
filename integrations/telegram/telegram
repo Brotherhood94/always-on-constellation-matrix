@@ -73,7 +73,9 @@ case ${1:-} in
     ;;
   allow|disallow)
     [[ $# == 3 ]] || { echo 'Use telegram allow|disallow PEER LOGIN_ID' >&2; exit 2; }
-    "${config[@]}" "$1" "$TELEGRAM_DATA" "$2" "$3"
+    docker run --rm -i --network none --entrypoint yq "$image" -o=json '.' - \
+      < "$TELEGRAM_DATA/bridge/config.yaml" |
+      "${config[@]}" "$1" "$TELEGRAM_DATA" "$2" "$3"
     if [[ -n $("${compose[@]}" ps --status running --quiet telegram-bridge) ]]; then
       "${compose[@]}" restart telegram-bridge
     fi
