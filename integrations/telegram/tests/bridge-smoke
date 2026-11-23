@@ -86,10 +86,18 @@ if docker logs "$bridge" 2>&1 | rg -qi 'config validation failed|failed to start
   exit 1
 fi
 echo 'Pinned mautrix started against Synapse, migrated PostgreSQL, and exposed no portal with the empty allowlist.'
-docker run --rm -i --network "$network" --user 991:991 --entrypoint node matrix-telegram-connector:0.1.0 --input-type=module - <<'JS'
+# Leave the AppService identity available, but isolate the following synthetic room from bridge automation.
+docker stop --timeout 3 "$bridge" >/dev/null
+docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gid=991,mode=0700 \
+  -v "$state:/fixture:ro" --entrypoint node matrix-telegram-connector:0.1.1 --input-type=module - <<'JS'
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
+import pg from 'pg';
 import { matrixConnection } from './matrix.mjs';
+import { TelegramStore } from './policy.mjs';
 const url = 'http://synapse:8008';
 const root = '/_matrix/client/v3';
 async function api(path, body, token) {
@@ -132,4 +140,79 @@ assert.equal(text,'Isolated encrypted smoke test');
 sender.close();
 reader.close();
 console.log('Telegram connector Matrix crypto round trip and exact-transaction retry passed.');
+
+const agent = await register('telegram-agent');
+const bridgeBot = '@telegrambot:telegram.test';
+const botToken = (await readFile('/fixture/bridge/registration.yaml', 'utf8')).match(/^as_token:\s+(\S+)$/m)[1];
+async function privateRoom(token, invite, asUser) {
+  const path = '/createRoom' + (asUser ? '?user_id=' + encodeURIComponent(asUser) : '');
+  const created = await api(path, {preset:'private_chat',visibility:'private',
+    creation_content:{'m.federate':false},invite,
+    initial_state:[{type:'m.room.encryption',state_key:'',content:{algorithm:'m.megolm.v1.aes-sha2'}}]}, token);
+  return created.room_id;
+}
+const controlRoom = await privateRoom(agent.access_token, [b.user_id]);
+await api('/join/' + encodeURIComponent(controlRoom), {}, b.access_token);
+const portal = await privateRoom(botToken, [agent.user_id, b.user_id], bridgeBot);
+const portalRoute = '/rooms/' + encodeURIComponent(portal);
+await api(portalRoute + '/join', {}, b.access_token);
+const portalState = await fetch(url + root + portalRoute + '/state', {
+  headers:{authorization:'Bearer ' + b.access_token},
+});
+assert.equal(portalState.status, 200);
+const events = await portalState.json();
+assert.equal(events.find(event => event.type === 'm.room.create').sender, bridgeBot);
+assert.deepEqual(events.filter(event => event.type === 'm.room.member').map(event => [
+  event.state_key, event.content.membership,
+]).sort(), [[agent.user_id,'invite'],[b.user_id,'join'],[bridgeBot,'join']].sort());
+const auditDatabase = 'postgresql://synapse:fixture@postgres:5432/synapse';
+const pool = new pg.Pool({ connectionString:auditDatabase });
+try {
+  await pool.query('CREATE TABLE telegram_audit_portal (room text, peer text, receiver text, login text, owner text, relay text, room_kind text, forum boolean, supergroup boolean, blocked boolean)');
+  await pool.query('INSERT INTO telegram_audit_portal VALUES ($1, $2, $3, $3, $4, $3, $5, false, false, false)',
+    [portal, 'user:1001', '2002', b.user_id, 'dm']);
+} finally {
+  await pool.end();
+}
+await writeFile('/state/config.json', JSON.stringify({ matrixUrl:url, domain:'telegram.test',
+  agent:agent.user_id, device:agent.device, owner:b.user_id, bridgeBot, controlRoom, auditDatabase,
+  engine:{revision:'fixture'} }));
+await writeFile('/state/matrix-token', agent.access_token, {mode:0o600});
+await writeFile('/state/backend-verified', 'fixture');
+await writeFile('/state/binding-pilot.json', JSON.stringify({id:'pilot',peer:'user:1001',login:'2002',
+  receiver:'2002',room:portal,mode:'draft',trigger:'inbound'}));
+const store = new TelegramStore('/state/telegram.sqlite3');
+const worker = spawn(process.execPath, ['/app/service.mjs'], {stdio:'inherit'});
+const workerExit = once(worker, 'exit');
+let binder;
+async function waitFor(check, label) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (check()) return;
+    await delay(100);
+  }
+  throw new Error('Timed out waiting for ' + label);
+}
+try {
+  await waitFor(() => store.setting('last_sync'), 'the connector to sync');
+  worker.kill('SIGSTOP');
+  binder = spawn(process.execPath, ['/app/service.mjs', 'bind', 'binding-pilot.json'], {stdio:'inherit'});
+  const bindExit = once(binder, 'exit');
+  await waitFor(() => store.setting('bind_sync_request'), 'a sync request after the portal join');
+  assert.equal(store.binding('pilot'), undefined);
+  worker.kill('SIGCONT');
+  const [exit] = await bindExit;
+  assert.equal(exit, 0);
+  assert.equal(store.binding('pilot').active, 1);
+  assert.equal(store.setting('bind_sync_request'), store.setting('bind_sync_completed'));
+  await api(portalRoute + '/leave', {}, agent.access_token);
+  await waitFor(() => store.binding('pilot').active === 0, 'the binding to pause after leaving');
+  assert.equal(store.setting('pause_reason:pilot'), 'portal_membership_lost');
+  console.log('Initial portal sync completed before activation, and later membership loss still paused the binding.');
+} finally {
+  binder?.kill('SIGTERM');
+  worker.kill('SIGCONT');
+  worker.kill('SIGTERM');
+  await workerExit;
+  store.db.close();
+}
 JS

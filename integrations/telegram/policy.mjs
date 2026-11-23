@@ -117,6 +117,7 @@ export class TelegramStore {
         this.run('UPDATE binding SET mode=?, trigger=?, active=1, activated=?, revision=revision+1 WHERE id=?',
           binding.mode, binding.trigger, now, binding.id);
       }
+      this.run('DELETE FROM settings WHERE key=?', 'pause_reason:' + binding.id);
     });
   }
 
@@ -138,15 +139,17 @@ export class TelegramStore {
       this.run(`UPDATE binding SET room=?, target=?, mode=?, trigger=?, generation=generation+1,
         revision=revision+1, context=0, activated=?, session=NULL, engine=NULL WHERE id=?`,
         binding.room, target, binding.mode, binding.trigger, now, binding.id);
+      this.set('pause_reason:' + binding.id, 'binding_rotated');
     });
   }
 
-  pause(id) {
+  pause(id, reason = 'operator_paused') {
     this.atomic(() => {
       if (!id) this.set('paused', true);
       for (const item of id ? this.bindings().filter(row => row.id === id) : this.bindings()) {
         this.invalidate(item.id, 'cancelled');
-        this.run('UPDATE binding SET active=0, revision=revision+1 WHERE id=? AND active=1', item.id);
+        const update = this.run('UPDATE binding SET active=0, revision=revision+1 WHERE id=? AND active=1', item.id);
+        if (update.changes) this.set('pause_reason:' + item.id, reason);
       }
     });
   }
@@ -157,6 +160,7 @@ export class TelegramStore {
       for (const { binding } of this.all(`SELECT DISTINCT binding FROM work WHERE state='running'`)) {
         this.invalidate(binding);
         this.run('UPDATE binding SET active=0, revision=revision+1 WHERE id=?', binding);
+        this.set('pause_reason:' + binding, 'interrupted_turn');
       }
       this.run(`UPDATE work SET state='interrupted' WHERE state='running'`);
       this.expire(now);

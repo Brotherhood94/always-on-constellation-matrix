@@ -63,6 +63,8 @@ Keep a private binding file for each selected chat. Use `mode: draft` and `trigg
 /opt/matrix-telegram/telegram bind /root/pilot-dm.json
 ```
 
+Keep the connector running while binding. It completes a Matrix sync after joining a portal before the binding activates. A later sync gap or loss of membership pauses that binding. Use `report` to see the reason for a pause recorded by the connector.
+
 The operator may add a verified portal to the Space if that navigation step needs to be retried. For a group, identify and verify its type before preparing a binding. `manual` records no automatic work. `draft` sends a candidate only into Control. `auto` queues a reply only in an explicitly configured binding, within its trigger, expiry, quota, audience, and outbox checks. The pilot starts with draft mode.
 
 ## Operate in Element

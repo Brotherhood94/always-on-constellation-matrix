@@ -6,7 +6,7 @@ instance=$base-instance
 exchange=$base-exchange
 engine=$base-engine
 image=matrix-telegram-engine:0.1.2
-connector=matrix-telegram-connector:0.1.0
+connector=matrix-telegram-connector:0.1.1
 cleanup() {
   docker rm -f "$engine" >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true

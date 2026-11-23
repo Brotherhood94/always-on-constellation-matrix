@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -32,6 +33,18 @@ async function liveBinding(room, target) {
   return state.audience;
 }
 
+async function waitForMatrixSync() {
+  // Require a sync that started after the portal join, and applied its whole batch.
+  const request = randomUUID();
+  store.set('bind_sync_request', request);
+  const timeout = AbortSignal.timeout(30_000);
+  while (!timeout.aborted) {
+    if (store.setting('bind_sync_completed') === request) return;
+    await delay(250);
+  }
+  throw new Error('The connector did not finish a Matrix sync after joining. Check that it is running, then retry bind.');
+}
+
 if (action) {
   try {
     if (['bind', 'rotate'].includes(action)) {
@@ -41,8 +54,10 @@ if (action) {
       validateBinding({ ...binding, audience: '0'.repeat(64) }, settings.controlRoom);
       if (!(await audit.verifiedTarget(binding.room, binding))) throw new Error('The bridge mapping or relay could not be verified.');
       await matrix.joinPortal(binding.room);
+      if (action === 'bind') await waitForMatrixSync();
       const audience = await liveBinding(binding.room, binding);
       if (!audience) throw new Error('The portal, encrypted audience, or configured relay could not be verified.');
+      if (!(await matrix.verifyControl())) throw new Error('The private Telegram Control room is not ready.');
       const method = action === 'rotate' ? 'reset' : 'bind';
       store[method]({ ...binding, audience, operator: settings.owner }, settings.controlRoom, Date.now());
       console.log(action === 'rotate' ? 'Telegram binding rotated while paused.' : 'Telegram binding verified and stored.');
@@ -66,6 +81,7 @@ if (action) {
     } else if (action === 'report') {
       console.log(JSON.stringify({ paused: store.paused() || pausedFile(), bindings: store.bindings().map(row => ({
         id: row.id, mode: row.mode, enabled: Boolean(row.active), generation: row.generation,
+        ...(row.active ? {} : { pauseReason: store.setting('pause_reason:' + row.id) ?? null }),
       })), lastSync: store.setting('last_sync') ?? null,
       open: store.all(`SELECT binding,id,state FROM draft WHERE state IN ('awaiting_approval','ready','publishing','matrix_accepted','unknown')`),
       interrupted: store.all(`SELECT binding, COUNT(*) AS count FROM work WHERE state IN ('interrupted','backend_failed') GROUP BY binding`),
@@ -109,12 +125,12 @@ async function run() {
     if (delivery) store.delivery(room, delivery.event, delivery.status, now);
     if (initial || (room !== settings.controlRoom && !binding?.active)) return;
     if (binding && ['m.room.tombstone', 'm.room.encryption', 'm.room.join_rules'].includes(event.type)) {
-      store.pause(binding.id);
+      store.pause(binding.id, 'portal_security_state_changed');
       return;
     }
     if (!encrypted || event.sender === settings.agent || event.sender === settings.bridgeBot || event.unsigned?.redacted_because) return;
     if (unreadable) {
-      if (binding?.active && event.origin_server_ts >= binding.activated) store.pause(binding.id);
+      if (binding?.active && event.origin_server_ts >= binding.activated) store.pause(binding.id, 'message_decryption_failed');
       return;
     }
     if (room === settings.controlRoom) {
@@ -134,11 +150,11 @@ async function run() {
     const evidence = await audit.source(room, target, event);
     if (!evidence) {
       // An unmatched recent portal message could be newer human context. Pause instead of approving stale output.
-      store.pause(binding.id);
+      store.pause(binding.id, 'unverified_telegram_message');
       return;
     }
     if (await liveBinding(room, target) !== target.audience) {
-      store.pause(binding.id);
+      store.pause(binding.id, 'portal_or_audience_changed');
       return;
     }
     store.record({ event: event.event_id, room, ...evidence, body }, now);
@@ -146,18 +162,25 @@ async function run() {
 
   async function handleSync() {
     const previous = store.setting('sync');
+    const bindRequest = store.setting('bind_sync_request');
     const batch = await matrix.sync(previous);
     if (typeof batch.next_batch !== 'string' || !batch.next_batch) throw new Error('Missing Matrix sync cursor.');
     for (const binding of store.bindings()) {
-      if (binding.active && (!previous || batch.rooms?.join?.[binding.room]?.timeline?.limited || batch.rooms?.leave?.[binding.room])) {
-        store.pause(binding.id);
+      if (binding.active) {
+        if (batch.rooms?.leave?.[binding.room]) store.pause(binding.id, 'portal_membership_lost');
+        else if (!previous || batch.rooms?.join?.[binding.room]?.timeline?.limited) store.pause(binding.id, 'matrix_sync_gap');
       }
     }
-    if (previous && (batch.rooms?.join?.[settings.controlRoom]?.timeline?.limited || batch.rooms?.leave?.[settings.controlRoom])) store.pause();
+    if (previous && (batch.rooms?.join?.[settings.controlRoom]?.timeline?.limited || batch.rooms?.leave?.[settings.controlRoom])) {
+      store.pause(undefined, 'control_room_sync_gap');
+    }
     await matrix.applySync(batch, (room, event, encrypted, unreadable) => dispatch(room, event, encrypted, unreadable, !previous));
-    store.set('sync', batch.next_batch);
     lastGood = Date.now();
-    store.set('last_sync', new Date(lastGood).toISOString());
+    store.atomic(() => {
+      store.set('sync', batch.next_batch);
+      store.set('last_sync', new Date(lastGood).toISOString());
+      if (bindRequest && store.setting('bind_sync_completed') !== bindRequest) store.set('bind_sync_completed', bindRequest);
+    });
   }
 
   async function processWork(work) {
@@ -176,7 +199,7 @@ async function run() {
       else store.saveCandidate(work, draft, Date.now());
     } catch {
       store.finish(work, 'backend_failed');
-      store.pause(work.binding);
+      store.pause(work.binding, 'backend_turn_failed');
       console.warn('One Telegram backend turn failed. Its binding was paused.');
     }
   }
@@ -199,12 +222,12 @@ async function run() {
     if (!draft || pausedFile() || store.paused() || Date.now() - lastGood > 15_000) return;
     const target = JSON.parse(draft.target);
     if (await liveBinding(draft.room, target) !== target.audience || !(await matrix.verifyControl())) {
-      store.pause(draft.binding);
+      store.pause(draft.binding, 'portal_or_control_room_changed');
       return;
     }
     const ciphertext = draft.ciphertext ?? await matrix.encrypted(draft.room, draft.body);
     if (await liveBinding(draft.room, target) !== target.audience) {
-      store.pause(draft.binding);
+      store.pause(draft.binding, 'portal_or_audience_changed');
       return;
     }
     if (Date.now() - lastGood > 15_000 || pausedFile() || !store.prepareSend(draft.id, ciphertext, Date.now())) return;
@@ -237,7 +260,7 @@ async function run() {
         const work = store.nextWork(Date.now());
         if (work) worker = processWork(work).catch(() => {
           store.finish(work, 'backend_failed');
-          store.pause(work.binding);
+          store.pause(work.binding, 'backend_turn_failed');
         }).finally(() => { worker = null; });
       }
     } catch {

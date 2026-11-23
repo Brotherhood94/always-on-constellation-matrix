@@ -102,7 +102,7 @@ case ${1:-} in
     ;;
   start-agent)
     [[ -s "$TELEGRAM_DATA/connector/backend-verified" ]] || { echo 'Run telegram probe first.' >&2; exit 1; }
-    "${compose[@]}" --profile agent up -d --no-deps connector
+    "${compose[@]}" --profile agent up -d --no-deps --build connector
     ;;
   bind|rotate)
     [[ $# == 2 && -f "$2" ]] || { echo 'Use telegram bind|rotate PRIVATE_BINDING_JSON' >&2; exit 2; }
