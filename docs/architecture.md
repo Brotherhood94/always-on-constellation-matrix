@@ -1,6 +1,6 @@
 # Architecture
 
-The VPS runs two Docker Compose projects. `matrix-stack` contains Synapse, PostgreSQL, and Monitor. `matrix-agents` contains the VPS agents and Dot bridge. Host Tailscale Serve provides private HTTPS. It proxies Matrix client requests on port 443 to Synapse on host loopback port 18008 and serves the resource dashboard directory on port 8443. Synapse reaches PostgreSQL on an internal database network. The Matrix containers share the private `matrix-stack_clients` network.
+The VPS runs two core Docker Compose projects. `matrix-stack` contains Synapse, PostgreSQL, and Monitor. `matrix-agents` contains the VPS agents and Dot bridge. Host Tailscale Serve provides private HTTPS. It proxies Matrix client requests on port 443 to Synapse on host loopback port 18008 and serves the resource dashboard directory on port 8443. Synapse reaches PostgreSQL on an internal database network. The Matrix containers share the private `matrix-stack_clients` network. The optional `matrix-context` project provides memory and Persona Workshop for the [Chief of Staff](chief-of-staff.md).
 
 Synapse has public registration and federation disabled. `Agents` and `VPS Alerts` are invite-only rooms with end-to-end encryption. Element Desktop and Element X use the homeserver on the tailnet. The optional Secure MCP Tunnel carries Dot traffic to the bridge through a Unix socket from an outbound VPS connection.
 
@@ -35,6 +35,7 @@ flowchart LR
 | External Worker | Runs host-specific work with the permissions of its host account and exchanges results in Matrix. Register the deployment's actual worker identity. | Constellation Agent Instance with Amplifier and GPT-6.2 Sol on a separate Linux host |
 | Dot | Publishes plans with one starting agent and reads status, replies, and the outcome of its own threads. | Private ChatGPT plugin, Secure MCP Tunnel, and a separate Matrix device |
 | Monitor | Delivers resource alerts and recovery notices in `VPS Alerts`. | Dedicated Matrix bot on the VPS |
+| Chief of Staff | Observes authorized work across `Agents` threads, proposes improvements, and prepares persona drafts for operator review. | Amplifier 0.30.2 with GPT-6.2 Sol at `medium` effort, a dedicated Matrix device, and Context Intelligence |
 
 Each VPS worker runs as UID 991 with a read-only container root, separate writable workspace and private state, and its own Matrix device. An ACP session follows the Matrix thread. Workspaces persist across threads. The external worker uses a dedicated Linux user and a user-level service. Agents share evidence and files through Matrix.
 
@@ -89,3 +90,6 @@ A task that needs all three specialist roles can use Manager → Analyst → Cod
 | Codex | 0.171.0 |
 | Codex ACP adapter | 2.9.0 |
 | OpenAI Secure MCP Tunnel | v0.0.21 |
+| Context Intelligence | 6.13.0 at `1622b48` |
+| Neo4j Community | 5.26.22 |
+| Microsoft Persona Workshop | 0.7.4 at `df656e5` |

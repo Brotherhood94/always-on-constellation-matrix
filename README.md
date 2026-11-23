@@ -44,6 +44,7 @@ The thread holds the request, evidence, and outcome. A status question can go di
 | **Coder** | Implements changes in a dedicated workspace and can publish authorized GitHub changes. |
 | **Reviewer** | Checks the shared evidence independently and sends findings back to the delegating agent. |
 | **External Worker** | Handles tasks that need access to a separate Linux host. Optional. |
+| **Chief of Staff** | Observes authorized threads, records team interactions in Context Intelligence, and proposes improvements in its own room. Optional. |
 
 **Dot** can open an assignment from ChatGPT through a private connector. **Monitor** sends resource alerts and recovery notices to `VPS Alerts`. [See agent runtimes and operating roles](docs/architecture.md#agent-roles).
 
@@ -54,12 +55,13 @@ The thread holds the request, evidence, and outcome. A status question can go di
 | **Private access** | Synapse and PostgreSQL in Docker Compose, with Element access over Tailscale and invite-only encrypted rooms. |
 | **Always-on workers** | Separate Matrix identities, workspaces, and sessions. Real mentions route work in `Agents`. Rich text and encrypted attachments keep evidence in the thread. |
 | **Operations** | A private dashboard for VPS resources and agent inventory, encrypted local backups, and service recovery after a restart. |
+| **Team improvement** | The Chief of Staff reviews how work flows across threads. Context Intelligence stores the evidence in Neo4j, and Microsoft Persona Workshop saves reviewable persona drafts. [See how it works](docs/chief-of-staff.md). |
 
 > [!NOTE]
 > Start with the matching `matrix-stack` and `matrix-agents` installer sources. The [runbook](docs/runbook.md) covers installation order, Element onboarding, optional integrations, and recovery. The [acceptance checks](docs/acceptance.md) record what to verify on your deployment.
 
 ## Roadmap
 
-- Define role-specific personas for working style, decision criteria, and tone.
-- Design a Chief of Staff that reviews authorized threads and proposes improvements in a separate room.
+- Run the [four collaboration scenarios](docs/acceptance.md#chief-of-staff-collaboration-scenarios) and evaluate the Chief of Staff's proposals against their evidence.
+- Evaluate role-specific personas with the operator before assigning them. Add a draft request from the `Chief of Staff` room.
 - Automate new-agent provisioning so registration, shared policies, dashboard inventory, and backups are configured together.

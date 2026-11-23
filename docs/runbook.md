@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-1. Obtain matching `matrix-stack` and `matrix-agents` installer sources (the latter has been distributed as `matrix-agents-pilot.tar.gz`) from the authorized distribution. A full build needs the revision that contains the Manager service, the shared connector policies, and Manager backup coverage. Check the bundle contents before installation. Obtain the separate Dot and external-worker deployment sources if you plan to enable them.
+1. Obtain matching `matrix-stack` and `matrix-agents` installer sources (the latter has been distributed as `matrix-agents-pilot.tar.gz`) from the authorized distribution. A full build needs the revision that contains the Manager service, the shared connector policies, and Manager backup coverage. Check the bundle contents before installation. Obtain the separate Dot, external worker, and [Chief of Staff](chief-of-staff.md#activate-the-components) deployment sources for the optional services you plan to enable.
 2. Prepare an Ubuntu 24.04 VPS with root console access, active host Tailscale, a tailnet HTTPS name, and cgroup v2. Confirm port 18008 is free on loopback and that Tailnet Serve ports 443 and 8443 are available. Keep a separate root console available for recovery.
 3. Confirm the permanent Synapse `server_name` before creating accounts. Use the deployment's tailnet DNS name for the reported setup. It forms part of every local Matrix ID. Record real operator values privately.
 
@@ -48,3 +48,7 @@ Thresholds measure the project's share of VPS resources. The collector tracks th
 - **Restart.** `sudo systemctl restart matrix-stack.service` brings up both local Compose projects with their configured services. Check `matrix-monitor.service`, `matrix-backup.timer`, and `matrix-dot-tunnel.service` when Dot is enabled. Check the external worker's user services separately.
 - **Back up.** Restic stores the latest seven successful encrypted snapshots locally in `/var/backups/matrix`. The persistent timer runs nightly at 03:30 in the configured time zone. Snapshots include PostgreSQL, Synapse configuration, signing identity and media, local Matrix encryption state, queues, and configured local agent workspaces and ACP state. A local snapshot shares the VPS failure domain. Preserve the Restic password, Element recovery key, Dot tunnel credential, and any GitHub credential through the authorized recovery process.
 - **Restore.** Run the paired isolated restore check. Verify the snapshot, data, and original server identity, and keep restored and live copies of a Matrix device from running concurrently. Reconnect independently provisioned integrations and verify them before switching service. Exercise reboot and mobile alert delivery for the complete deployment during the agreed maintenance window.
+
+## 5. Operate the optional Chief of Staff
+
+Follow the [Chief of Staff guide](chief-of-staff.md) to enable direct observation, review the graph, and draft a persona. The direct reader, memory, and Workshop have separate health and acceptance checks. The optional [memory backup integration](chief-of-staff.md#recovery) extends the stack snapshot to Context Intelligence and Neo4j.
