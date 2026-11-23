@@ -1,68 +1,67 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-base=tgengine-$(date +%H%M%S)
+base=tgengine-$$
 net=$base-net
-state=$base-state
+instance=$base-instance
+exchange=$base-exchange
 engine=$base-engine
-image=matrix-telegram-engine:0.1.1
+image=matrix-telegram-engine:0.1.2
 connector=matrix-telegram-connector:0.1.0
 cleanup() {
   docker rm -f "$engine" >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
-  docker volume rm "$state" >/dev/null 2>&1 || true
+  docker volume rm "$instance" "$exchange" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 docker network create --internal "$net" >/dev/null
-docker volume create "$state" >/dev/null
-docker run --rm --network none --user 0:0 -v "$state:/fixture" --entrypoint /bin/sh "$image" -c 'mkdir /fixture/instance /fixture/exchange; chown -R 991:991 /fixture'
-docker run --rm --network none -v "$state:/fixture" --entrypoint /bin/sh "$image" -c '
-  agent-instance --home /fixture/instance init --name Telegram --bind 0.0.0.0 --port 19443 >/dev/null
-  /opt/amplifier-acp/.venv/bin/python - <<"PY"
-import importlib.util, json
-from pathlib import Path
-home = Path("/fixture/instance")
-workspace = home / "workspace"
-settings = home / "backend/amplifier"
-settings.mkdir()
-(settings/"settings.yaml").write_text("bundle:\n  app: []\n")
-context = Path(importlib.util.find_spec("amplifier_module_context_simple").origin).parent
-bundle = home / "backend/fixture.yaml"
-bundle.write_text(f"""bundle:
-  name: offline-telegram
-  version: 1.0.0+amplifier-unified.snapshot.1
-session:
-  orchestrator:
-    module: loop-live
-  context:
-    module: context-simple
-    source: {context}
-providers:
-  - module: provider-fixture
-    source: /opt/amplifier-acp/tests/fixtures/provider
-    config: {{}}
-""")
-acp = home / "backend/agent.json"
-acp.write_text(json.dumps({"home":str(settings),"appHome":str(home/"backend/acp"),"bundle":str(bundle),"startupTimeout":60}))
-config = home / "config.json"
-doc = json.loads(config.read_text())
-doc["config"].update(setup_complete=True,enabled=True,backend={"command":"/opt/amplifier-acp/.venv/bin/amplifier-acp","args":["--config",str(acp)],"env":{"HOME":str(home)},"secret_env":{},"working_directory":str(workspace),"allowed_working_roots":[str(workspace)]})
-config.write_text(json.dumps(doc))
-PY
-  agent-instance --home /fixture/instance config validate
-  agent-instance --home /fixture/instance token create --name "Fixture ACP" --scopes acp --local >/fixture/exchange/init.json
-  python3 -c "import json; print(json.load(open(\"/fixture/exchange/init.json\"))[\"token\"])" >/fixture/exchange/token
-  cp /fixture/instance/tls/root-ca.crt /fixture/exchange/ca.pem
-'
-docker run -d --name "$engine" --network "$net" --network-alias telegram-engine -e HOME=/fixture/instance -v "$state:/fixture" \
-  --entrypoint agent-instance "$image" --home /fixture/instance serve >/dev/null
-for i in $(seq 1 25); do
-  if docker exec "$engine" curl -fsS --cacert /fixture/exchange/ca.pem https://telegram-engine:19443/ >/dev/null 2>&1; then break; fi
+docker volume create "$instance" >/dev/null
+docker volume create "$exchange" >/dev/null
+docker run --rm --network none --user 0:0 -v "$instance:/instance" -v "$exchange:/exchange" \
+  --entrypoint /bin/sh "$image" -c 'chown 991:991 /instance /exchange'
+docker run -d --name "$engine" --network "$net" --network-alias telegram-engine --read-only --tmpfs /tmp \
+  -e TELEGRAM_MODEL=gpt-6.2-sol -v "$instance:/instance" -v "$exchange:/exchange" "$image" >/dev/null
+ready=false
+for _ in {1..25}; do
+  if docker exec "$engine" curl -fsS --cacert /exchange/ca.pem https://telegram-engine:19443/ >/dev/null 2>&1; then
+    ready=true
+    break
+  fi
   sleep 1
 done
-docker run --rm -i --network "$net" -v "$state:/fixture:ro" --entrypoint node "$connector" --input-type=module - <<'JS'
+if [[ $ready != true ]]; then
+  docker logs "$engine" --tail 20
+  exit 1
+fi
+docker exec -i "$engine" /opt/amplifier-acp/.venv/bin/python -B - <<'PY'
+import asyncio
+import json
+from pathlib import Path
+
+from amplifier_acp.native.host.config import load_config
+from amplifier_acp.native.host.session import load_root_bundle
+import yaml
+
+acp = json.loads(Path('/instance/backend/agent.json').read_text())
+config = load_config('/instance/workspace', home=acp['appHome'], legacy_home=acp['home'])
+_, loaded, _ = asyncio.run(load_root_bundle(config, acp['bundle']))
+assert not loaded.hooks, [row['module'] for row in loaded.hooks]
+assert not loaded.tools and not loaded.agents
+assert [row['module'] for row in loaded.providers] == ['provider-openai-chatgpt']
+assert loaded.providers[0]['config']['auth_mode'] == 'chatgpt_codex'
+assert acp['runtimeImmutable'] is True
+
+# Use the deployed plan and replace only its provider for offline inference.
+bundle = Path(acp['bundle'])
+document = yaml.safe_load(bundle.read_text())
+document['providers'] = [{'module': 'provider-fixture', 'source': '/opt/amplifier-acp/tests/fixtures/provider'}]
+bundle.write_text(yaml.safe_dump(document))
+credential = json.loads(Path('/exchange/credential.json').read_text())
+Path('/exchange/fixture-token').write_text(credential['token'])
+PY
+docker run --rm -i --network "$net" -v "$exchange:/exchange:ro" --entrypoint node "$connector" --input-type=module - <<'JS'
 import assert from 'node:assert/strict';
 import { draftWithInstance } from './acp.mjs';
-const engine = { url:'wss://telegram-engine:19443/api/v1/acp', token:'/fixture/exchange/token', ca:'/fixture/exchange/ca.pem', revision:'fixture', workspace:'/fixture/instance/workspace' };
+const engine = { url:'wss://telegram-engine:19443/api/v1/acp', token:'/exchange/fixture-token', ca:'/exchange/ca.pem', revision:'fixture', workspace:'/instance/workspace' };
 let id;
 const result = await draftWithInstance(engine, null, [{author:'remote',body:'Offline first draft test'}], value => { id = value; });
 assert.ok(id);

@@ -24,9 +24,11 @@ def write(path, text):
             pending.unlink(missing_ok=True)
 
 
+# Amplifier ACP recognizes snapshots by this exact version.
+snapshot_version = '1.0.0+amplifier-unified.snapshot.1'
 bundle = f'''bundle:
   name: telegram-communication
-  version: 0.1.1+amplifier-unified.snapshot.1
+  version: {snapshot_version}
   description: Conversation-scoped draft writing without tools
 session:
   orchestrator:
@@ -46,14 +48,18 @@ tools: []
 agents: []
 '''
 fixed_bundle = backend / 'telegram-communication.yaml'
-if fixed_bundle.exists() and fixed_bundle.read_text() != bundle:
-    raise SystemExit('The backend configuration changed. Reconcile and rotate session generations first.')
+if fixed_bundle.exists():
+    previous_bundle = bundle.replace(f'  version: {snapshot_version}\n',
+                                     '  version: 0.1.1+amplifier-unified.snapshot.1\n', 1)
+    if fixed_bundle.read_text() not in (bundle, previous_bundle):
+        raise SystemExit('The backend configuration changed. Reconcile and rotate session generations first.')
 write(fixed_bundle, bundle)
 local_settings = backend / 'amplifier'
 local_settings.mkdir(mode=0o700, exist_ok=True)
 write(local_settings / 'settings.yaml', 'bundle:\n  app: []\n')
 write(backend / 'agent.json', json.dumps({
     'home': str(backend / 'amplifier'), 'appHome': str(backend / 'acp'), 'bundle': str(fixed_bundle),
+    'runtimeImmutable': True,
 }))
 config = home / 'config.json'
 document = json.loads(config.read_text())

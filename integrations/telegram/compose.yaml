@@ -38,7 +38,7 @@ services:
   telegram-engine:
     <<: *worker
     profiles: [agent]
-    image: matrix-telegram-engine:0.1.1
+    image: matrix-telegram-engine:0.1.2
     build: ./engine
     mem_limit: 1g
     environment:

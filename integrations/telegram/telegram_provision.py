@@ -121,7 +121,10 @@ def bootstrap(root):
     if current.get('controlRoom', control) != control or current.get('space', space) != space:
         raise SystemExit('The Telegram operator rooms changed. Reconcile the connector before replacing the configuration.')
     model = os.environ.get('TELEGRAM_MODEL', 'gpt-6.2-sol')
-    backend_version = f'0.22.17:3da5681942d9e9b4c51376e47ec85e69a001623a:chatgpt-codex:cae3eaa32e16b139b8e889b8cc477c3f2d9dee31:{model}'
+    backend_version = (
+        '0.22.17:3da5681942d9e9b4c51376e47ec85e69a001623a:'
+        f'chatgpt-codex:cae3eaa32e16b139b8e889b8cc477c3f2d9dee31:bundle-snapshot-v1:{model}'
+    )
     engine = {'url': 'wss://telegram-engine:19443/api/v1/acp', 'token': '/state/engine-token',
               'ca': '/state/engine-ca.pem', 'workspace': '/instance/workspace',
               'revision': hashlib.sha256(backend_version.encode()).hexdigest()}

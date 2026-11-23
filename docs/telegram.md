@@ -41,6 +41,8 @@ If an earlier setup stopped with `HTTP 400 M_UNKNOWN` while creating a Matrix v1
 
 The release pins mautrix Telegram `v26.11`, Constellation Instance `0.22.17`, Amplifier ACP `0.1.7` at `3da5681942d9e9b4c51376e47ec85e69a001623a`, and the Amplifier ChatGPT provider at `cae3eaa32e16b139b8e889b8cc477c3f2d9dee31`.
 
+The Telegram bundle is a standalone Amplifier snapshot without Context Intelligence hooks. Dependencies are prepared when the engine image is built. If an older engine failed to activate `hook-context-intelligence`, rerun `prepare-agent` with the updated release and then rerun `probe`. A completed Codex sign-in is reused.
+
 Accept the `Telegram` Space and `Telegram Control` invitations in Element. The connector checks that Control is encrypted, invite-only, non-federated, and joined only by the operator and connector. Invite `@telegram-agent:<SERVER_NAME>` to the verified portal and explicitly enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins only a portal explicitly selected by the operator during binding. Check the agent attribution at the Telegram destination. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
 Keep a private binding file for each selected chat. Use `mode: draft` and `trigger: inbound` for the first DM. Use `mode: draft` and `trigger: request` for an eligible group. A basic group and a supergroup without topics are supported by the admission policy. A forum or broadcast channel needs its own mapping and acceptance.
