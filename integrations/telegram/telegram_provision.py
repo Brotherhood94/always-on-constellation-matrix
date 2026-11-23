@@ -20,26 +20,52 @@ def membership(room, name, token):
         return None
 
 
+def incomplete_room(state, agent, space):
+    if state.keys() != {('m.room.create', ''), ('m.room.member', agent)}:
+        return False
+    creation = state['m.room.create', '']
+    expected_type = 'm.space' if space else None
+    return (creation['sender'] == agent and creation['content'].get('room_version') == '12'
+            and creation['content'].get('m.federate') is False
+            and creation['content'].get('type') == expected_type
+            and state['m.room.member', agent]['content']['membership'] == 'join')
+
+
+def read_room_state(route, token):
+    return {(event['type'], event['state_key']): event
+            for event in request('GET', route + '/state', token=token)}
+
+
 def create_room(alias, name, token, domain, owner, agent, *, space=False):
+    alias_route = '/_matrix/client/v3/directory/room/' + quote(f'#{alias}:{domain}', safe='')
+    rooms_route = '/_matrix/client/v3/rooms/'
     try:
-        room = request('GET', '/_matrix/client/v3/directory/room/' + quote(f'#{alias}:{domain}', safe=''))['room_id']
-        if membership(room, agent, token) != 'join':
-            raise SystemExit('An existing Matrix alias belongs to a different room.')
+        room = request('GET', alias_route)['room_id']
     except MatrixError as error:
         if error.code != 'M_NOT_FOUND':
             raise
+        room = None
+    if room:
+        if membership(room, agent, token) != 'join':
+            raise SystemExit('An existing Matrix alias belongs to a different room.')
+        route = rooms_route + quote(room, safe='')
+        state = read_room_state(route, token)
+        if incomplete_room(state, agent, space):
+            # Synapse can register the alias before rejecting the initial power levels.
+            request('DELETE', alias_route, token=token)
+            room = None
+    if room is None:
         body = {'name': name, 'room_alias_name': alias, 'preset': 'private_chat', 'visibility': 'private',
-                'creation_content': {'m.federate': False}, 'invite': [owner],
-                'power_level_content_override': {'users': {agent: 100, owner: 100}}}
+                'creation_content': {'m.federate': False}}
         if space:
             body['creation_content']['type'] = 'm.space'
         else:
             body['initial_state'] = [{'type': 'm.room.encryption', 'state_key': '',
                                       'content': {'algorithm': 'm.megolm.v1.aes-sha2'}}]
         room = request('POST', '/_matrix/client/v3/createRoom', body, token)['room_id']
-    route = f'/_matrix/client/v3/rooms/{quote(room, safe="")}'
-    state = request('GET', route + '/state', token=token)
-    data = {event['type']: event['content'] for event in state if event['state_key'] == ''}
+        route = rooms_route + quote(room, safe='')
+        state = read_room_state(route, token)
+    data = {event_type: event['content'] for (event_type, key), event in state.items() if key == ''}
     if data.get('m.room.create', {}).get('m.federate') is not False or data.get('m.room.join_rules', {}).get('join_rule') != 'invite':
         raise SystemExit('Telegram operator rooms must remain invite-only and non-federated.')
     if space and data['m.room.create'].get('type') != 'm.space':
@@ -47,10 +73,17 @@ def create_room(alias, name, token, domain, owner, agent, *, space=False):
     if not space:
         if data.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2':
             raise SystemExit('Telegram Control must remain encrypted.')
-        active = {entry['state_key'] for entry in state if entry['type'] == 'm.room.member' and
+        active = {entry['state_key'] for entry in state.values() if entry['type'] == 'm.room.member' and
                   entry['content']['membership'] in ('invite', 'join')}
         if active - {agent, owner}:
             raise SystemExit('Telegram Control must contain only the operator and connector.')
+    creation = state['m.room.create', '']
+    if creation['sender'] == agent and owner != agent and owner not in creation['content'].get('additional_creators', []):
+        levels = data['m.room.power_levels']
+        users = levels.setdefault('users', {})
+        if owner not in users:
+            users[owner] = 100
+            request('PUT', route + '/state/m.room.power_levels', levels, token)
     if membership(room, owner, token) not in ('invite', 'join'):
         request('POST', route + '/invite', {'user_id': owner}, token)
     return room
