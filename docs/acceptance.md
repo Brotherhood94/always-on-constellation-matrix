@@ -45,7 +45,7 @@ After the runs, compare the eight source threads with captured interaction event
 
 | Check | Local evidence | Live acceptance still required |
 | --- | --- | --- |
-| TG-01 to TG-03, onboarding and sender identity | Pinned mautrix started against a disposable Synapse and PostgreSQL with an empty allowlist. | The approved DM and group, excluded chats, manual round trips, relay attribution, and group type. |
+| TG-01 to TG-03, onboarding and sender identity | Pinned mautrix started against a disposable Synapse and PostgreSQL with an empty allowlist. The operator verified a live Telegram ↔ Element manual round trip for the first approved DM using installer `v0.1.2`. | Group onboarding and manual round trip, excluded chats, relay attribution, and group type. |
 | TG-04 to TG-06, Amplifier and session isolation | A real Instance and Amplifier ACP completed a synthetic provider fixture turn and loaded the same session. SQLite tests verify independent chat bindings. | The selected provider, live repeatable session continuity, service restarts, and DM/group isolation. |
 | TG-07 to TG-15, draft and publish | Automated policy tests cover Control sender and room, exact approval, stale drafts, modes, retries, uncertain delivery, and pause/rotation. | The two real portals, correlated mautrix status, the pause boundary, audience changes, and one approved external message. |
 | TG-16 and TG-17, encryption and authority | Two disposable Matrix accounts exchanged an encrypted connector event. Repeating the exact encrypted request returned the same Synapse event ID. | Element Desktop and Element X key sharing and reboot. Verify the real bridge and relay can decrypt and send. Verify negative authority cases through the full live path. |
