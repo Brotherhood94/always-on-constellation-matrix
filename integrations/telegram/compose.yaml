@@ -1,0 +1,66 @@
+name: matrix-telegram
+x-worker: &worker
+  restart: unless-stopped
+  init: true
+  user: '991:991'
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  cgroup_parent: ${MATRIX_SLICE:-matrix-workload.slice}
+  tmpfs: [/tmp]
+  logging:
+    driver: json-file
+    options: {max-size: '5m', max-file: '2'}
+services:
+  telegram-bridge:
+    <<: *worker
+    image: dock.mau.dev/mautrix/telegram:v26.11@sha256:fe78dbce96dca82f077371f429776ab1fee3b65ddc83924a257279b142160945
+    entrypoint: [/usr/bin/mautrix-telegram, -n, -c, /data/config.yaml]
+    working_dir: /data
+    volumes:
+      - ${TELEGRAM_DATA:?}/bridge:/data
+    networks: [matrix, database, outbound]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD, bash, -c, '</dev/tcp/127.0.0.1/29317']
+      interval: 5s
+      timeout: 3s
+      retries: 18
+  connector:
+    <<: *worker
+    profiles: [agent]
+    image: matrix-telegram-connector:0.1.0
+    build: .
+    mem_limit: 384m
+    volumes:
+      - ${TELEGRAM_DATA:?}/connector:/state
+    networks: [matrix, database, engine]
+  telegram-engine:
+    <<: *worker
+    profiles: [agent]
+    image: matrix-telegram-engine:0.1.0
+    build: ./engine
+    mem_limit: 1g
+    environment:
+      TELEGRAM_MODEL: ${TELEGRAM_MODEL:-gpt-6.2-sol}
+    volumes:
+      - ${TELEGRAM_DATA:?}/instance:/instance
+      - ${TELEGRAM_DATA:?}/provider:/provider:ro
+      - ${TELEGRAM_DATA:?}/exchange:/exchange
+    networks: [engine, provider]
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --cacert, /exchange/ca.pem, 'https://telegram-engine:19443/']
+      interval: 5s
+      timeout: 4s
+      retries: 15
+networks:
+  provider:
+  matrix:
+    external: true
+    name: ${TELEGRAM_MATRIX_NETWORK:-matrix-stack_clients}
+  database:
+    external: true
+    name: ${TELEGRAM_DATABASE_NETWORK:-matrix-stack_database}
+  outbound:
+  engine:
+    internal: true

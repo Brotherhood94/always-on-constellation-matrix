@@ -56,6 +56,7 @@ The thread holds the request, evidence, and outcome. A status question can go di
 | **Always-on workers** | Separate Matrix identities, workspaces, and sessions. Real mentions route work in `Agents`. Rich text and encrypted attachments keep evidence in the thread. |
 | **Operations** | A private dashboard for VPS resources and agent inventory, encrypted local backups, and service recovery after a restart. |
 | **Team improvement** | The Chief of Staff reviews how work flows across threads. Context Intelligence stores the evidence in Neo4j, and Microsoft Persona Workshop saves reviewable persona drafts. [See how it works](docs/chief-of-staff.md). |
+| **Telegram pilot** | Optional private Element portals with a dedicated Constellation and Amplifier drafting agent. [Setup and acceptance](docs/telegram.md). |
 
 > [!NOTE]
 > Start with the matching `matrix-stack` and `matrix-agents` installer sources. The [runbook](docs/runbook.md) covers installation order, Element onboarding, optional integrations, and recovery. The [acceptance checks](docs/acceptance.md) record what to verify on your deployment.

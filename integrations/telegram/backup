@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+source_dir=$1
+stack_dir=$2
+operation=$3
+state=$TELEGRAM_DATA
+restic_args=(--repo "$MATRIX_BACKUP_DIR" --password-file "$stack_dir/restic-password")
+stack=(docker compose --project-directory "$stack_dir")
+compose=(docker compose -f "$source_dir/compose.yaml" --profile agent)
+exec 8>"$MATRIX_DATA/.backup.lock"
+flock -n 8 || { echo 'Another Matrix backup is running.' >&2; exit 1; }
+stage=$(mktemp -d "$MATRIX_DATA/staging/telegram.XXXXXXXX")
+
+if [[ $operation == capture ]]; then
+  running=()
+  for service in connector telegram-engine telegram-bridge; do
+    if [[ -n $("${compose[@]}" ps --status running --quiet "$service") ]]; then running+=("$service"); fi
+  done
+  stopped=false
+  cleanup() {
+    if [[ $stopped == true && ${#running[@]} -gt 0 ]]; then "${compose[@]}" start "${running[@]}"; fi
+    rm -rf -- "$stage"
+  }
+  trap cleanup EXIT
+  if (( ${#running[@]} )); then
+    stopped=true
+    "${compose[@]}" stop --timeout 130 "${running[@]}"
+  fi
+  "${stack[@]}" exec -T postgres pg_dump -U synapse -Fc matrix_telegram > "$stage/postgres.dump"
+  mkdir "$stage/state"
+  cp -a "$state/." "$stage/state/"
+  rm -f -- "$stage/state/operator.lock"
+  cp -p -- "$source_dir/compose.yaml" "$stage/compose.yaml"
+  if (( ${#running[@]} )); then "${compose[@]}" start "${running[@]}"; fi
+  stopped=false
+  (
+    cd -- "$stage"
+    restic "${restic_args[@]}" backup --tag matrix-telegram .
+  )
+  restic "${restic_args[@]}" forget --tag matrix-telegram --group-by host,tags --keep-last 7 --prune
+  echo 'Encrypted Telegram snapshot captured.'
+elif [[ $operation == verify ]]; then
+  trap 'rm -rf -- "$stage"' EXIT
+  restic "${restic_args[@]}" restore latest --tag matrix-telegram --target "$stage"
+  "${stack[@]}" exec -T postgres pg_restore --list < "$stage/postgres.dump" >/dev/null
+  python3 -B "$source_dir/quarantine.py" "$stage/state"
+  echo 'Telegram backup contents verified offline. Restored state is paused and delivery is quarantined.'
+else
+  rm -rf -- "$stage"
+  exit 2
+fi

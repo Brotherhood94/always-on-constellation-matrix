@@ -1,0 +1,142 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
+import matrix from '@vector-im/matrix-bot-sdk';
+import pg from 'pg';
+import { digest } from './policy.mjs';
+
+const { MatrixClient, RustSdkCryptoStorageProvider, SimpleFsStorageProvider, LogService } = matrix;
+const silent = () => {};
+LogService.setLogger({ trace: silent, debug: silent, info: silent, warn: silent, error: silent });
+const encryptedType = 'm.room.encrypted';
+const messageType = 'm.room.message';
+const bridgeStatus = 'com.beeper.message_send_status';
+const route = (room) => `/_matrix/client/v3/rooms/${encodeURIComponent(room)}`;
+
+export async function matrixConnection(config, path, { crypto: enableCrypto = true } = {}) {
+  const token = (await readFile(join(path, 'matrix-token'), 'utf8')).trim();
+  const storage = new SimpleFsStorageProvider(join(path, 'sdk-data.json'));
+  const sdk = new MatrixClient(config.matrixUrl, token, storage,
+    enableCrypto ? new RustSdkCryptoStorageProvider(join(path, 'crypto'), crypto.StoreType.Sqlite) : null);
+  const who = await sdk.getWhoAmI();
+  if (who.user_id !== config.agent || who.device_id !== config.device) throw new Error('Matrix identity or device changed.');
+  if (enableCrypto) await sdk.crypto.prepare();
+
+  async function request(method, endpoint, body, timeout = 15_000) {
+    const response = await fetch(config.matrixUrl + endpoint, {
+      method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body, redirect: 'error', signal: AbortSignal.timeout(timeout),
+    });
+    if (!response.ok) {
+      const error = new Error(`Matrix HTTP ${response.status}`);
+      error.status = response.status;
+      const payload = await response.json().catch(() => null);
+      error.code = payload?.errcode;
+      throw error;
+    }
+    return response.json();
+  }
+
+  async function liveState(room) {
+    const state = await request('GET', `${route(room)}/state`);
+    const content = (type) => state.find(event => event.type === type && event.state_key === '')?.content;
+    const members = state.filter(event => event.type === 'm.room.member' && ['join', 'invite'].includes(event.content?.membership))
+      .map(event => [event.state_key, event.content.membership]).sort((a, b) => a[0].localeCompare(b[0]));
+    return {
+      members, audience: digest(members),
+      encrypted: content('m.room.encryption')?.algorithm === 'm.megolm.v1.aes-sha2',
+      private: content('m.room.join_rules')?.join_rule === 'invite' && content('m.room.create')?.['m.federate'] === false,
+      tombstone: Boolean(content('m.room.tombstone')),
+    };
+  }
+
+  async function verifyControl() {
+    const state = await liveState(config.controlRoom);
+    return state.encrypted && state.private && !state.tombstone && state.members.length === 2 &&
+      state.members.every(([member, status]) => [config.owner, config.agent].includes(member) && status === 'join');
+  }
+
+  async function sync(since, timeout = 1_000) {
+    const filter = { room: { timeline: { limit: 100 } }, presence: { types: [] } };
+    const params = new URLSearchParams({ filter: JSON.stringify(filter), timeout: String(timeout), set_presence: 'offline' });
+    if (since) params.set('since', since);
+    return request('GET', `/_matrix/client/v3/sync?${params}`, undefined, 12_000);
+  }
+
+  async function applySync(batch, dispatch) {
+    const originals = new Map();
+    await sdk.processSync(batch, async (name, room, event) => {
+      if (name === 'room.join') await sdk.crypto.onRoomJoin(room);
+      if (name === 'room.encrypted_event') originals.set(event.event_id, event);
+      if (name === 'room.failed_decryption') await dispatch(room, event, true, true);
+      if (name === 'room.event') {
+        await sdk.crypto.onRoomEvent(room, event);
+        if (!event?.event_id) return;
+        const original = originals.get(event.event_id);
+        if (original && event.type === encryptedType) return;
+        await dispatch(room, original ? { ...event, sender: original.sender, unsigned: original.unsigned,
+          origin_server_ts: original.origin_server_ts } : event, Boolean(original), false);
+      }
+    });
+  }
+
+  async function encrypted(room, body) {
+    return JSON.stringify(await sdk.crypto.encryptRoomEvent(room, messageType, { msgtype: 'm.text', body }));
+  }
+
+  async function put(room, txn, ciphertext) {
+    const result = await request('PUT', `${route(room)}/send/${encryptedType}/${encodeURIComponent(txn)}`, ciphertext);
+    if (!result.event_id) throw new Error('Matrix did not return an event identity.');
+    return result.event_id;
+  }
+
+  async function joinPortal(room) {
+    const joined = await request('GET', '/_matrix/client/v3/joined_rooms');
+    if (!joined.joined_rooms.includes(room)) {
+      const result = await request('POST', `${route(room)}/join`, '{}');
+      if (result.room_id !== room) throw new Error('Wrong Matrix portal membership.');
+    }
+  }
+
+  return { sync, applySync, liveState, verifyControl, joinPortal, encrypted, put,
+    close: () => sdk.crypto?.engine.machine.close(), tokenHash: digest([who.user_id, who.device_id, token]) };
+}
+
+export function statusEvidence(config, room, event) {
+  if (event.type !== bridgeStatus || event.sender !== config.bridgeBot || event.unsigned?.redacted_because) return;
+  const relation = event.content?.['m.relates_to'];
+  if (relation?.rel_type !== 'm.reference' || !relation.event_id) return;
+  return { room, event: relation.event_id, status: event.content.status };
+}
+
+export function bridgeAudit(config) {
+  const pool = new pg.Pool({ connectionString: config.auditDatabase, max: 2, connectionTimeoutMillis: 3_000, query_timeout: 3_000 });
+  pool.on('error', () => {});
+
+  async function verifiedTarget(room, target) {
+    const { rows } = await pool.query(`SELECT login, owner, relay, room_kind, forum, supergroup, blocked
+      FROM telegram_audit_portal WHERE room=$1 AND peer=$2 AND receiver=$3`, [room, target.peer, target.receiver]);
+    const portal = rows[0];
+    if (rows.length !== 1 || portal.login !== target.login || portal.owner !== config.owner ||
+        portal.relay !== target.login || portal.forum || portal.blocked) return false;
+    if (target.peer.startsWith('user:')) return portal.room_kind === 'dm';
+    if (target.peer.startsWith('channel:')) return portal.room_kind === '' && portal.supergroup;
+    return portal.room_kind === '';
+  }
+
+  async function source(room, target, event) {
+    for (const wait of [0, 200, 400, 800, 1600]) {
+      await delay(wait);
+      const { rows } = await pool.query(`SELECT sender_id, sender_mxid, ts_ms FROM telegram_audit_message
+        WHERE room=$1 AND peer=$2 AND receiver=$3 AND event=$4`, [room, target.peer, target.receiver, event.event_id]);
+      if (rows.length !== 1) continue;
+      const mapped = rows[0];
+      const sender = `@telegram_${mapped.sender_id}:${config.domain}`;
+      if (!/^[1-9][0-9]{0,18}$/u.test(mapped.sender_id) || mapped.sender_mxid !== event.sender || sender !== event.sender) return;
+      return { author: mapped.sender_id === target.login ? 'owner' : 'remote', ts: Number(mapped.ts_ms) };
+    }
+  }
+
+  return { verifiedTarget, source, close: () => pool.end() };
+}

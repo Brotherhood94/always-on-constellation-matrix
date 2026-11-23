@@ -52,3 +52,7 @@ Thresholds measure the project's share of VPS resources. The collector tracks th
 ## 5. Operate the optional Chief of Staff
 
 Follow the [Chief of Staff guide](chief-of-staff.md) to enable direct observation, review the graph, and draft a persona. The direct reader, memory, and Workshop have separate health and acceptance checks. The optional [memory backup integration](chief-of-staff.md#recovery) extends the stack snapshot to Context Intelligence and Neo4j.
+
+## 6. Pilot the optional Telegram integration
+
+Use the matching source archive and follow the [Telegram operator guide](telegram.md). The first activation starts the bridge with an empty allowlist and the model connector stopped. Complete live acceptance on the verified DM before onboarding the group. Keep Telegram application and provider credentials in separate private files. Use the [implementation handoff](handoffs/telegram-constellation-amplifier.md) for deployment gates and recovery boundaries.

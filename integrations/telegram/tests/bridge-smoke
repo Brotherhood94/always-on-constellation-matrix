@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+src=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+base=tgsmoke-$(date +%H%M%S)
+bridge=$base-bridge
+synapse=$base-synapse
+postgres=$base-postgres
+state=$base-state
+network=$base-net
+images=dock.mau.dev/mautrix/telegram:v26.11@sha256:fe78dbce96dca82f077371f429776ab1fee3b65ddc83924a257279b142160945
+syn=ghcr.io/element-hq/synapse:v1.165.0
+py=python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+cleanup() {
+  docker rm -f "$bridge" "$synapse" "$postgres" >/dev/null 2>&1 || true
+  docker network rm "$network" >/dev/null 2>&1 || true
+  docker volume rm "$state" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker network create --internal "$network" >/dev/null
+docker volume create "$state" >/dev/null
+docker run --rm --network none -v "$state:/state" --entrypoint sh "$py" -c 'umask 077; mkdir /state/bridge /state/synapse; chown 991:991 /state/bridge; echo "{\"api_id\":42,\"api_hash\":\"0123456789abcdef0123456789abcdef\"}" >/state/dummy.json'
+docker run --rm --network none --entrypoint /usr/bin/mautrix-telegram "$images" -e -c - |
+  docker run --rm -i --network none --entrypoint yq "$images" -o=json . - |
+  docker run --rm -i --network none -v "$state:/state" -v "$src:/src:ro" -e MATRIX_SERVER_NAME=telegram.test -e MATRIX_OWNER=@operator:telegram.test \
+    --entrypoint python3 "$py" -B /src/bridge_config.py generate /state /state/dummy.json
+docker run --rm --network none -v "$state:/state" --user 991:991 --entrypoint /usr/bin/mautrix-telegram "$images" \
+  -g -c /state/bridge/config.yaml -r /state/bridge/registration.yaml
+docker run --rm --network none -v "$state:/state" --entrypoint /bin/sh "$syn" -c 'python -m synapse.app.homeserver --server-name telegram.test --config-path /state/synapse/homeserver.yaml --generate-config --report-stats=no --data-directory /state/synapse'
+docker run --rm -i --network none -v "$state:/state" --entrypoint python "$syn" - <<'PY'
+from pathlib import Path
+import yaml
+p=Path('/state/synapse/homeserver.yaml')
+data=yaml.safe_load(p.read_text())
+data['listeners']=[{'type':'http','port':8008,'tls':False,'resources':[{'names':['client']}]}]
+data['app_service_config_files']=['/state/bridge/registration.yaml']
+data['enable_registration']=True
+data['enable_registration_without_verification']=True
+data['media_store_path']='/state/synapse/media_store'
+data['database']={'name':'psycopg2','args':{'user':'synapse','password':'fixture','database':'synapse','host':'postgres'}}
+p.write_text(yaml.safe_dump(data))
+Path('/state/bridge/registration.yaml').chmod(0o644)
+Path('/state/bridge').chmod(0o755)
+PY
+docker run -d --name "$postgres" --network "$network" --network-alias postgres -e POSTGRES_USER=synapse -e POSTGRES_PASSWORD=fixture -e POSTGRES_DB=synapse -e POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale=C" postgres:17.12-bookworm >/dev/null
+for i in $(seq 1 45); do
+  if docker exec "$postgres" pg_isready -U synapse -d synapse >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+docker run --rm --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" -B /src/bridge_config.py database-sql /state |
+  docker exec -i "$postgres" psql -qX --set ON_ERROR_STOP=1 -U synapse -d postgres
+docker run -d --name "$synapse" --network "$network" --network-alias synapse -v "$state:/state" --entrypoint python "$syn" -m synapse.app.homeserver -c /state/synapse/homeserver.yaml >/dev/null
+for i in $(seq 1 45); do
+  if docker exec "$synapse" curl -fsS http://localhost:8008/_matrix/client/versions >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+docker exec "$synapse" curl -fsS http://localhost:8008/_matrix/client/versions >/dev/null || { docker logs "$synapse" 2>&1 | tail -35; exit 1; }
+docker run -d --name "$bridge" --network "$network" --network-alias telegram-bridge --user 991:991 -v "$state:/state" --entrypoint /usr/bin/mautrix-telegram "$images" -n -c /state/bridge/config.yaml >/dev/null
+for i in $(seq 1 45); do
+  if docker exec "$bridge" bash -c '</dev/tcp/127.0.0.1/29317' >/dev/null 2>&1 && docker exec "$postgres" psql -qAXt -U synapse -d matrix_telegram -c "SELECT to_regclass('portal')" | grep -Fxq portal; then break; fi
+  sleep 1
+done
+docker exec "$bridge" bash -c '</dev/tcp/127.0.0.1/29317'
+docker exec -i "$postgres" psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$src/audit.sql"
+docker exec "$postgres" psql -qAXt -U synapse -d matrix_telegram -c 'SELECT count(*) FROM portal' | grep -Fxq 0
+if docker logs "$bridge" 2>&1 | rg -qi 'config validation failed|failed to start bridge'; then
+  echo 'Bridge reported a startup error.' >&2
+  exit 1
+fi
+echo 'Pinned mautrix started against Synapse, migrated PostgreSQL, and exposed no portal with the empty allowlist.'
+docker run --rm -i --network "$network" --user 991:991 --entrypoint node matrix-telegram-connector:0.1.0 --input-type=module - <<'JS'
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { matrixConnection } from './matrix.mjs';
+const url = 'http://synapse:8008';
+const root = '/_matrix/client/v3';
+async function api(path, body, token) {
+  const response = await fetch(url + root + path, {
+    method: 'POST', headers: {'content-type':'application/json', ...(token ? {authorization:'Bearer ' + token} : {})}, body:JSON.stringify(body),
+  });
+  if (!response.ok) throw Error(path + ': ' + response.status + ' ' + (await response.json()).errcode);
+  return response.json();
+}
+async function register(name) {
+  const device = name.toUpperCase();
+  const user = await api('/register', {username:name,password:'fixture-long-password',device_id:device,auth:{type:'m.login.dummy'}});
+  return {...user, device};
+}
+const [a,b] = await Promise.all([register('test-agent'), register('test-owner')]);
+const {room_id: room} = await api('/createRoom', {preset:'private_chat',visibility:'private',
+  creation_content:{'m.federate':false},invite:[b.user_id],initial_state:[{type:'m.room.encryption',state_key:'',content:{algorithm:'m.megolm.v1.aes-sha2'}}]}, a.access_token);
+await api('/join/' + encodeURIComponent(room), {}, b.access_token);
+async function connect(user, name) {
+  const path='/tmp/' + name;
+  await mkdir(path);
+  await writeFile(path + '/matrix-token', user.access_token, {mode:0o600});
+  return matrixConnection({matrixUrl:url,agent:user.user_id,device:user.device,owner:user === a ? b.user_id : a.user_id,controlRoom:room},path);
+}
+const [sender,reader] = await Promise.all([connect(a,'sender'), connect(b,'reader')]);
+assert.equal(await sender.verifyControl(), true);
+const before = await reader.sync(null,0);
+await reader.applySync(before, async () => {});
+const initial = await sender.sync(null,0);
+await sender.applySync(initial, async () => {});
+const cipher = await sender.encrypted(room, 'Isolated encrypted smoke test');
+const event = await sender.put(room, 'fixture-stable', cipher);
+assert.equal(await sender.put(room, 'fixture-stable', cipher), event);
+const batch = await reader.sync(before.next_batch,0);
+let text;
+await reader.applySync(batch, async (source, entry, encrypted, failed) => {
+  if (entry.event_id === event && encrypted && !failed && source === room) text=entry.content.body;
+});
+assert.equal(text,'Isolated encrypted smoke test');
+sender.close();
+reader.close();
+console.log('Telegram connector Matrix crypto round trip and exact-transaction retry passed.');
+JS

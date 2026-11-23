@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+export OPENAI_API_KEY="$(cat /provider/key)"
+exec /opt/amplifier-acp/.venv/bin/amplifier-acp --config /instance/backend/agent.json

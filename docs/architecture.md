@@ -78,6 +78,25 @@ sequenceDiagram
 
 A task that needs all three specialist roles can use Manager → Analyst → Coder → Reviewer → Coder → Manager. The connector preserves this authorized route and its six-reply budget.
 
+## Optional Telegram integration
+
+`matrix-telegram` joins the existing Matrix and PostgreSQL networks. Its mautrix AppService bridges selected Telegram chats to private, encrypted portals. The operator groups portals and `Telegram Control` in a Telegram Space. A separate connector validates each destination and approvals against durable state. The private engine network carries scoped ACP to one dedicated Constellation Instance running Amplifier with a communication bundle and no configured tools. The instance has its own provider credentials and storage.
+
+```mermaid
+flowchart LR
+    Telegram["Selected Telegram chats"] <-->|"Portal delivery"| Bridge["mautrix AppService"]
+    Bridge <--> Portal["Encrypted Matrix portals"]
+    Element["Element"] <--> Portal
+    Element <--> Control["Telegram Control"]
+    Portal --> Connector["Telegram connector and outbox"]
+    Bridge -->|"Verified mapping and status"| Connector
+    Connector <--> Control
+    Connector <-->|"Scoped ACP"| Engine["Constellation Instance and Amplifier"]
+    Connector -->|"Approved or enabled publication"| Portal
+```
+
+See the [operator guide](telegram.md) for the trust boundary, modes, and deployment gates.
+
 ## Reference version pins
 
 | Component | Version |

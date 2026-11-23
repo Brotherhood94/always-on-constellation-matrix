@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ $1 == /opt/matrix-telegram ]] || { echo 'Place the complete bundle in /opt/matrix-telegram first.' >&2; exit 1; }
+for task in backup metrics; do
+  case $task in
+    backup) schedule='OnCalendar=*-*-* 04:15:00' ;;
+    metrics) schedule=$'OnBootSec=90s\nOnUnitActiveSec=60s' ;;
+  esac
+  cat >"/etc/systemd/system/matrix-telegram-$task.service" <<UNIT
+[Unit]
+Description=Matrix Telegram $task
+After=docker.service matrix-stack.service
+
+[Service]
+Type=oneshot
+Slice=matrix-workload.slice
+ExecStart=/opt/matrix-telegram/telegram $task
+UNIT
+  cat >"/etc/systemd/system/matrix-telegram-$task.timer" <<UNIT
+[Unit]
+Description=Run Matrix Telegram $task periodically
+
+[Timer]
+$schedule
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+done
+systemctl daemon-reload
+systemctl enable --now matrix-telegram-backup.timer matrix-telegram-metrics.timer
