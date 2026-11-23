@@ -6,6 +6,8 @@ This optional integration adds a Telegram Space, private portals, and an encrypt
 
 Use a verified source archive from a recorded Git commit. Copy the contents of `integrations/telegram` into `/opt/matrix-telegram` on the VPS. The installer expects the existing Compose projects under `/opt/matrix-stack`, a JSON-compatible Synapse configuration, the stack's local account registration helper, and the existing PostgreSQL and Matrix networks. It adds a dedicated PostgreSQL database and roles and an AppService registration. Synapse configuration is backed up before activation.
 
+The installer reads the operator's Matrix ID from the existing stack or agent configuration. On a deployment without that setting, pass `MATRIX_OWNER='@<OWNER_HANDLE>:<SERVER_NAME>'` to both `prepare` and `prepare-agent`.
+
 Create a private local file with mode `600` containing the operator's Telegram `api_id` (integer) and `api_hash` (string). These are application credentials from Telegram. The owner logs into Telegram separately through the bridge bot in Element. Keep credentials, codes, and passwords in the private setup flow. [Telegram authentication](https://docs.mau.fi/bridges/go/telegram/authentication.html)
 
 ```bash

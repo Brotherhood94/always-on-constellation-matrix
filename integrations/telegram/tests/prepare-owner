@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+[[ $EUID == 0 ]] || { echo 'Run this test as root in a disposable container.' >&2; exit 1; }
+source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+fixture=$(mktemp -d)
+trap 'rm -rf -- "$fixture"' EXIT
+export TELEGRAM_STACK_DIR="$fixture/stack" TELEGRAM_AGENTS_DIR="$fixture/agents"
+export PATH="$fixture/bin:$PATH"
+unset MATRIX_OWNER
+mkdir "$TELEGRAM_STACK_DIR" "$TELEGRAM_AGENTS_DIR" "$fixture/bin"
+cat > "$TELEGRAM_STACK_DIR/.env" <<CONFIG
+MATRIX_SERVER_NAME=telegram.test
+MATRIX_DATA=$fixture/data
+CONFIG
+printf '%s\n' 'MATRIX_SERVER_NAME=unused.test' 'MATRIX_OWNER=@operator:telegram.test' > "$TELEGRAM_AGENTS_DIR/.env"
+printf '%s\n' '{"api_id":42,"api_hash":"0123456789abcdef0123456789abcdef"}' > "$fixture/api.json"
+chmod 0600 "$fixture/api.json"
+cat > "$fixture/bin/docker" <<'STUB'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+case "$1 $2" in
+  'network inspect'|'image inspect') exit 0 ;;
+  'compose --project-directory') cat >/dev/null; exit 0 ;;
+esac
+case " $* " in
+  *' -e -c - '*) printf '%s\n' '{"network":{"sync":{},"takeout":{}},"homeserver":{},"appservice":{"bot":{}},"bridge":{"relay":{}},"database":{},"matrix":{},"double_puppet":{},"encryption":{},"backfill":{"queue":{}},"logging":{}}' ;;
+  *' --entrypoint yq '*) cat ;;
+  *' -g -c /data/config.yaml '*) printf '%s\n' 'fixture registration' > "$TELEGRAM_DATA/bridge/registration.yaml" ;;
+  *) printf 'Unexpected Docker command in fixture: %s\n' "$1" >&2; exit 1 ;;
+esac
+STUB
+chmod 0755 "$fixture/bin/docker"
+"$source_dir/telegram" prepare "$fixture/api.json"
+python3 -B - "$fixture/data/telegram/bridge/config.yaml" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as result:
+    config = json.load(result)
+assert config['homeserver']['domain'] == 'telegram.test'
+assert config['bridge']['permissions']['@operator:telegram.test'] == 'admin'
+assert config['bridge']['portal_create_filter']['list'] == []
+PY
+rm "$fixture/data/telegram/bridge/config.yaml"
+MATRIX_OWNER='@override:telegram.test' "$source_dir/telegram" prepare "$fixture/api.json"
+python3 -B - "$fixture/data/telegram/bridge/config.yaml" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding='utf-8') as result:
+    permissions = json.load(result)['bridge']['permissions']
+assert permissions['@override:telegram.test'] == 'admin'
+assert '@operator:telegram.test' not in permissions
+PY
+rm "$TELEGRAM_AGENTS_DIR/.env"
+if "$source_dir/telegram" prepare "$fixture/api.json" > "$fixture/missing.log" 2>&1; then
+  echo 'A missing operator must prevent preparation.' >&2
+  exit 1
+fi
+[[ $(<"$fixture/missing.log") == *'Set MATRIX_OWNER to the full local Matrix operator ID.'* ]]
+echo 'Telegram prepare resolves the existing owner, honors an explicit override, and reports a missing owner.'

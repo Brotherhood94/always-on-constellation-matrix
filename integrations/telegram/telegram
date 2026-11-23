@@ -3,6 +3,7 @@ set -Eeuo pipefail
 umask 077
 dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 stack_dir=${TELEGRAM_STACK_DIR:-/opt/matrix-stack}
+owner_override=${MATRIX_OWNER:-}
 [[ $EUID == 0 && -f "$stack_dir/.env" ]] || { echo 'Run as root with the installed Matrix stack.' >&2; exit 1; }
 set -a
 . "$stack_dir/.env"
@@ -16,12 +17,29 @@ install -d -m 0711 "$TELEGRAM_DATA"
 exec 9>"$TELEGRAM_DATA/operator.lock"
 flock -n 9 || { echo 'Another Telegram operator command is running.' >&2; exit 1; }
 
+resolve_matrix_owner() {
+  local agents_config="${TELEGRAM_AGENTS_DIR:-/opt/matrix-agents}/.env"
+  local owner=${owner_override:-${MATRIX_OWNER:-}}
+  if [[ -z $owner && -r $agents_config ]]; then
+    owner=$( . "$agents_config"; printf '%s' "${MATRIX_OWNER:-}" )
+  fi
+  if [[ ! ${owner%%:*} =~ ^@[a-z0-9._=/-]+$ || $owner != *:* || ${owner#*:} != "$MATRIX_SERVER_NAME" ]]; then
+    echo 'Set MATRIX_OWNER to the full local Matrix operator ID.' >&2
+    return 1
+  fi
+  export MATRIX_OWNER="$owner"
+}
+
 case ${1:-} in
   prepare)
     [[ $# == 2 ]] || { echo 'Use telegram prepare PRIVATE_API_CREDENTIALS_JSON' >&2; exit 2; }
+    resolve_matrix_owner
     install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/bridge" "$TELEGRAM_DATA/connector"
     docker network inspect "${TELEGRAM_MATRIX_NETWORK:-matrix-stack_clients}" "${TELEGRAM_DATABASE_NETWORK:-matrix-stack_database}" >/dev/null
     if [[ ! -s "$TELEGRAM_DATA/bridge/config.yaml" ]]; then
+      if ! docker image inspect "$image" >/dev/null 2>&1; then
+        docker pull "$image"
+      fi
       docker run --rm --network none --entrypoint /usr/bin/mautrix-telegram "$image" -e -c - |
         docker run --rm -i --network none --entrypoint yq "$image" -o=json '.' - |
         "${config[@]}" generate "$TELEGRAM_DATA" "$2"
@@ -62,6 +80,7 @@ case ${1:-} in
     ;;
   prepare-agent)
     [[ $# == 2 && -f "$2" && $(stat -c %a "$2") == 600 ]] || { echo 'Use telegram prepare-agent PRIVATE_OPENAI_KEY_FILE with mode 600.' >&2; exit 2; }
+    resolve_matrix_owner
     rm -f -- "$TELEGRAM_DATA/connector/backend-verified"
     install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/instance" "$TELEGRAM_DATA/provider" "$TELEGRAM_DATA/exchange"
     install -m 0600 -o 991 -g 991 "$2" "$TELEGRAM_DATA/provider/key"
