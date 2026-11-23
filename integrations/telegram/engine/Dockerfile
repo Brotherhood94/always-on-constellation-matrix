@@ -22,11 +22,15 @@ RUN case "$TARGETARCH" in \
 RUN git init /opt/amplifier-acp \
     && git -C /opt/amplifier-acp fetch --depth 1 https://github.com/microsoft/amplifier-app-acp.git 3da5681942d9e9b4c51376e47ec85e69a001623a \
     && git -C /opt/amplifier-acp checkout --detach FETCH_HEAD \
-    && uv sync --locked --project /opt/amplifier-acp --python /usr/local/bin/python3.13 --no-python-downloads \
+    && uv sync --locked --project /opt/amplifier-acp --python /usr/local/bin/python3.13 --no-python-downloads
+RUN uv pip install --no-deps --python /opt/amplifier-acp/.venv/bin/python \
+        'amplifier-module-provider-openai-chatgpt @ git+https://github.com/microsoft/amplifier-module-provider-openai-chatgpt.git@cae3eaa32e16b139b8e889b8cc477c3f2d9dee31' \
+    && uv pip check --python /opt/amplifier-acp/.venv/bin/python \
     && rm -rf /root/.cache/uv
 RUN groupadd -g 991 telegram && useradd -M -u 991 -g 991 -d /instance telegram
 COPY --chmod=0755 start backend /usr/local/bin/
-COPY initialize.py /opt/telegram/initialize.py
-ENV HOME=/instance AGENT_INSTANCE_CERTIFICATE_NAMES='["telegram-engine"]'
+COPY initialize.py sign_in.py /opt/telegram/
+ENV HOME=/instance AGENT_INSTANCE_CERTIFICATE_NAMES='["telegram-engine"]' \
+    TELEGRAM_CODEX_TOKEN_FILE=/instance/backend/codex-oauth.json
 USER 991:991
 ENTRYPOINT ["/usr/local/bin/start"]

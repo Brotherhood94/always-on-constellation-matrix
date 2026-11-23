@@ -4,7 +4,7 @@ base=tgengine-$(date +%H%M%S)
 net=$base-net
 state=$base-state
 engine=$base-engine
-image=matrix-telegram-engine:0.1.0
+image=matrix-telegram-engine:0.1.1
 connector=matrix-telegram-connector:0.1.0
 cleanup() {
   docker rm -f "$engine" >/dev/null 2>&1 || true
@@ -14,7 +14,7 @@ cleanup() {
 trap cleanup EXIT
 docker network create --internal "$net" >/dev/null
 docker volume create "$state" >/dev/null
-docker run --rm --network none --user 0:0 -v "$state:/fixture" --entrypoint /bin/sh "$image" -c 'mkdir /fixture/instance /fixture/exchange /fixture/provider; echo fixture >/fixture/provider/key; chown -R 991:991 /fixture'
+docker run --rm --network none --user 0:0 -v "$state:/fixture" --entrypoint /bin/sh "$image" -c 'mkdir /fixture/instance /fixture/exchange; chown -R 991:991 /fixture'
 docker run --rm --network none -v "$state:/fixture" --entrypoint /bin/sh "$image" -c '
   agent-instance --home /fixture/instance init --name Telegram --bind 0.0.0.0 --port 19443 >/dev/null
   /opt/amplifier-acp/.venv/bin/python - <<"PY"

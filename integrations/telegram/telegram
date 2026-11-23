@@ -81,18 +81,21 @@ case ${1:-} in
     fi
     ;;
   prepare-agent)
-    [[ $# == 2 && -f "$2" && $(stat -c %a "$2") == 600 ]] || { echo 'Use telegram prepare-agent PRIVATE_OPENAI_KEY_FILE with mode 600.' >&2; exit 2; }
+    [[ $# == 1 ]] || { echo 'Use telegram prepare-agent.' >&2; exit 2; }
     resolve_matrix_owner
-    rm -f -- "$TELEGRAM_DATA/connector/backend-verified"
-    install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/instance" "$TELEGRAM_DATA/provider" "$TELEGRAM_DATA/exchange"
-    install -m 0600 -o 991 -g 991 "$2" "$TELEGRAM_DATA/provider/key"
-    "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/audit.sql"
-    PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" bootstrap "$TELEGRAM_DATA"
     export TELEGRAM_MODEL=${TELEGRAM_MODEL:-gpt-6.2-sol}
     "${compose[@]}" --profile agent build connector telegram-engine
+    rm -f -- "$TELEGRAM_DATA/connector/backend-verified"
+    install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/instance" "$TELEGRAM_DATA/exchange"
+    "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/audit.sql"
+    PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" bootstrap "$TELEGRAM_DATA"
     "${compose[@]}" --profile agent up -d --wait --wait-timeout 120 telegram-engine
     PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" channel "$TELEGRAM_DATA"
-    echo 'Dedicated Instance is ready for a synthetic provider check.'
+    echo 'Dedicated Constellation Instance is ready. Run telegram sign-in.'
+    ;;
+  sign-in)
+    [[ $# == 1 && -t 0 && -t 1 ]] || { echo 'Run telegram sign-in from an interactive terminal.' >&2; exit 2; }
+    "${compose[@]}" --profile agent exec telegram-engine /opt/amplifier-acp/.venv/bin/python -B /opt/telegram/sign_in.py
     ;;
   probe)
     "${compose[@]}" --profile agent run --rm --no-deps connector probe
@@ -159,5 +162,5 @@ PYTHON
     "${config[@]}" disable "$TELEGRAM_DATA"
     "${stack[@]}" restart synapse
     ;;
-  *) echo 'Use telegram prepare|activate|allow|disallow|prepare-agent|probe|start-agent|bind|rotate|report|arm-resume|resume|pause|pause-binding|backup|restore-check|metrics|enable-operations|status|deactivate.' >&2; exit 2 ;;
+  *) echo 'Use telegram prepare|activate|allow|disallow|prepare-agent|sign-in|probe|start-agent|bind|rotate|report|arm-resume|resume|pause|pause-binding|backup|restore-check|metrics|enable-operations|status|deactivate.' >&2; exit 2 ;;
 esac

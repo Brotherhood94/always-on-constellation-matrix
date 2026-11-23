@@ -38,14 +38,13 @@ services:
   telegram-engine:
     <<: *worker
     profiles: [agent]
-    image: matrix-telegram-engine:0.1.0
+    image: matrix-telegram-engine:0.1.1
     build: ./engine
     mem_limit: 1g
     environment:
       TELEGRAM_MODEL: ${TELEGRAM_MODEL:-gpt-6.2-sol}
     volumes:
       - ${TELEGRAM_DATA:?}/instance:/instance
-      - ${TELEGRAM_DATA:?}/provider:/provider:ro
       - ${TELEGRAM_DATA:?}/exchange:/exchange
     networks: [engine, provider]
     healthcheck:

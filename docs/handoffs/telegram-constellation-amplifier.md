@@ -17,6 +17,6 @@ The reference installer layout came from local bundles `matrix-stack.tar.gz` (`a
 
 1. Bring up the bridge with an empty allowlist and the model connector stopped. Confirm the pinned image, dedicated database and existing Synapse access.
 2. Verify the first DM's peer, receiving account, encrypted room, and owner round trip. Explicitly set a relay only on the approved portal.
-3. Provision the dedicated Instance and prove a synthetic Amplifier turn and `session/load` with the selected provider. Start the connector and enroll the DM in draft mode.
+3. Provision the dedicated Instance, complete Amplifier's Codex device sign-in, and prove a synthetic Amplifier turn and `session/load`. Start the connector and enroll the DM in draft mode.
 4. Verify private draft review, one approved Telegram send, correct attribution, and a trusted delivery receipt. Verify directed drafting on the second, separately mapped group. Test cross-chat isolation and pause before considering automation.
 5. Complete the [acceptance evidence](../acceptance.md#telegram-acceptance), isolated backup/restore, and current `Agents` and Dot regressions. Leave any topic mapping or external-provider dependency open until tested.

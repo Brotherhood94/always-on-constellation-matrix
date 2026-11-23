@@ -55,4 +55,4 @@ Follow the [Chief of Staff guide](chief-of-staff.md) to enable direct observatio
 
 ## 6. Pilot the optional Telegram integration
 
-Use the matching source archive and follow the [Telegram operator guide](telegram.md). The first activation starts the bridge with an empty allowlist and the model connector stopped. Complete live acceptance on the verified DM before onboarding the group. Keep Telegram application and provider credentials in separate private files. Use the [implementation handoff](handoffs/telegram-constellation-amplifier.md) for deployment gates and recovery boundaries.
+Use the matching source archive and follow the [Telegram operator guide](telegram.md). The first activation starts the bridge with an empty allowlist and the model connector stopped. Complete live acceptance on the verified DM before onboarding the group. Keep the Telegram application credentials in a private file and complete Codex device sign-in from a VPS terminal. Use the [implementation handoff](handoffs/telegram-constellation-amplifier.md) for deployment gates and recovery boundaries.

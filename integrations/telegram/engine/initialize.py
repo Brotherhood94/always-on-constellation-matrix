@@ -26,7 +26,7 @@ def write(path, text):
 
 bundle = f'''bundle:
   name: telegram-communication
-  version: 0.1.0+amplifier-unified.snapshot.1
+  version: 0.1.1+amplifier-unified.snapshot.1
   description: Conversation-scoped draft writing without tools
 session:
   orchestrator:
@@ -35,11 +35,12 @@ session:
     module: context-simple
     source: /opt/amplifier-acp/.venv/lib/python3.13/site-packages/amplifier_module_context_simple
 providers:
-  - module: provider-openai
-    source: /opt/amplifier-acp/.venv/lib/python3.13/site-packages/amplifier_module_provider_openai
+  - module: provider-openai-chatgpt
+    source: /opt/amplifier-acp/.venv/lib/python3.13/site-packages/amplifier_module_provider_openai_chatgpt
     config:
+      auth_mode: chatgpt_codex
+      token_file_path: {json.dumps(os.environ['TELEGRAM_CODEX_TOKEN_FILE'])}
       default_model: {models.group()}
-      max_tokens: 700
       reasoning_effort: low
 tools: []
 agents: []

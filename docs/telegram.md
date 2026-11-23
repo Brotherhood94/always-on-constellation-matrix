@@ -26,15 +26,20 @@ Use `user` for a DM, `chat` for a basic group, and `channel` for a verified supe
 
 ## Start the drafting agent
 
-Use a separate OpenAI API key and a model available to that key. The model probe makes two synthetic requests to the chosen provider. Set `TELEGRAM_MODEL` explicitly if the default is unavailable. Provider credentials are mounted only into the engine. The release pins are mautrix Telegram `v26.11`, Instance `0.22.17`, and Amplifier ACP `0.1.7` at `3da5681942d9e9b4c51376e47ec85e69a001623a`.
+The dedicated Constellation Instance runs Amplifier ACP with the Amplifier ChatGPT provider in `chatgpt_codex` mode. It uses the Codex subscription through device sign-in. The default model is `gpt-6.2-sol` with low reasoning effort for drafting. On first provisioning, set `TELEGRAM_MODEL` if the subscription needs a different supported model. [Amplifier ChatGPT provider](https://github.com/microsoft/amplifier-module-provider-openai-chatgpt)
 
 ```bash
-TELEGRAM_MODEL='<available-model>' /opt/matrix-telegram/telegram prepare-agent /root/telegram-openai-key
+/opt/matrix-telegram/telegram prepare-agent
+/opt/matrix-telegram/telegram sign-in
 /opt/matrix-telegram/telegram probe
 /opt/matrix-telegram/telegram start-agent
 ```
 
-The key file must have mode `600` and contain just the key. Accept the `Telegram` Space and `Telegram Control` invitations in Element. The connector checks that Control is encrypted, invite-only, non-federated, and joined only by the operator and connector. Invite `@telegram-agent:<SERVER_NAME>` to the verified portal and explicitly enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins only a portal explicitly selected by the operator during binding. Check the agent attribution at the Telegram destination. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
+Run `sign-in` from an interactive VPS terminal. Open the verification page printed there and enter the one-time code using the Codex account. The Instance saves its OAuth credentials in its own private persistent directory. The connector uses its own scoped ACP token. `probe` runs two synthetic turns and checks that the second turn resumes the Amplifier session before the connector can start.
+
+The release pins mautrix Telegram `v26.11`, Constellation Instance `0.22.17`, Amplifier ACP `0.1.7` at `3da5681942d9e9b4c51376e47ec85e69a001623a`, and the Amplifier ChatGPT provider at `cae3eaa32e16b139b8e889b8cc477c3f2d9dee31`.
+
+Accept the `Telegram` Space and `Telegram Control` invitations in Element. The connector checks that Control is encrypted, invite-only, non-federated, and joined only by the operator and connector. Invite `@telegram-agent:<SERVER_NAME>` to the verified portal and explicitly enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins only a portal explicitly selected by the operator during binding. Check the agent attribution at the Telegram destination. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
 Keep a private binding file for each selected chat. Use `mode: draft` and `trigger: inbound` for the first DM. Use `mode: draft` and `trigger: request` for an eligible group. A basic group and a supergroup without topics are supported by the admission policy. A forum or broadcast channel needs its own mapping and acceptance.
 
