@@ -11,6 +11,13 @@ const modes = new Set(['manual', 'draft', 'auto']);
 const minimum = 60_000;
 const maxAge = 15 * minimum;
 const expiry = 30 * minimum;
+export const pollStart = 'org.matrix.msc3381.poll.start';
+export const pollEnd = 'org.matrix.msc3381.poll.end';
+const pollResponse = 'org.matrix.msc3381.poll.response';
+const reviewAnswerID = /^[a-f0-9]{64}$/u;
+
+// The encrypted answer must identify the exact draft even if the relation is visible to the server.
+export const reviewAnswer = (draft, action) => digest([draft.id, draft.version, draft.hash, action]);
 
 export function validateBinding(binding, controlRoom) {
   const { id, peer, receiver, login, room, mode, trigger, audience } = binding;
@@ -23,8 +30,17 @@ export function validateBinding(binding, controlRoom) {
   }
 }
 
-export function controlCommand({ room, sender, content, encrypted }, config) {
-  if (!encrypted || room !== config.controlRoom || sender !== config.owner || content?.msgtype !== 'm.text' ||
+export function controlCommand({ room, sender, type, content, encrypted }, config) {
+  if (!encrypted || room !== config.controlRoom || sender !== config.owner) return null;
+  if (type === pollResponse || type === 'm.poll.response') {
+    const relation = content?.['m.relates_to'];
+    const choices = content?.[type]?.answers ?? (type === 'm.poll.response' ? content?.['m.selections'] : undefined);
+    if (relation?.rel_type !== 'm.reference' || !eventID.test(relation.event_id) ||
+        !Array.isArray(choices) || choices.length !== 1 ||
+        typeof choices[0] !== 'string' || !reviewAnswerID.test(choices[0])) return null;
+    return { action: 'review', poll: relation.event_id, choice: choices[0] };
+  }
+  if (content?.msgtype !== 'm.text' ||
       content['m.relates_to'] || typeof content.body !== 'string') return null;
   const match = /^telegram (approve|reject) ([a-f0-9-]{36}) ([1-9][0-9]{0,4})$/u.exec(content.body);
   if (match) return { action: match[1], draft: match[2], version: Number(match[3]) };
@@ -69,6 +85,11 @@ export class TelegramStore {
         event TEXT PRIMARY KEY, room TEXT NOT NULL, status TEXT NOT NULL, timing INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS controls (event TEXT PRIMARY KEY, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS draft_review (
+        event TEXT PRIMARY KEY, draft TEXT NOT NULL REFERENCES draft(id), version INTEGER NOT NULL,
+        hash TEXT NOT NULL, closed INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (draft, version)
+      );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS work_status ON work(state, queued);
       CREATE INDEX IF NOT EXISTS draft_status ON draft(state, until);
@@ -231,11 +252,22 @@ export class TelegramStore {
             source.context !== binding.context || source.at < now - maxAge) return false;
         return this.enqueue(binding, source.event, now);
       }
-      const draft = this.draft(command.draft);
-      if (!draft || draft.version !== command.version || draft.state !== 'awaiting_approval' || !this.current(draft, now)) return false;
-      if (command.action === 'reject') {
+      const review = command.action === 'review'
+        ? this.get('SELECT * FROM draft_review WHERE event=? AND closed=0', command.poll)
+        : null;
+      if (command.action === 'review' && !review) return false;
+      const draft = this.draft(review?.draft ?? command.draft);
+      if (!draft || draft.version !== (review?.version ?? command.version) || (review && review.hash !== draft.hash) ||
+          draft.state !== 'awaiting_approval' || !this.current(draft, now)) return false;
+      let decision = command.action;
+      if (review) {
+        if (command.choice === reviewAnswer(draft, 'approve')) decision = 'approve';
+        else if (command.choice === reviewAnswer(draft, 'reject')) decision = 'reject';
+        else return false;
+      }
+      if (decision === 'reject') {
         this.run(`UPDATE draft SET state='cancelled' WHERE id=?`, draft.id);
-      } else if (command.action === 'approve') {
+      } else if (decision === 'approve') {
         const approval = JSON.stringify({ event: event.event, sender: event.sender, hash: draft.hash, version: draft.version,
           target: draft.target, room: draft.room, generation: draft.generation, revision: draft.revision,
           context: draft.context, expiry: draft.until, at: now });
@@ -296,6 +328,21 @@ export class TelegramStore {
   }
 
   draft(id) { return this.get('SELECT * FROM draft WHERE id=?', id); }
+  registerReview(draftId, version, event) {
+    const draft = this.draft(draftId);
+    if (!draft || draft.version !== version || !eventID.test(event)) return;
+    this.run('INSERT OR IGNORE INTO draft_review (event, draft, version, hash) VALUES (?, ?, ?, ?)',
+      event, draft.id, draft.version, draft.hash);
+  }
+
+  pendingReviewClose() {
+    return this.get(`SELECT review.event, draft.binding FROM draft_review review JOIN draft ON draft.id=review.draft
+      WHERE review.closed=0 AND (draft.state!='awaiting_approval' OR review.version!=draft.version)
+      ORDER BY draft.until LIMIT 1`);
+  }
+
+  closeReview(event) { this.run('UPDATE draft_review SET closed=1 WHERE event=?', event); }
+
   nextSend(now) {
     return this.get(`SELECT candidate.* FROM draft candidate WHERE candidate.state='ready' AND candidate.retry_at<=?
       AND NOT EXISTS (SELECT 1 FROM draft active WHERE active.binding=candidate.binding

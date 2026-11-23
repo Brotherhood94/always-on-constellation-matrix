@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { TelegramStore, controlCommand, digest, validateBinding } from './policy.mjs';
+import { TelegramStore, controlCommand, digest, pollStart, pollEnd, reviewAnswer, validateBinding } from './policy.mjs';
 import { bridgeAudit, matrixConnection, statusEvidence } from './matrix.mjs';
 import { draftWithInstance } from './acp.mjs';
 
@@ -21,6 +21,7 @@ const [action, argument] = process.argv.slice(2);
 const matrix = await matrixConnection(settings, directory, { crypto: !action });
 const pausedFile = () => existsSync(join(directory, 'paused'));
 const date = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'long' });
+const pollText = 'org.matrix.msc1767.text';
 
 async function liveBinding(room, target) {
   if (!(await audit.verifiedTarget(room, target))) return false;
@@ -123,6 +124,12 @@ async function run() {
     }
     const delivery = binding && statusEvidence(settings, room, event);
     if (delivery) store.delivery(room, delivery.event, delivery.status, now);
+    if (room === settings.controlRoom && encrypted && !unreadable && event.sender === settings.agent &&
+        event.type === pollStart && !event.unsigned?.redacted_because) {
+      // Recover the mapping if Synapse accepted the poll before a process restart.
+      const review = /^review-([a-f0-9-]{36})-([1-9][0-9]{0,4})$/u.exec(event.unsigned?.transaction_id);
+      if (review) store.registerReview(review[1], Number(review[2]), event.event_id);
+    }
     if (initial || (room !== settings.controlRoom && !binding?.active)) return;
     if (binding && ['m.room.tombstone', 'm.room.encryption', 'm.room.join_rules'].includes(event.type)) {
       store.pause(binding.id, 'portal_security_state_changed');
@@ -134,7 +141,7 @@ async function run() {
       return;
     }
     if (room === settings.controlRoom) {
-      const command = controlCommand({ room, sender: event.sender, content: event.content, encrypted }, settings);
+      const command = controlCommand({ room, sender: event.sender, type: event.type, content: event.content, encrypted }, settings);
       if (!command || now - event.origin_server_ts > catchup || now + 60_000 < event.origin_server_ts) return;
       if (await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
       return;
@@ -206,15 +213,47 @@ async function run() {
 
   async function notify(draft) {
     const awaiting = draft.state === 'awaiting_approval';
+    const title = `Draft for ${draft.binding} · ${draft.id.slice(0, 8)}`;
     const content = awaiting ? [
-      `Draft for ${draft.binding}`, `Source: https://matrix.to/#/${draft.room}/${draft.source}`, '', draft.body, '',
+      title, `Source: https://matrix.to/#/${draft.room}/${draft.source}`, '', draft.body, '',
       `Expires: ${date.format(draft.until)}`, `telegram approve ${draft.id} ${draft.version}`,
       `telegram reject ${draft.id} ${draft.version}`,
     ].join('\n') : `${draft.binding}: ${draft.state.replaceAll('_', ' ')}. Draft ${draft.id}.`;
     const prepared = await matrix.encrypted(settings.controlRoom, content);
     if (!(await matrix.verifyControl())) throw new Error('Control room changed.');
     await matrix.put(settings.controlRoom, `notice-${digest([draft.id, draft.state])}`, prepared);
+    if (awaiting && store.draft(draft.id).state === 'awaiting_approval') {
+      const question = `${title}\nReview the draft above before sending.`;
+      const poll = await matrix.encryptEvent(settings.controlRoom, pollStart, {
+        [pollText]: question,
+        [pollStart]: {
+          kind: 'org.matrix.msc3381.poll.disclosed',
+          max_selections: 1,
+          question: { [pollText]: question },
+          answers: [
+            { id: reviewAnswer(draft, 'approve'), [pollText]: 'Approve and send' },
+            { id: reviewAnswer(draft, 'reject'), [pollText]: 'Reject' },
+          ],
+        },
+      });
+      if (!(await matrix.verifyControl())) throw new Error('Control room changed.');
+      const event = await matrix.put(settings.controlRoom, `review-${draft.id}-${draft.version}`, poll);
+      store.registerReview(draft.id, draft.version, event);
+    }
     store.notified(draft.id, draft.state);
+  }
+
+  async function closeReviewedPoll() {
+    const review = store.pendingReviewClose();
+    if (!review || !(await matrix.verifyControl())) return;
+    const prepared = await matrix.encryptEvent(settings.controlRoom, pollEnd, {
+      [pollText]: `Draft review closed for ${review.binding}.`,
+      [pollEnd]: {},
+      'm.relates_to': { rel_type: 'm.reference', event_id: review.event },
+    });
+    if (!(await matrix.verifyControl())) throw new Error('Control room changed.');
+    await matrix.put(settings.controlRoom, `review-close-${digest(review.event)}`, prepared);
+    store.closeReview(review.event);
   }
 
   async function publish() {
@@ -255,6 +294,7 @@ async function run() {
         nextNotice = now + 5_000;
         await notify(notice);
       }
+      await closeReviewedPoll();
       await publish();
       if (!worker && !pausedFile() && !store.paused()) {
         const work = store.nextWork(Date.now());

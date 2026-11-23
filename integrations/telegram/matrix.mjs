@@ -81,8 +81,12 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     });
   }
 
+  async function encryptEvent(room, type, content) {
+    return JSON.stringify(await sdk.crypto.encryptRoomEvent(room, type, content));
+  }
+
   async function encrypted(room, body) {
-    return JSON.stringify(await sdk.crypto.encryptRoomEvent(room, messageType, { msgtype: 'm.text', body }));
+    return encryptEvent(room, messageType, { msgtype: 'm.text', body });
   }
 
   async function put(room, txn, ciphertext) {
@@ -99,7 +103,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     }
   }
 
-  return { sync, applySync, liveState, verifyControl, joinPortal, encrypted, put,
+  return { sync, applySync, liveState, verifyControl, joinPortal, encrypted, encryptEvent, put,
     close: () => sdk.crypto?.engine.machine.close(), tokenHash: digest([who.user_id, who.device_id, token]) };
 }
 

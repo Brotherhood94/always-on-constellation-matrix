@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TelegramStore, controlCommand } from './policy.mjs';
+import { TelegramStore, controlCommand, reviewAnswer } from './policy.mjs';
 
 const now = 2_000_000;
 const config = { controlRoom: '!control:test', owner: '@test:test' };
@@ -76,6 +76,50 @@ test('only the encrypted private control event can authorize a particular draft'
   assert.equal(cmd(store, command, '$duplicate'), false);
   assert.equal(store.prepareSend(draft, '{"device":"stable"}', now + 6), true);
   assert.equal(store.prepareSend(draft, '{"device":"again"}', now + 7), false);
+});
+
+test('only one encrypted decision on a registered review poll can act on its exact draft', () => {
+  const store = fixture();
+  store.record(input(dm), now + 2);
+  const id = candidate(store);
+  const approve = reviewAnswer(store.draft(id), 'approve');
+  const reject = reviewAnswer(store.draft(id), 'reject');
+  const type = 'org.matrix.msc3381.poll.response';
+  const vote = { room: config.controlRoom, sender: config.owner, type, encrypted: true, content: {
+    'm.relates_to': { rel_type: 'm.reference', event_id: '$review' },
+    [type]: { answers: [approve] },
+  } };
+  const command = controlCommand(vote, config);
+  assert.deepEqual(command, { action: 'review', poll: '$review', choice: approve });
+  assert.equal(controlCommand({ ...vote, encrypted: false }, config), null);
+  assert.equal(controlCommand({ ...vote, room: dm.room }, config), null);
+  assert.equal(controlCommand({ ...vote, sender: '@other:test' }, config), null);
+  for (const answers of [[], [approve, reject], ['unknown']]) {
+    assert.equal(controlCommand({ ...vote, content: { ...vote.content, [type]: { answers } } }, config), null);
+  }
+  store.registerReview(id, 2, '$wrong-version');
+  assert.equal(cmd(store, { ...command, poll: '$wrong-version' }, '$vote0'), false);
+  assert.equal(cmd(store, command, '$vote1'), false);
+  store.registerReview(id, 1, '$review');
+  store.registerReview(id, 1, '$other-poll');
+  assert.equal(cmd(store, { ...command, poll: '$other-poll' }, '$vote2'), false);
+  assert.equal(cmd(store, command, '$vote3'), true);
+  assert.equal(cmd(store, { ...command, choice: reject }, '$vote4'), false);
+  assert.equal(store.nextSend(now + 5).id, id);
+  assert.equal(store.pendingReviewClose().event, '$review');
+  store.closeReview('$review');
+  assert.equal(store.pendingReviewClose(), undefined);
+
+  store.record(input(dm, '$new'), now + 5);
+  const freshWork = store.nextWork(now + 6);
+  const fresh = store.saveCandidate(freshWork, 'Replacement', now + 7);
+  store.registerReview(fresh, 1, '$fresh-review');
+  assert.equal(cmd(store, command, '$vote5', now + 8), false);
+  assert.equal(cmd(store, { ...command, poll: '$fresh-review' }, '$vote6', now + 8), false);
+  const rejectFresh = reviewAnswer(store.draft(fresh), 'reject');
+  assert.equal(cmd(store, { ...command, poll: '$fresh-review', choice: rejectFresh }, '$vote7', now + 8), true);
+  assert.equal(store.draft(fresh).state, 'cancelled');
+  assert.equal(store.nextSend(now + 8), undefined);
 });
 
 test('new human content, policy revision, expiry and pause protect against stale sending', () => {
