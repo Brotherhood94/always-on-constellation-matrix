@@ -63,5 +63,16 @@ The thread holds the request, evidence, and outcome. A status question can go di
 ## Roadmap
 
 - Run the [four collaboration scenarios](docs/acceptance.md#chief-of-staff-collaboration-scenarios) and evaluate the Chief of Staff's proposals against their evidence.
-- Evaluate role-specific personas with the operator before assigning them. Add a draft request from the `Chief of Staff` room.
+- Add an operator-initiated draft request from the `Chief of Staff` room.
 - Automate new-agent provisioning so registration, shared policies, dashboard inventory, and backups are configured together.
+
+### Amplifier Constellation adoption
+
+Matrix remains the conversation layer. The External Worker already runs Constellation Instance with an Amplifier ACP backend, making it the first pilot for lifecycle, profiles, and diagnostics. Manager, Analyst, Coder, and Reviewer use Codex ACP. [Upstream component map](https://github.com/microsoft/amplifier-constellation) · [Evaluation and acceptance criteria](docs/constellation-evaluation.md)
+
+- [ ] Use ACP Lab's fixture and scenario approach for repeatable engine checks. Establish the Matrix baseline with the four scenarios, including interruption and retry, before changing the agent or connector.
+- [ ] Audit the External Worker's Instance and selected ACP engine. Verify stable identity, session loading, model access, and rollback on an isolated copy before an upgrade.
+- [ ] Compare one Chief of Staff persona draft against the unprofiled baseline, then test import and rollback on the External Worker after operator review.
+- [ ] Pilot Observatory for one Instance with observation-only access. Add live health and the last real task check to the current inventory if the data improves operations.
+- [ ] Evaluate a timer for the existing Chief of Staff review after scenario acceptance. A native scheduler pilot must prove authorization, restart recovery, and explicit Matrix delivery. Consider Instance context grants for a concrete, scoped use case.
+- [ ] Evaluate Conversations or Huddles in isolation if a use case needs a separate collaboration surface or Companion voice. Preserve Matrix audience, thread identity, and delivery rules in any adapter.
