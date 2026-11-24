@@ -20,6 +20,7 @@ import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
+from rootless import NAMESPACE, launch
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
 from agent_catalog import KEY, profile
@@ -35,8 +36,9 @@ MODEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{2,79}')
 PROJECT = re.compile(r'[a-z][a-z0-9-]{0,38}')
 RUNTIME_UID = 991
 ROOT_UID = 992
-RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop', 'telegram-agent', 'telegrambot'}
-PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
+RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'dashboard', 'persona-workshop',
+            'telegram-agent', 'telegrambot'}
+PORTS = {'matrix_port': 18008, 'dashboard_port': 18082, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
          'context_port': 18081, 'context_https_port': 8445}
 
@@ -102,9 +104,9 @@ def validated_url(url):
     return url
 
 
-def normalized(raw, presets):
-    settings = {**PORTS, 'project': 'constellation-matrix', 'tailscale': True, 'systemd': True,
-                'dot': False, 'telegram': False, **raw}
+def normalized(raw, presets, *, rootless=False):
+    settings = {**PORTS, 'project': 'constellation-matrix', 'tailscale': True, 'systemd': not rootless,
+                'dot': False, 'telegram': False, **raw, 'rootless': rootless}
     if not SERVER.fullmatch(settings.get('server_name', '')) or not PROJECT.fullmatch(settings['project']):
         raise ValueError('Use a DNS name and a lowercase Compose project name')
     if not OWNER.fullmatch(settings.get('owner', '')) or settings['owner'] in (RESERVED | presets.keys()):
@@ -115,6 +117,8 @@ def normalized(raw, presets):
     for key in ('tailscale', 'systemd', 'dot', 'telegram'):
         if type(settings[key]) is not bool:
             raise ValueError(f'{key} must be true or false')
+    if rootless and (settings['systemd'] or settings['dot'] or {'root', 'remote-worker'}.intersection(chosen)):
+        raise ValueError('Host systemd, Dot tunnel setup, Root Operations and remote workers require an administrator install')
     for key in PORTS:
         if type(settings[key]) is not int or not 1024 <= settings[key] <= 65535:
             raise ValueError(f'{key} must be a TCP port from 1024 to 65535')
@@ -153,7 +157,7 @@ def base_environment(settings, data):
               'MATRIX_PROJECT': settings['project'],
               'MATRIX_REGISTRY': data / 'agents.json',
               'MATRIX_LOCAL_HOST': server,
-              'MATRIX_SLICE': 'matrix-workload.slice' if settings['systemd'] else 'system.slice',
+              'MATRIX_SLICE': 'matrix-workload.slice' if settings['systemd'] else '',
               'TELEGRAM_MATRIX_NETWORK': settings['project'] + '_clients',
               'TELEGRAM_DATABASE_NETWORK': settings['project'] + '_database',
               'TELEGRAM_MEMORY_NETWORK': settings['project'] + '_memory',
@@ -266,6 +270,8 @@ def register_entry(settings, registry, key, definition):
     if effort not in {'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}:
         raise ValueError('Invalid reasoning effort')
     placement = definition.get('placement', 'remote' if key == 'remote-worker' else 'local')
+    if settings.get('rootless') and (key == 'root' or placement == 'remote'):
+        raise ValueError('Root Operations and remote workers require an administrator install')
     if placement not in {'local', 'remote'} or (key in {'chief-of-staff', 'root'} and placement != 'local'):
         raise ValueError('Invalid agent placement')
     validated = profile(definition['profile'])
@@ -384,7 +390,7 @@ def prepare_storage(settings, data):
         directory(data / name, uid=RUNTIME_UID)
     for path in (SOURCE / 'dashboard').iterdir():
         if path.name in {'index.html', 'dashboard.mjs', 'dashboard.css'}:
-            shutil.copyfile(path, data / 'dashboard' / path.name)
+            save(data / 'dashboard' / path.name, path.read_text(), mode=0o644)
     save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url']},
          mode=0o644)
 
@@ -446,7 +452,8 @@ def configure_network(settings, data):
         return
     server = settings['server_name']
     tailscale = json.loads(command_output('tailscale', 'status', '--json'))
-    if tailscale.get('Self', {}).get('DNSName', '').rstrip('.') != server or server not in tailscale.get('CertDomains', []):
+    node = (tailscale.get('Self') or {}).get('DNSName') or ''
+    if node.rstrip('.') != server or server not in (tailscale.get('CertDomains') or []):
         raise ValueError('The Matrix DNS name must match an HTTPS-enabled Tailscale node')
     configured = json.loads(command_output('tailscale', 'serve', 'status', '--json') or '{}')
     owned_ports = {443, settings['dashboard_https_port'], settings['neo4j_https_port'],
@@ -457,7 +464,9 @@ def configure_network(settings, data):
     for path in ('/_matrix/client', '/_matrix/media', '/_synapse/client', '/.well-known/matrix/client'):
         run('tailscale', 'serve', '--bg', '--https=443', '--set-path', path,
             f"http://127.0.0.1:{settings['matrix_port']}{path}")
-    run('tailscale', 'serve', '--bg', f"--https={settings['dashboard_https_port']}", str(data / 'dashboard'))
+    dashboard_target = (f"http://127.0.0.1:{settings['dashboard_port']}" if settings.get('rootless')
+                        else str(data / 'dashboard'))
+    run('tailscale', 'serve', '--bg', f"--https={settings['dashboard_https_port']}", dashboard_target)
     run('tailscale', 'serve', '--bg', f"--https={settings['neo4j_https_port']}", f"http://127.0.0.1:{settings['neo4j_port']}")
     run('tailscale', 'serve', '--bg', f"--tls-terminated-tcp={settings['bolt_https_port']}", f"tcp://127.0.0.1:{settings['bolt_port']}")
     if any(entry['placement'] == 'remote' for entry in load(data / 'agents.json')['agents'].values()):
@@ -471,7 +480,7 @@ def operator_lock(data):
         yield
 
 
-def interactive(presets):
+def interactive(presets, rootless=False):
     print('Available agents: ' + ', '.join(presets))
     chosen = [value.strip() for value in input('Agents to install (comma separated): ').split(',') if value.strip()]
     subscription = input('Default Amplifier subscription label: ').strip()
@@ -480,26 +489,35 @@ def interactive(presets):
         value = input(f'{key} subscription override (blank uses {subscription}): ').strip()
         if value:
             overrides[key] = value
-    tailnet = input('Configure private HTTPS using Tailscale Serve? [Y/n] ').lower() != 'n'
-    default = ''
-    if tailnet:
+    default = os.environ.get('CONSTELLATION_TAILNET', '') if rootless else ''
+    tailnet = False
+    if default or not rootless:
+        tailnet = input('Configure private HTTPS using Tailscale Serve? [Y/n] ').lower() != 'n'
+    if tailnet and not rootless:
         output = json.loads(command_output('tailscale', 'status', '--json'))
         default = output.get('Self', {}).get('DNSName', '').rstrip('.')
+    if rootless and not tailnet:
+        print('Configure a private HTTPS proxy for Element, the dashboard and Neo4j Browser.')
     server = input(f'Matrix server DNS name [{default}]: ').strip() or default
     return {'server_name': server, 'owner': input('Matrix operator username: ').strip(), 'agents': chosen,
             'subscriptions': {'default': subscription, 'overrides': overrides}, 'tailscale': tailnet,
-            'dot': input('Enable Dot? [y/N] ').lower() == 'y', 'telegram': input('Enable Telegram? [y/N] ').lower() == 'y'}
+            'dot': not rootless and input('Enable Dot? [y/N] ').lower() == 'y',
+            'telegram': input('Enable Telegram? [y/N] ').lower() == 'y'}
 
 
-def install(data, args):
+def install(data, args, *, rootless=False):
     presets = load(PRESETS)
-    settings = normalized(load(args.config) if args.config else interactive(presets), presets)
+    available = {key: preset for key, preset in presets.items() if not rootless or key not in {'root', 'remote-worker'}}
+    raw = load(args.config) if args.config else interactive(available, rootless)
+    settings = normalized(raw, presets, rootless=rootless)
     passphrase = password(settings)
     directory(data, 0o711)
     with operator_lock(data):
         previous = data / 'settings.json'
         if previous.exists():
             current = load(previous)
+            if current.get('rootless', False) != rootless:
+                raise ValueError('Changing installation mode requires a separate deployment directory')
             for key in ('server_name', 'owner', 'project', 'matrix_port'):
                 if current[key] != settings[key]:
                     raise ValueError(f'{key} belongs to the existing deployment identity')
@@ -526,11 +544,13 @@ def install(data, args):
             up(data, 'context')
         provision_layout(settings, data, registry, passphrase)
         prepare_images(settings, registry)
-        up(data, 'monitor', 'private-edge', *(['dot'] if settings['dot'] else []))
+        optional_services = ['dashboard'] if rootless else (['dot'] if settings['dot'] else [])
+        up(data, 'monitor', 'private-edge', *optional_services)
         up(data, *(f'engine-{key}' for key, entry in registry['agents'].items() if entry['placement'] == 'local'))
         sync_workshop(settings, data, registry)
         publish_inventory(settings, data, registry)
-        configure_network(settings, data)
+        if not rootless:
+            configure_network(settings, data)
         if settings['systemd']:
             run('systemctl', 'enable', '--now', settings['project'] + '-stack.service', settings['project'] + '-monitor.service', settings['project'] + '-backup.timer')
     print('Workspace created. Sign in to Element at https://' + settings['server_name'] + '.')
@@ -649,9 +669,51 @@ def service_units(settings, data, broker=False):
     units(settings, data, broker=broker)
 
 
+def deployment_path(args, uid):
+    if args.data_dir is not None:
+        return args.data_dir.absolute()
+    if uid:
+        state = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'constellation-matrix'
+        if args.command == 'install' or (state / 'settings.json').is_file():
+            return state.absolute()
+    return DATA
+
+
+def rootless_command(data, args):
+    if args.command in {'remote', 'persona-connect', 'dot-connect'} or (
+        args.command == 'telegram' and args.arguments[:1] == ['enable-operations']
+    ):
+        raise ValueError('This host integration requires an administrator install')
+    inputs = []
+    tailnet = ''
+    if args.command == 'install':
+        if args.config:
+            raw = load(args.config)
+            settings = normalized(raw, load(PRESETS), rootless=True)
+            if settings['tailscale'] and not shutil.which('tailscale'):
+                raise ValueError('Install Tailscale on the host or set tailscale to false and configure a private HTTPS proxy')
+            inputs = [args.config, raw.get('owner_password_file')]
+        elif shutil.which('tailscale'):
+            result = subprocess.run(['tailscale', 'status', '--json'], capture_output=True, text=True)
+            if result.returncode == 0:
+                node = (json.loads(result.stdout).get('Self') or {}).get('DNSName') or ''
+                tailnet = node.rstrip('.')
+    elif args.command == 'agent' and args.action == 'add':
+        inputs = [args.profile, args.owner_password_file]
+    elif args.command == 'telegram' and args.arguments[:1] in (['prepare'], ['bind'], ['rotate']):
+        inputs = args.arguments[1:2]
+    arguments = sys.argv[1:]
+    while arguments[0].startswith('--data-dir'):
+        arguments = arguments[1 if '=' in arguments[0] else 2:]
+    launch(SOURCE, data, arguments, inputs, tailnet=tailnet)
+    if args.command == 'install':
+        with operator_lock(data):
+            configure_network(load(data / 'settings.json'), data)
+
+
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--data-dir', type=Path, default=DATA)
+    parser = argparse.ArgumentParser(prog='constellation_matrix', description=__doc__, allow_abbrev=False)
+    parser.add_argument('--data-dir', type=Path)
     commands = parser.add_subparsers(dest='command', required=True)
     install_parser = commands.add_parser('install')
     install_parser.add_argument('--config', type=Path)
@@ -675,7 +737,7 @@ def main():
     confirm.add_argument('key')
     confirm.add_argument('--receipt', type=Path, required=True)
     status = commands.add_parser('status', help='Read the dashboard snapshots')
-    status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services (sudo)')
+    status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services')
     commands.add_parser('backup')
     commands.add_parser('restore-check')
     commands.add_parser('telegram').add_argument('arguments', nargs=argparse.REMAINDER)
@@ -695,17 +757,31 @@ def main():
         normalized(load(args.config), load(PRESETS))
         print('Deployment configuration is valid.')
         return
-    data = args.data_dir.absolute()
+    uid = os.geteuid()
+    rootless = not uid and os.environ.get(NAMESPACE) == '1'
+    data = deployment_path(args, uid)
     if args.command == 'status' and not args.refresh:
         show_status(data)
         return
-    if os.geteuid() != 0:
-        command = 'status --refresh' if args.command == 'status' else args.command
-        parser.error(f'Run {command} as a VPS administrator (sudo)')
-    if data == Path('/') or data.is_symlink():
+    if data == Path('/') or data.is_symlink() or (data / 'settings.json').is_symlink():
         parser.error('Use a dedicated deployment directory')
+    data = data.resolve()
+    if data == Path('/'):
+        parser.error('Use a dedicated deployment directory')
+    if (data / 'settings.json').exists():
+        try:
+            installed_rootless = load(data / 'settings.json').get('rootless', False)
+        except PermissionError:
+            parser.error('Use the installation account for rootless state, or sudo for administrator state')
+        if installed_rootless != bool(uid or rootless):
+            parser.error('Use the installation account for rootless state, or sudo for administrator state')
+    elif uid and args.command != 'install':
+        parser.error('No rootless deployment found. Run install or select its --data-dir')
+    if uid:
+        rootless_command(data, args)
+        return
     if args.command == 'install':
-        install(data, args)
+        install(data, args, rootless=rootless)
     elif args.command == 'agent':
         if args.action == 'add':
             agent_add(data, args)
@@ -716,6 +792,7 @@ def main():
         execute(data, args)
     elif args.command in {'backup', 'restore-check'}:
         with operator_lock(data):
+            open_existing(data)
             from recovery import backup
             backup(data, args.command)
     elif args.command == 'telegram':

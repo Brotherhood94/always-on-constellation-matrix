@@ -74,6 +74,18 @@ def definition(settings, data, registry, secrets):
         'volumes': [volume(SOURCE / 'deploy/private-edge.cfg', '/usr/local/etc/haproxy/haproxy.cfg', True)],
         'depends_on': {'context': {'condition': 'service_healthy'}, 'neo4j': {'condition': 'service_healthy'}},
     }
+    if settings.get('rootless'):
+        services['dashboard'] = {
+            **restricted,
+            'image': 'busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec',
+            'networks': ['edge'],
+            'command': ['busybox', 'httpd', '-f', '-p', '8080', '-h', '/site',
+                        '-c', '/etc/constellation-httpd.conf'],
+            'ports': [port(settings['dashboard_port'], 8080)],
+            'volumes': [volume(dashboard, '/site', True),
+                        volume(SOURCE / 'deploy/rootless/httpd.conf', '/etc/constellation-httpd.conf', True)],
+            'healthcheck': health('wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8080/'),
+        }
     if settings['dot']:
         services['dot'] = {**restricted, 'image': CONNECTOR, 'networks': ['clients'],
                            'command': ['node', '/app/dot-bridge.mjs'],

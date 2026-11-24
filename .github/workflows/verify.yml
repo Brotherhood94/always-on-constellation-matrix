@@ -28,6 +28,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y restic
       - run: sudo env VERIFY_RESTIC=1 bash tests/install-smoke
 
+  rootless-install:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: tests/rootless-install
+
   persona-workshop:
     runs-on: ubuntu-24.04
     timeout-minutes: 40

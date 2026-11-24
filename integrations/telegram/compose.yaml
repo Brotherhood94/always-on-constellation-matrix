@@ -6,7 +6,7 @@ x-worker: &worker
   read_only: true
   cap_drop: [ALL]
   security_opt: [no-new-privileges:true]
-  cgroup_parent: ${MATRIX_SLICE:-matrix-workload.slice}
+  cgroup_parent: ${MATRIX_SLICE-matrix-workload.slice}
   tmpfs: [/tmp]
   logging:
     driver: json-file

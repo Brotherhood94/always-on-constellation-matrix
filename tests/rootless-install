@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+cd -- "$(dirname -- "$0")/.."
+
+fixture_image=$(docker build --quiet - <<'DOCKERFILE'
+FROM docker:28.2.2-dind-rootless@sha256:24f8d7d52a0929857ccefad85ac256f498a3cec347ab0ddab3912e15930e98c0
+USER root
+RUN apk add --no-cache bash curl python3 slirp4netns
+USER rootless
+DOCKERFILE
+)
+
+# Only the disposable outer fixture needs nested user namespace support.
+# Its Docker API is private to the fixture, and it receives no host mounts.
+fixture=$(docker run --privileged --detach \
+  -e DOCKER_HOST=unix:///run/user/1000/docker.sock \
+  -e DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns \
+  "$fixture_image" dockerd --host=unix:///run/user/1000/docker.sock --storage-driver overlay2)
+trap 'docker rm -f "$fixture" >/dev/null' EXIT
+for attempt in {1..20}; do
+  if docker exec "$fixture" docker info >/dev/null 2>&1; then break; fi
+  if [[ $attempt == 20 ]]; then
+    docker logs "$fixture" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+docker exec "$fixture" mkdir /home/rootless/source
+tar --exclude=.git --exclude=node_modules --exclude=__pycache__ -cf - . |
+  docker exec -i -w /home/rootless/source "$fixture" tar -xf -
+docker exec -w /home/rootless/source -e CONSTELLATION_ROOTLESS_SMOKE=1 -e VERIFY_RESTIC=1 \
+  "$fixture" bash tests/install-smoke

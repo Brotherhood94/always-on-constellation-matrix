@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 src=$(cd -- "$(dirname -- "$0")/.." && pwd)
-[[ $EUID == 0 ]] || { echo 'Run the isolated installation smoke test as root.' >&2; exit 1; }
+if [[ $EUID != 0 && ${CONSTELLATION_ROOTLESS_SMOKE:-0} != 1 ]]; then
+  echo 'Run the administrator smoke test as root or select the rootless smoke test.' >&2
+  exit 1
+fi
 umask 077
 work=$(mktemp -d "${CONSTELLATION_TEST_TMP:-/tmp}/constellation-install.XXXXXXXX")
 data="$work/data"
@@ -9,19 +12,26 @@ cleanup() {
   if [[ -f "$data/compose.yaml" ]]; then
     docker compose --project-directory "$data" --profile agents down --volumes >/dev/null 2>&1 || true
   fi
-  rm -rf -- "$work"
+  if [[ $EUID == 0 ]]; then
+    rm -rf -- "$work"
+  else
+    # The rootless daemon maps service files to subordinate UIDs.
+    docker run --rm --network none --mount "type=bind,source=$work,target=/fixture" +      constellation-matrix-operator:28.2.2-1 sh -c 'rm -rf /fixture/data' >/dev/null 2>&1 || true
+    rm -rf -- "$work"
+  fi
 }
 trap cleanup EXIT
 printf '%s\n' 'synthetic-matrix-password-88' > "$work/password"
 python3 - "$work" <<'PYTHON'
 import json
+import os
 from pathlib import Path
 from secrets import token_hex
 import socket
 import sys
 
 work = Path(sys.argv[1])
-keys = ['matrix_port', 'dashboard_https_port', 'neo4j_port', 'neo4j_https_port', 'bolt_port', 'bolt_https_port',
+keys = ['matrix_port', 'dashboard_port', 'dashboard_https_port', 'neo4j_port', 'neo4j_https_port', 'bolt_port', 'bolt_https_port',
         'context_port', 'context_https_port']
 listeners = [socket.socket() for _ in keys]
 for sock in listeners:
@@ -29,15 +39,16 @@ for sock in listeners:
 ports = dict(zip(keys, [sock.getsockname()[1] for sock in listeners]))
 project = 'constellation-fixture-' + token_hex(6)
 config = {
-    'server_name': 'fixture.test', 'owner': 'operator', 'agents': [],
+    'server_name': 'fixture.test', 'owner': 'operator',
+    'agents': ['manager'] if os.geteuid() else [],
     'owner_password_file': str(work / 'password'), 'subscriptions': {'default': 'Fixture'},
     'project': project, 'systemd': False, 'tailscale': False, **ports,
 }
 (work / 'install.json').write_text(json.dumps(config))
 PYTHON
-"$src/constellation" --data-dir "$data" install --config "$work/install.json"
+"$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cp "$data/rooms.json" "$work/initial-rooms.json"
-"$src/constellation" --data-dir "$data" install --config "$work/install.json"
+"$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cmp "$work/initial-rooms.json" "$data/rooms.json"
 graph=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["neo4j_port"])' "$data/settings.json")
 python3 - "$graph" <<'PYTHON'
@@ -56,7 +67,30 @@ for attempt in range(12):
         sleep(1)
 PYTHON
 printf '%s\n' 'Clean coordinator install, rerun and graph browser proxy verified.'
+if [[ $EUID != 0 ]]; then
+  "$src/constellation_matrix" --data-dir "$data" status --refresh
+  python3 - "$data" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+from urllib.request import urlopen
+
+settings = json.loads((Path(sys.argv[1]) / 'settings.json').read_text())
+assert settings['rootless'] and not settings['systemd']
+registry = json.loads((Path(sys.argv[1]) / 'agents.json').read_text())
+assert registry['agents']['manager']['active'] is False
+base = f"http://127.0.0.1:{settings['dashboard_port']}/"
+with urlopen(base + 'dashboard.mjs', timeout=5) as response:
+    assert response.headers.get_content_type() == 'application/javascript'
+with urlopen(base + 'links.json', timeout=5) as response:
+    links = json.load(response)
+    assert links['context'] == settings['context_url']
+with urlopen(base + 'agents.json', timeout=5) as response:
+    agents = json.load(response)['agents']
+    assert any(agent['name'] == 'Manager' and agent['status'] == 'Sign-in required' for agent in agents)
+PYTHON
+fi
 if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
-  "$src/constellation" --data-dir "$data" backup
-  "$src/constellation" --data-dir "$data" restore-check
+  "$src/constellation_matrix" --data-dir "$data" backup
+  "$src/constellation_matrix" --data-dir "$data" restore-check
 fi
