@@ -85,10 +85,13 @@ def document(registry, inventory, server_name, now):
             raise ValueError('An agent profile has an invalid identity or host')
         host = entry['server']
         current = observed.get((entry['name'], host), {})
+        amplifier = entry.get('amplifier', {})
         default = 'Unavailable' if host == registry['local_server'] else 'Registered'
         result.append(dict(key=key, id=f'@{key}:{server_name}', name=entry['name'], server=host,
-                           status=current.get('status', default), active=entry.get('active', True), model=current.get('model', entry.get('model')),
-                           effort=current.get('effort', entry.get('effort')), **profile(entry['profile'])))
+                           status=current.get('status', default), active=entry.get('active', True),
+                           model=amplifier.get('model', current.get('model', entry.get('model'))),
+                           effort=amplifier.get('effort', current.get('effort', entry.get('effort'))),
+                           **profile(entry['profile'])))
     if any(sum(row['role'] == role for row in result) > 1 for role in ('coordinator', 'observer')):
         raise ValueError('There must be a single active coordinator and observer')
     return dict(version=1, time=now, dynamicHandoffs=registry.get('dynamic_handoffs') is True, agents=result)

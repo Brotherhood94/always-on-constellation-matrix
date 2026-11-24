@@ -74,7 +74,7 @@ def profile_lines(key, preset, width):
     lines = [
         f"{preset['name']} ({key})",
         f"Role: {profile['role']}  |  Runs: {placement(key, preset)}",
-        f"Model: {preset['model']}  |  Reasoning: {preset['effort']}",
+        f"Suggested model: {preset['model']}  |  Reasoning: {preset['effort']}",
         '',
         'Capabilities',
     ]

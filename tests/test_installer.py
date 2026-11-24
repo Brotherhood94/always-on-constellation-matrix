@@ -14,9 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import checklist, choose_option, menu, select_agents
 from installer import (
-    CONNECTIONS, DEFAULT_CONNECTION, PRESETS, agent_sign_in, interactive, load, main,
+    PRESETS, agent_activate, agent_sign_in, interactive, load, main,
     normalized, prepare_storage, register_entry, save, tailscale_dns,
 )
+from agent_catalog import document
 from compose import definition
 from remote import compose_remote
 
@@ -45,7 +46,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('[x] Coder', rendered)
         self.assertIn('Implement and test code changes.', rendered)
         self.assertIn('Role: coordinator', rendered)
-        self.assertIn('Model: gpt-6.2-astra  |  Reasoning: high', rendered)
+        self.assertIn('Suggested model: gpt-6.2-astra  |  Reasoning: high', rendered)
 
     def test_agent_checklist_scrolls_and_can_confirm_an_empty_roster(self):
         screen = Mock()
@@ -79,29 +80,29 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(choose_option('Choose', options), 'second')
             self.assertEqual(choose_option('Choose', options, 'second'), 'second')
 
-    def test_interactive_installer_offers_connection_first_and_defaults_without_typing(self):
-        choices = [DEFAULT_CONNECTION, 'tailscale', 'suggested', (True, True)]
+    def test_interactive_installer_selects_roster_without_provider_or_text_input(self):
+        choices = ['tailscale', 'suggested', (True, True)]
         with patch('installer.choose_option', side_effect=choices) as choose, \
              patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
              patch('installer.tailscale_dns', return_value='fixture.test'), patch('builtins.input') as answer:
             settings = normalized(interactive(self.presets, {}), self.presets)
-        self.assertEqual(choose.call_args_list[0].args[1], CONNECTIONS)
+        self.assertEqual(choose.call_args_list[0].args[0], 'Choose private access for Matrix and the dashboard')
         picker.assert_called_once_with(self.presets, ())
         answer.assert_not_called()
         self.assertEqual(settings['agents'], ['coder', 'reviewer'])
-        self.assertEqual(settings['connection'], DEFAULT_CONNECTION)
+        self.assertNotIn('connection', settings)
         self.assertNotIn('subscriptions', settings)
         self.assertEqual(settings['owner'], 'operator')
         self.assertEqual(settings['server_name'], 'fixture.test')
         self.assertTrue(settings['tailscale'] and settings['dot'] and settings['telegram'])
 
     def test_interactive_installer_supports_custom_proxy_and_operator(self):
-        choices = [DEFAULT_CONNECTION, 'proxy', 'custom', (False, False)]
+        choices = ['proxy', 'custom', (False, False)]
         with patch('installer.choose_option', side_effect=choices) as choose, \
              patch('installer.select_agents', return_value=[]), patch('installer.tailscale_dns', return_value=None), \
              patch('builtins.input', side_effect=['matrix.example', 'my-operator']):
             settings = normalized(interactive(self.presets, {}), self.presets)
-        self.assertEqual(list(choose.call_args_list[1].args[1]), ['proxy'])
+        self.assertEqual(list(choose.call_args_list[0].args[1]), ['proxy'])
         self.assertFalse(settings['tailscale'])
         self.assertEqual(settings['server_name'], 'matrix.example')
         self.assertEqual(settings['owner'], 'my-operator')
@@ -116,15 +117,13 @@ class InstallerTest(unittest.TestCase):
         with patch('installer.run', side_effect=FileNotFoundError):
             self.assertIsNone(tailscale_dns())
 
-    def test_default_connection_preserves_existing_account_reminders(self):
+    def test_legacy_connection_config_preserves_existing_agent_identity(self):
         raw = dict(self.raw)
         del raw['subscriptions']
-        settings = normalized(raw, self.presets)
-        self.assertEqual(settings['connection'], DEFAULT_CONNECTION)
+        settings = normalized({**raw, 'connection': 'chatgpt-codex'}, self.presets)
+        self.assertNotIn('connection', settings)
         register_entry(settings, self.registry, 'coder', self.presets['coder'])
         self.assertEqual(self.registry['agents']['coder']['subscription'], 'Personal')
-        register_entry(settings, self.registry, 'analyst', self.presets['analyst'])
-        self.assertEqual(self.registry['agents']['analyst']['subscription'], CONNECTIONS[DEFAULT_CONNECTION])
         with self.assertRaises(ValueError):
             normalized({**raw, 'connection': 'unsupported'}, self.presets)
 
@@ -158,8 +157,11 @@ class InstallerTest(unittest.TestCase):
 
     def test_repeat_setup_retains_active_agents_and_provider_choice(self):
         self.registry['agents']['coder']['active'] = True
+        configured = {'provider': 'provider-anthropic', 'model': 'claude-fixture', 'effort': None}
+        self.registry['agents']['coder']['amplifier'] = configured
         register_entry(self.settings, self.registry, 'coder', self.presets['coder'])
         self.assertTrue(self.registry['agents']['coder']['active'])
+        self.assertEqual(self.registry['agents']['coder']['amplifier'], configured)
         self.assertEqual(self.registry['agents']['coder']['subscription'], 'Personal')
         self.assertEqual(self.registry['agents']['manager']['subscription'], 'Work')
         self.assertNotIn('analyst', self.registry['agents'])
@@ -167,6 +169,27 @@ class InstallerTest(unittest.TestCase):
             normalized({**self.raw, 'agents': ['manager', 'manager']}, self.presets)
         with self.assertRaises(ValueError):
             normalized({**self.raw, 'owner': 'coder'}, self.presets)
+
+    def test_activation_records_only_the_verified_provider_model(self):
+        metadata = {'provider': 'provider-anthropic', 'model': 'claude-fixture', 'effort': None}
+        with TemporaryDirectory() as work, patch('installer.open_existing', return_value=(self.settings, self.registry)), \
+             patch('installer.configure_amplifier', return_value=metadata) as configure, \
+             patch('installer.compose') as compose, patch('installer.up'), patch('installer.sync_workshop'), \
+             patch('installer.publish_inventory'):
+            data = Path(work)
+            compose.side_effect = CalledProcessError(1, ['probe'])
+            with self.assertRaises(CalledProcessError):
+                agent_activate(data, 'coder')
+            self.assertFalse(self.registry['agents']['coder']['active'])
+            self.assertNotIn('amplifier', self.registry['agents']['coder'])
+            compose.side_effect = None
+            agent_activate(data, 'coder')
+            configure.assert_called_with(data, 'engine-coder', self.registry['agents']['coder'])
+            self.assertTrue(load(data / 'agents.json')['agents']['coder']['active'])
+        inventory = [{'name': 'Coder', 'model': 'gpt-6.2-sol', 'effort': 'medium'}]
+        rows = document(self.registry, inventory, 'fixture.test', 100)['agents']
+        coder = next(row for row in rows if row['key'] == 'coder')
+        self.assertEqual((coder['model'], coder['effort']), ('claude-fixture', None))
 
     def test_local_topology_isolates_engine_credentials_and_desktop(self):
         doc = definition(self.settings, Path('/srv/fixture'), self.registry, {'POSTGRES_PASSWORD': 'fixture'})

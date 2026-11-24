@@ -6,15 +6,17 @@ On Ubuntu 24.04, install standard Docker Engine with Compose V2, Python 3, curl,
 
 ```sh
 sudo ./constellation_matrix install
-sudo ./constellation_matrix agent sign-in
+sudo ./constellation_matrix agent configure
 ./constellation_matrix status
 ```
 
-Choose **ChatGPT via Codex subscription**, the Amplifier connection supported by this release. Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, model, capabilities, and limits. Press Space to toggle an agent and Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later.
+Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, suggested model, capabilities, and limits. Press Space to toggle an agent and Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later.
 
 Choose the suggested Matrix operator account and Tailscale DNS name if available. The wizard asks you to type a username or DNS name when you choose a custom one. Enter the Matrix operator password when prompted. Terminals without checklist support offer numbered menus and accept comma-separated agent IDs.
 
-After installation, `agent sign-in` guides you through device sign-in for each pending local agent. Each agent saves its own credentials. Rerun the command to resume where you left off, or pass an agent ID to connect a single agent. Remote workers sign in during enrollment on their own host. [Amplifier ChatGPT provider](https://github.com/microsoft/amplifier-module-provider-openai-chatgpt)
+At the end of installation, choose **Open Amplifier provider setup** to configure the local agents one at a time. Each agent runs Amplifier’s own provider manager. It offers Anthropic for Claude, OpenAI with an API key, and ChatGPT for Codex sign-in. Add or edit a provider, follow its login prompts, pick the model, and choose **Done**. Amplifier keeps credentials and settings in that Instance’s private persistent home. Constellation activates the agent after its request and session-resume checks pass. [Amplifier provider setup](https://github.com/microsoft/amplifier-app-cli#readme)
+
+Run `agent configure` later to continue with pending agents, or pass an agent ID to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow. Remote workers configure Amplifier during enrollment on their own host.
 
 State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, keep the owner password file outside the checkout with mode `0600`. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
 
@@ -64,7 +66,7 @@ Save a profile like the one below. Use capability names and resource scopes that
 
 ```sh
 sudo ./constellation_matrix agent add --profile /path/to/qa.json
-sudo ./constellation_matrix agent sign-in qa
+sudo ./constellation_matrix agent configure qa
 ```
 
 The registry has one active coordinator and observer when those roles are enabled. Pending workers become available for routing after provider sign-in, an ACP session restore probe, and connector startup.

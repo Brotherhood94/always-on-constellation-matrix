@@ -37,8 +37,7 @@ RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
             'telegram-agent', 'telegrambot'}
-DEFAULT_CONNECTION = 'chatgpt-codex'
-CONNECTIONS = {DEFAULT_CONNECTION: 'ChatGPT via Codex subscription'}
+LEGACY_CONNECTION = 'chatgpt-codex'
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
          'context_port': 18081, 'context_https_port': 8445}
@@ -109,9 +108,9 @@ def normalized(raw, presets):
     if raw.get('rootless'):
         raise ValueError('Use standard Docker Engine for this deployment')
     settings = {**PORTS, 'project': 'constellation-matrix', 'tailscale': True, 'systemd': True,
-                'connection': DEFAULT_CONNECTION, 'dot': False, 'telegram': False, **raw}
-    if not isinstance(settings['connection'], str) or settings['connection'] not in CONNECTIONS:
-        raise ValueError('Choose a supported Amplifier connection: ' + ', '.join(CONNECTIONS))
+                'dot': False, 'telegram': False, **raw}
+    if settings.pop('connection', LEGACY_CONNECTION) != LEGACY_CONNECTION:
+        raise ValueError('Configure the provider in each agent’s Amplifier home')
     if not SERVER.fullmatch(settings.get('server_name', '')) or not PROJECT.fullmatch(settings['project']):
         raise ValueError('Use a DNS name and a lowercase Compose project name')
     if not OWNER.fullmatch(settings.get('owner', '')) or settings['owner'] in (RESERVED | presets.keys()):
@@ -281,10 +280,11 @@ def register_entry(settings, registry, key, definition):
         raise ValueError('The observer role belongs to Chief of Staff')
     previous = registry['agents'].get(key)
     labels = settings.get('subscriptions', {})
-    default_label = previous['subscription'] if previous else CONNECTIONS[settings.get('connection', DEFAULT_CONNECTION)]
+    default_label = (previous or {}).get('subscription')
     label = labels.get('overrides', {}).get(key, labels.get('default', default_label))
     subscription = definition.get('subscription', label)
-    if not isinstance(subscription, str) or not subscription.strip() or not subscription.isprintable():
+    if subscription is not None and (not isinstance(subscription, str)
+                                     or not subscription.strip() or not subscription.isprintable()):
         raise ValueError('Use a printable subscription label')
     server = definition.get('server', settings['server_name'] if placement == 'local' else 'remote')
     if not isinstance(server, str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9.-]{0,252}', server):
@@ -294,9 +294,14 @@ def register_entry(settings, registry, key, definition):
            for other, entry in registry['agents'].items()):
         raise ValueError('Agent display names must be unique and only one coordinator can be installed')
     desired = {'name': name, 'server': server, 'placement': placement, 'model': model,
-               'effort': effort, 'profile': validated, 'subscription': subscription, 'active': False}
-    if previous and {**previous, 'active': False} != desired:
-        raise ValueError(f'Agent {key} is already provisioned with different settings')
+               'effort': effort, 'profile': validated, 'active': False}
+    if subscription is not None:
+        desired['subscription'] = subscription
+    if previous:
+        existing = {**previous, 'active': False}
+        existing.pop('amplifier', None)
+        if existing != desired:
+            raise ValueError(f'Agent {key} is already provisioned with different settings')
     registry['agents'][key] = previous or desired
 
 
@@ -476,7 +481,6 @@ def tailscale_dns():
 
 
 def interactive(presets, saved):
-    connection = choose_option('Choose an Amplifier connection', CONNECTIONS)
     chosen = select_agents(presets, saved.get('agents', ()))
 
     dns = tailscale_dns()
@@ -505,7 +509,7 @@ def interactive(presets, saved):
     }
     dot, telegram = choose_option('Choose optional integrations', integrations,
                                   (saved.get('dot', False), saved.get('telegram', False)))
-    raw = {**saved, 'connection': connection, 'server_name': server, 'owner': owner,
+    raw = {**saved, 'server_name': server, 'owner': owner,
            'agents': chosen, 'tailscale': tailnet, 'dot': dot, 'telegram': telegram}
     if 'subscriptions' in raw:
         labels = raw['subscriptions']
@@ -572,7 +576,13 @@ def install(data, args):
     print('Workspace created. Sign in to Element at https://' + settings['server_name'] + '.')
     print('Dashboard: ' + settings['dashboard_url'])
     if pending_local_agents(registry):
-        print('Connect local agents with sudo ./constellation_matrix agent sign-in')
+        if not args.config and choose_option('Configure each local agent in Amplifier?', {
+            True: 'Open Amplifier provider setup',
+            False: 'Configure agents later',
+        }):
+            agent_sign_in(data)
+        else:
+            print('Configure local agents with sudo ./constellation_matrix agent configure')
     for key, entry in registry['agents'].items():
         if entry['placement'] == 'remote' and not entry['active']:
             print(f'Agent {key} awaits remote setup.')
@@ -609,8 +619,21 @@ def agent_sign_in(data, key=None):
     if not pending:
         print('All local agents are already connected.')
     for number, key in enumerate(pending, start=1):
-        print(f'Connecting local agent {number} of {len(pending)}', flush=True)
+        print(f'Configuring local agent {number} of {len(pending)}', flush=True)
         agent_activate(data, key, pending_only=True)
+
+
+def configure_amplifier(data, engine, entry):
+    print(f"Amplifier setup for {entry['name']}. Add or edit a provider, select a model, then choose Done.", flush=True)
+    app = ('/opt/amplifier-cli/.venv/bin/python', '-B', '/opt/office/provider_setup.py')
+    compose(data, '--profile', 'agents', 'exec', engine, *app)
+    result = compose(data, '--profile', 'agents', 'exec', '-T', engine, *app, 'metadata',
+                     stdout=subprocess.PIPE, text=True)
+    configured = json.loads(result.stdout)
+    # Re-render the restricted Office bundle from Amplifier's private settings.
+    compose(data, '--profile', 'agents', 'restart', engine)
+    up(data, engine)
+    return configured
 
 
 def agent_activate(data, key, *, pending_only=False):
@@ -623,12 +646,12 @@ def agent_activate(data, key, *, pending_only=False):
             raise ValueError('Complete provider sign-in on the authorized worker host')
         engine = 'engine-' + key
         up(data, engine)
-        connection = CONNECTIONS[settings.get('connection', DEFAULT_CONNECTION)]
-        print(f"Connect {entry['name']} to {connection}.", flush=True)
-        if entry['subscription'] != connection:
-            print(f"Account reminder: {entry['subscription']}", flush=True)
-        compose(data, '--profile', 'agents', 'exec', engine,
-                '/opt/amplifier-acp/.venv/bin/python', '/opt/telegram/sign_in.py')
+        if entry['active']:
+            entry['active'] = False
+            save(data / 'agents.json', registry)
+            publish_inventory(settings, data, registry)
+            compose(data, '--profile', 'agents', 'stop', key)
+        configured = configure_amplifier(data, engine, entry)
         if key == 'root':
             state = data / 'state/root'
             for source, target in (('credential-token', 'engine-token'), ('ca.pem', 'engine-ca.pem')):
@@ -641,6 +664,7 @@ def agent_activate(data, key, *, pending_only=False):
             compose(data, '--profile', 'agents', 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/probe.mjs')
         sync_workshop(settings, data, registry)
         up(data, key)
+        entry['amplifier'] = configured
         entry['active'] = True
         save(data / 'agents.json', registry)
         publish_inventory(settings, data, registry)
@@ -725,8 +749,8 @@ def main():
     add = agent.add_parser('add')
     add.add_argument('--profile', type=Path, required=True)
     add.add_argument('--owner-password-file', type=Path)
-    agent.add_parser('sign-in', help='Connect one agent or all pending local agents').add_argument(
-        'key', nargs='?', help='Agent ID. Omit to connect all pending local agents in order.')
+    agent.add_parser('configure', aliases=['sign-in'], help='Open native Amplifier provider setup').add_argument(
+        'key', nargs='?', help='Agent ID. Omit to configure all pending local agents in order.')
     remote = commands.add_parser('remote').add_subparsers(dest='action', required=True)
     remote.add_parser('desktop').add_argument('--public-key', type=Path, required=True)
     export = remote.add_parser('export')

@@ -8,7 +8,7 @@ import stat
 
 from compose import CONNECTOR, ENGINE, health, volume
 from installer import (
-    CONNECTIONS, DEFAULT_CONNECTION, KEY, RUNTIME_UID, SOURCE,
+    KEY, RUNTIME_UID, SOURCE, configure_amplifier,
     command_output, configure_network, directory, load, open_existing, operator_lock, run,
     prepare_images, compose, up, publish_inventory, save, validated_url,
 )
@@ -152,16 +152,12 @@ def execute(data, args):
             save(data / 'compose.yaml', compose_remote(data, config, mount))
             prepare_images({'dot': False}, {'agents': {key: {'placement': 'local'}}})
             up(data, 'engine')
-            connection = CONNECTIONS[DEFAULT_CONNECTION]
-            print(f"Connect {config['entry']['name']} to {connection}.", flush=True)
-            if config['entry']['subscription'] != connection:
-                print(f"Account reminder: {config['entry']['subscription']}", flush=True)
-            compose(data, 'exec', 'engine', '/opt/amplifier-acp/.venv/bin/python', '/opt/telegram/sign_in.py')
+            configured = configure_amplifier(data, 'engine', config['entry'])
             compose(data, 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/probe.mjs')
             up(data, key)
             if args.workshop_host:
                 remote_workshop(data, args.workshop_host)
-            save(data / 'receipt.json', {'agent': key, 'device': fingerprint(config)})
+            save(data / 'receipt.json', {'agent': key, 'device': fingerprint(config), 'amplifier': configured})
         print(f'Worker connected. Copy {data / "receipt.json"} to the coordinator for final registration.')
         return
 
@@ -191,12 +187,15 @@ def execute(data, args):
             print('Transfer the enrollment file privately to the authorized worker host.')
         else:
             receipt = private_json(args.receipt)
-            if receipt != {'agent': args.key, 'device': fingerprint({'matrix_token': matrix_token})}:
+            if (receipt.get('agent') != args.key
+                    or receipt.get('device') != fingerprint({'matrix_token': matrix_token})):
                 raise ValueError('The health receipt does not match the enrolled Matrix device')
             from installer import sync_workshop
             managed = sync_workshop(settings, data, registry) or {}
             if args.key not in managed or not managed[args.key]['available']:
                 raise ValueError('Connect this remote Instance in Persona Workshop before confirming it')
+            if 'amplifier' in receipt:
+                entry['amplifier'] = receipt['amplifier']
             entry['active'] = True
         save(data / 'agents.json', registry)
         publish_inventory(settings, data, registry)

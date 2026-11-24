@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+docker run --rm -i --network none --read-only \
+  --tmpfs /instance:rw,uid=991,gid=991,mode=0700 --tmpfs /workspace:rw,uid=991,gid=991,mode=0700 \
+  --tmpfs /tmp --entrypoint /opt/amplifier-cli/.venv/bin/python \
+  "${OFFICE_ENGINE_TEST_IMAGE:-constellation-office-engine:0.22.17}" -B - <<'PY'
+from pathlib import Path
+from subprocess import run
+import json
+import os
+import sys
+
+sys.path.insert(0, '/opt/office')
+import initialize
+from provider_setup import configured_provider, PROVIDERS
+from amplifier_app_cli.lib.settings import AppSettings
+from amplifier_app_cli.provider_manager import ProviderManager
+from amplifier_app_cli.provider_sources import DEFAULT_PROVIDER_SOURCES
+
+settings = Path('/instance/backend/amplifier')
+settings.mkdir(parents=True, mode=0o700)
+workspace = Path('/workspace')
+os.chdir('/instance/backend')
+os.environ.update(AMPLIFIER_HOME=str(settings), AGENT_MODEL='fixture-legacy', AGENT_REASONING='low')
+DEFAULT_PROVIDER_SOURCES.clear()
+assert {item[0] for item in ProviderManager(AppSettings()).list_providers()} == PROVIDERS
+initialize.initialize_settings(settings)
+try:
+    configured_provider(settings)
+except SystemExit:
+    pass
+else:
+    raise AssertionError('The fresh Instance unexpectedly has a default provider')
+
+# Save two independent Amplifier profiles using its real settings writer, then
+# start the pinned native ACP worker against each home with no external network.
+private = """
+import asyncio
+import json
+import os
+from pathlib import Path
+from uuid import uuid4
+from amplifier_acp.worker import NativeWorker
+
+async def verify():
+    async def observe(event):
+        pass
+    document = json.loads(Path(os.environ['OFFICE_FIXTURE_CONFIG']).read_text())
+    worker = NativeWorker(str(uuid4()), '/workspace', document, observe, None)
+    try:
+        report = await asyncio.wait_for(worker.start(), 50)
+        assert len(report['provider_choices']) == 1
+        assert report['provider_choices'][0]['model'] == os.environ['OFFICE_FIXTURE_MODEL']
+    finally:
+        await worker.close()
+
+asyncio.run(verify())
+"""
+
+for name, module in [('coding', 'provider-openai'), ('analysis', 'provider-anthropic')]:
+    home = Path('/instance') / name
+    home.mkdir(mode=0o700)
+    initialize.HOME = home
+    initialize.BACKEND = home / 'backend'
+    (home / 'config.json').write_text('{"config": {}}')
+    initialize.configure()
+    profile = initialize.BACKEND / 'amplifier'
+    fixture_model = name + '-fixture'
+    fixture_key = 'synthetic-' + name + '-key'
+    os.environ['AMPLIFIER_HOME'] = str(profile)
+    AppSettings()._write_scope('global', {'bundle': {'app': []}, 'config': {'providers': [{
+        'module': module, 'config': {'api_key': fixture_key, 'default_model': fixture_model},
+    }]}})
+    saved = (profile / 'settings.yaml').read_bytes()
+    initialize.configure()
+    assert (profile / 'settings.yaml').read_bytes() == saved and fixture_key.encode() not in saved
+    assert (profile / 'keys.env').stat().st_mode & 0o777 == 0o600
+    assert configured_provider(profile) == {'provider': module, 'model': fixture_model, 'effort': None}
+    local_settings = workspace / '.amplifier/settings.yaml'
+    local_settings.parent.mkdir(exist_ok=True)
+    local_settings.write_text('{"config":{"providers":[{"module":"provider-untrusted-workspace"}]}}')
+    # Prevent this test driver from passing a key to the runtime through its
+    # environment. The worker must read Amplifier's own private key file.
+    env = {key: val for key, val in os.environ.items() if fixture_key not in val}
+    env.update(HOME=str(home), OFFICE_FIXTURE_CONFIG=str(initialize.BACKEND / 'agent.json'),
+               OFFICE_FIXTURE_MODEL=fixture_model)
+    run(['/opt/amplifier-acp/.venv/bin/python', '-B', '-c', private], env=env, timeout=65, check=True)
+
+legacy = Path('/instance/legacy')
+legacy.mkdir()
+initialize.HOME = legacy
+initialize.BACKEND = legacy / 'backend'
+initialize.BACKEND.mkdir()
+token = initialize.BACKEND / 'codex-oauth.json'
+token.write_text('synthetic-token-fixture')
+(legacy / 'config.json').write_text('{"config": {}}')
+initialize.configure()
+assert configured_provider(initialize.BACKEND / 'amplifier')['provider'] == 'provider-openai-chatgpt'
+assert token.read_text() == 'synthetic-token-fixture'
+print('Amplifier provider discovery, private homes, startup persistence, and native ACP mounts passed.')
+PY

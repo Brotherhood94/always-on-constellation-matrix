@@ -4,6 +4,10 @@ import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+import yaml
+
+from provider_setup import provider_profiles
+
 HOME = Path('/instance')
 BACKEND = HOME / 'backend'
 MODULES = '/opt/amplifier-acp/.venv/lib/python3.13/site-packages'
@@ -22,11 +26,31 @@ def save(path, value):
             temp.unlink(missing_ok=True)
 
 
+def initialize_settings(settings):
+    path = settings / 'settings.yaml'
+    marker = settings / '.office-provider-settings'
+    if marker.exists():
+        return
+    content = (yaml.safe_load(path.read_text()) or {}) if path.exists() else {'bundle': {'app': []}}
+    # Adopt the previous release's private Codex account once on upgrade.
+    legacy = BACKEND / 'codex-oauth.json'
+    if legacy.is_file() and not content.get('config', {}).get('providers'):
+        content.setdefault('config', {})['providers'] = [{
+            'module': 'provider-openai-chatgpt',
+            'config': {'auth_mode': 'chatgpt_codex', 'token_file_path': str(legacy),
+                       'default_model': os.environ['AGENT_MODEL'], 'reasoning_effort': os.environ['AGENT_REASONING']},
+        }]
+        save(path, content)
+    elif not path.exists():
+        save(path, content)
+    save(marker, {'version': 1})
+
+
 def configure():
     BACKEND.mkdir(mode=0o700, exist_ok=True)
     settings = BACKEND / 'amplifier'
     settings.mkdir(mode=0o700, exist_ok=True)
-    save(settings / 'settings.yaml', {'bundle': {'app': []}})
+    initialize_settings(settings)
     tools = []
     if os.environ.get('AGENT_WORKSPACE_TOOLS') == 'true':
         tools.append({
@@ -42,15 +66,15 @@ def configure():
         'session': {'orchestrator': {'module': 'loop-live'}, 'context': {
             'module': 'context-simple', 'source': MODULES + '/amplifier_module_context_simple',
         }},
-        'providers': [{
-            'module': 'provider-openai-chatgpt', 'source': MODULES + '/amplifier_module_provider_openai_chatgpt',
-            'config': {'auth_mode': 'chatgpt_codex', 'token_file_path': '/instance/backend/codex-oauth.json',
-                       'default_model': os.environ['AGENT_MODEL'], 'reasoning_effort': os.environ['AGENT_REASONING']},
-        }],
+        'providers': provider_profiles(settings),
         'tools': tools, 'agents': [],
     })
+    module_sources = {
+        'provider-' + name: MODULES + '/amplifier_module_provider_' + name.replace('-', '_')
+        for name in ('anthropic', 'openai', 'openai-chatgpt')
+    }
     save(BACKEND / 'agent.json', {'home': str(settings), 'appHome': str(BACKEND / 'acp'),
-                                  'bundle': str(bundle), 'runtimeImmutable': True})
+                                  'bundle': str(bundle), 'runtimeImmutable': True, 'moduleSources': module_sources})
     path = HOME / 'config.json'
     document = json.loads(path.read_text())
     document['config'].update(setup_complete=True, enabled=True, purpose='Agent in the private Matrix deployment', backend={
