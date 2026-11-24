@@ -47,6 +47,9 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue(doc['networks']['acp-coder']['internal'])
         self.assertNotIn('memory', services['engine-coder']['networks'])
         self.assertIn('memory', services['coder']['networks'])
+        self.assertIn('acp-coder', services['persona-workshop']['networks'])
+        self.assertNotIn('memory', services['persona-workshop']['networks'])
+        self.assertNotIn('ports', services['persona-workshop'])
         self.assertTrue(self.settings['context_url'].startswith('https://fixture.test:8444/browser/?connectURL='))
         for service in ('synapse', 'private-edge'):
             self.assertTrue(all(p.startswith('127.0.0.1:') for p in services[service]['ports']))
@@ -60,6 +63,9 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('/mnt/desktop', [v['source'] for v in services['engine']['volumes']])
         self.assertNotIn('ports', services['engine'])
         self.assertEqual(services['coder']['environment']['CONTEXT_INTELLIGENCE_URL'], config['context'])
+        managed = compose_remote(data, {**config, 'workshop_host': 'worker.fixture.ts.net'}, Path('/mnt/desktop'))
+        self.assertEqual(managed['services']['engine']['ports'], ['127.0.0.1:19444:19443'])
+        self.assertIn('worker.fixture.ts.net', managed['services']['engine']['environment']['AGENT_INSTANCE_CERTIFICATE_NAMES'])
 
     def test_atomic_registry_and_url_validation(self):
         with TemporaryDirectory() as work:

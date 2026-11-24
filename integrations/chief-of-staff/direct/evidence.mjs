@@ -127,10 +127,13 @@ export function reviewThreads(entries, room) {
     }));
 }
 
-export function reviewPrompt(threads) {
+export function reviewPrompt(threads, workshop = []) {
+  const managed = new Map(workshop.map(agent => [agent.key, agent]));
   const aliases = new Map();
   function alias(id) {
     if (!id) return null;
+    const agent = managed.get(id.match(/^@([^:]+):/u)?.[1]);
+    if (agent) return agent.key;
     if (!aliases.has(id)) aliases.set(id, `participant-${aliases.size + 1}`);
     return aliases.get(id);
   }
@@ -149,7 +152,7 @@ export function reviewPrompt(threads) {
     })),
   }));
   return [
-    'Review only the supplied routing and outcome metadata from Matrix Agents. Answer in Italian.',
+    'Use the Persona Workshop managed roster and the additional routing evidence from Context Intelligence. Answer in English.',
     'The window covers recent captured events and may omit older messages, keys or earlier turns.',
     'Request recipients come from explicit Matrix mentions. handoff_to appears only on a recorded agent handoff. A direct reply can answer an information request without a task outcome.',
     'A blocked or completed outcome is an explicit recorded declaration. No declaration in the window is insufficient to conclude that a task failed, succeeded or was abandoned.',
@@ -157,6 +160,10 @@ export function reviewPrompt(threads) {
     'Provide one narrow proposal with a measurable check if there is enough evidence. Use multiple threads for recurring claims. Include at least one exact sample ID and existing turn number in the sources array.',
     'Return JSON only in this format: {"kind":"observation","sources":[{"task_id":"sample-1","turns":[1]}],"facts":"...","proposal":"...","why":"...","verification":"..."}.',
     'If there is no justified proposal, return {"kind":"insufficient_evidence"}.',
+    ...(managed.size ? [
+      'Propose a coordination change when routing or procedure is the underlying issue. When the evidence supports a persona change, name one managed agent that participated in the cited turns using an optional agent_key field. Describe the specific communication or working-style change. Recommend a new agent only through the recurring capability-gap review.',
+      JSON.stringify({ managed_agents: workshop.map(({ key, revision, profile_active, available }) => ({ key, revision, profile_active, available })) }),
+    ] : []),
     JSON.stringify(samples),
   ].join('\n');
 }

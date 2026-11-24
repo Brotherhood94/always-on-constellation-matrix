@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+src=$(cd -- "$(dirname -- "$0")/.." && pwd)
+name="constellation-workshop-$$"
+engine="$name-engine"
+workshop="$name-workshop"
+cleanup() {
+  docker rm -f "$engine" "$workshop" >/dev/null 2>&1 || true
+  docker network rm "$name" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker network create --internal "$name" >/dev/null
+docker run -d --name "$engine" --network "$name" --network-alias engine \
+  --tmpfs /instance:rw,uid=991,gid=991,mode=0700 --tmpfs /exchange:rw,uid=991,gid=991,mode=0700 \
+  --tmpfs /workspace:rw,uid=991,gid=991,mode=0700 \
+  -e AGENT_NAME=Fixture -e AGENT_USERNAME=fixture -e AGENT_MODEL=gpt-6.2-sol -e AGENT_REASONING=low \
+  -e 'AGENT_INSTANCE_CERTIFICATE_NAMES=["engine"]' \
+  "${OFFICE_ENGINE_TEST_IMAGE:-constellation-office-engine:0.22.17}" >/dev/null
+docker run -d --name "$workshop" --network "$name" --tmpfs /data:rw,uid=991,gid=991,mode=0700 \
+  "${WORKSHOP_TEST_IMAGE:-constellation-persona-workshop:0.7.4}" >/dev/null
+for attempt in {1..40}; do
+  if docker exec "$engine" curl --cacert /exchange/ca.pem -fsS https://engine:19443/ >/dev/null 2>&1 &&
+    docker exec "$workshop" persona-workshop --home /data api GET /api/v1/status >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+PYTHONPATH="$src/deploy" python3 -B - "$engine" "$workshop" <<'PY'
+from functools import partial
+import json
+from subprocess import check_output
+import sys
+from persona_management import api, enroll, TARGETS
+
+engine, workshop = sys.argv[1:]
+request = partial(api, workshop)
+def credential():
+    output = check_output(['docker', 'exec', engine, 'agent-instance', '--home', '/instance', 'token', 'create',
+                           '--name', 'Persona Workshop smoke', '--scopes', 'observe,profiles', '--local'], text=True)
+    return {'token': json.loads(output)['token'],
+            'ca_pem': check_output(['docker', 'exec', engine, 'cat', '/exchange/ca.pem'], text=True)}
+def unexpected():
+    raise AssertionError('Tried to recreate credentials on a repeat sync')
+first = enroll(request, 'fixture', 'https://engine:19443', credential)
+second = enroll(request, 'fixture', 'https://engine:19443', unexpected, first['target']['agent_id'])
+assert first == second
+assert len(request('GET', TARGETS)['items']) == 1
+assert second['installation']['active'] is None
+print('The real Workshop enrolled a live Instance once and read its unchanged profile status.')
+PY

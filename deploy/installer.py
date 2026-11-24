@@ -155,6 +155,9 @@ def base_environment(settings, data):
               'TELEGRAM_MATRIX_NETWORK': settings['project'] + '_clients',
               'TELEGRAM_DATABASE_NETWORK': settings['project'] + '_database',
               'TELEGRAM_MEMORY_NETWORK': settings['project'] + '_memory',
+              'TELEGRAM_WORKSHOP_NETWORK': settings['project'] + '_workshop-targets',
+              'TELEGRAM_WORKSHOP_ENABLED': 'true' if settings['telegram'] else 'false',
+              'TELEGRAM_DATA': data / 'telegram',
               'TELEGRAM_PROJECT': settings['project'] + '-telegram',
               'TELEGRAM_DOT_STATE': data / 'state/dot/matrix',
               'TELEGRAM_CONTEXT_TOKEN': data / 'context/telegram-agent.token',
@@ -168,6 +171,8 @@ def base_environment(settings, data):
 
 
 def context_config(settings, data, registry):
+    if registry['agents'] or settings['telegram']:
+        directory(data / 'state/chief-of-staff/persona', uid=RUNTIME_UID)
     directory(data / 'context')
     directory(data / 'context/data', uid=RUNTIME_UID)
     directory(data / 'context/graph', uid=7474)
@@ -503,6 +508,7 @@ def install(data, args):
         prepare_images(settings, registry)
         up(data, 'monitor', 'private-edge', *(['dot'] if settings['dot'] else []))
         up(data, *(f'engine-{key}' for key, entry in registry['agents'].items() if entry['placement'] == 'local'))
+        sync_workshop(settings, data, registry)
         publish_inventory(settings, data, registry)
         configure_network(settings, data)
         if settings['systemd']:
@@ -527,6 +533,7 @@ def agent_add(data, args):
             prepare_images(settings, registry)
             up(data, 'engine-' + key)
         save(data / 'agents.json', registry)
+        sync_workshop(settings, data, registry)
         publish_inventory(settings, data, registry)
     print('Provisioned ' + key + '. Complete its provider sign-in to activate routing.')
 
@@ -552,14 +559,15 @@ def agent_activate(data, key):
             compose(data, '--profile', 'agents', 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/root/agent.mjs', 'probe')
         else:
             compose(data, '--profile', 'agents', 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/probe.mjs')
-        up(data, key, *(['persona-workshop'] if key == 'chief-of-staff' else []))
+        sync_workshop(settings, data, registry)
+        up(data, key)
         entry['active'] = True
         save(data / 'agents.json', registry)
         publish_inventory(settings, data, registry)
 
 
 def telegram(data, args, owner_password_file=None):
-    settings, _ = open_existing(data)
+    settings, registry = open_existing(data)
     if not settings['telegram']:
         raise ValueError('Select Telegram in the installer first')
     env = {**os.environ, 'TELEGRAM_STACK_DIR': str(data), 'PYTHONPATH': str(SOURCE / 'deploy/matrix')}
@@ -572,17 +580,26 @@ def telegram(data, args, owner_password_file=None):
             link_child(rooms['space'], control['space'], settings['server_name'], owner['access_token'])
         finally:
             request('POST', CLIENT + '/logout', {}, owner['access_token'])
+        sync_workshop(settings, data, registry)
     if args[0] == 'dot-control' and settings['dot']:
         compose(data, 'restart', 'dot')
 
 
+def sync_workshop(settings, data, registry, **options):
+    from persona_management import synchronize
+    return synchronize(data, registry, telegram=settings['telegram'], **options)
+
+
 def persona_draft(data, role, observation):
     with operator_lock(data):
-        _, registry = open_existing(data)
+        settings, registry = open_existing(data)
         if not registry['agents'].get('chief-of-staff', {}).get('active'):
             raise ValueError('Activate Chief of Staff first')
         if not KEY.fullmatch(role) or not re.fullmatch(r'cos-(?:(?:direct|gap)-)?[a-f0-9]{64}', observation):
             raise ValueError('Pass an agent key and an archived observation ID')
+        managed = (sync_workshop(settings, data, registry) or {}).get(role)
+        if not observation.startswith('cos-gap-') and not managed:
+            raise ValueError('Connect the agent in Persona Workshop before drafting a change')
         destination = data / 'state/chief-of-staff/persona-exports'
         directory(destination)
         export = destination / (role + '-' + observation)
@@ -600,7 +617,7 @@ def persona_draft(data, role, observation):
             if not container:
                 raise ValueError('Persona Workshop is unavailable')
             run(sys.executable, str(SOURCE / 'integrations/chief-of-staff/persona/compile-persona.py'),
-                container, role, str(work), str(export))
+                container, role, str(work), str(export), json.dumps(managed))
 
 
 def service_units(settings, data, broker=False):
@@ -633,6 +650,7 @@ def main():
     attach = remote.add_parser('attach')
     attach.add_argument('--enrollment', type=Path, required=True)
     attach.add_argument('--desktop-mount', type=Path, required=True)
+    attach.add_argument('--workshop-host', help='Private HTTPS name of this remote host')
     confirm = remote.add_parser('confirm')
     confirm.add_argument('key')
     confirm.add_argument('--receipt', type=Path, required=True)
@@ -642,6 +660,12 @@ def main():
     commands.add_parser('telegram').add_argument('arguments', nargs=argparse.REMAINDER)
     commands.add_parser('dot-connect').add_argument('tunnel_id')
     commands.add_parser('chief-review')
+    commands.add_parser('persona-sync')
+    connect = commands.add_parser('persona-connect')
+    connect.add_argument('agent')
+    connect.add_argument('--url', required=True)
+    connect.add_argument('--token-file', type=Path, required=True)
+    connect.add_argument('--ca-file', type=Path)
     persona = commands.add_parser('persona-draft')
     persona.add_argument('role')
     persona.add_argument('observation')
@@ -671,16 +695,37 @@ def main():
             backup(data, args.command)
     elif args.command == 'telegram':
         telegram(data, args.arguments)
-    elif args.command == 'chief-review':
-        compose(data, '--profile', 'agents', 'exec', '-T', 'chief-of-staff', 'node',
-                '/app/chief-of-staff/direct/run-review.mjs')
+    elif args.command in {'persona-sync', 'persona-connect', 'chief-review'}:
+        with operator_lock(data):
+            settings, registry = open_existing(data)
+            if args.command == 'persona-connect':
+                from persona_management import remember_remote
+                path = data / 'workshop-management' / f'{args.agent}.json'
+                previous = path.read_text() if args.agent in registry['agents'] and path.exists() else None
+                remember_remote(data, registry, args.agent, args.url, args.token_file, args.ca_file)
+                try:
+                    sync_workshop(settings, data, registry, reconnect=args.agent)
+                except Exception:
+                    if previous is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        save(path, previous)
+                    raise
+            if args.command == 'persona-sync':
+                compose_config(settings, data, registry)
+                up(data, *(f'engine-{key}' for key, entry in registry['agents'].items() if entry['placement'] == 'local'))
+            if args.command != 'persona-connect':
+                sync_workshop(settings, data, registry)
+        if args.command == 'chief-review':
+            compose(data, '--profile', 'agents', 'exec', '-T', 'chief-of-staff', 'node',
+                    '/app/chief-of-staff/direct/run-review.mjs')
     elif args.command == 'persona-draft':
         persona_draft(data, args.role, args.observation)
     elif args.command == 'dot-connect':
         from dot import connect
         settings, _ = open_existing(data)
         connect(settings, data, args.tunnel_id)
-    else:
+    elif args.command == 'status':
         settings, registry = open_existing(data)
         publish_inventory(settings, data, registry)
         compose(data, '--profile', 'agents', 'ps')

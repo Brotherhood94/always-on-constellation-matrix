@@ -9,22 +9,15 @@ from tempfile import TemporaryDirectory
 from uuid import UUID
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'deploy'))
+from persona_management import api
+
+
 SECTIONS = {
     "communication": {"voice", "phrasing", "structure", "tone", "context", "editing"},
     "working": {"framing", "decisions", "execution", "collaboration", "feedback", "tradeoffs"},
 }
 UNSAFE_REFERENCE = re.compile(r"https?:|mxc:|file:|[a-f0-9]{24,}|[@#][^\s]+:[^\s]+", re.I)
-
-
-def api(container, method, path, payload=None):
-    args = ["docker", "exec", "-i", container, "persona-workshop", "--home", "/data", "api", method, path]
-    if payload is not None:
-        args += ["--body-file", "/dev/stdin"]
-    proc = subprocess.run(
-        args, input=json.dumps(payload) if payload is not None else "", text=True,
-        capture_output=True, timeout=30, check=True,
-    )
-    return json.loads(proc.stdout)
 
 
 def read_guidance(path):
@@ -60,7 +53,7 @@ def write_json(path, data):
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
 
-def compile_draft(container, role, run, export):
+def compile_draft(container, role, run, export, managed=None):
     if (export / "profile.persona.json").is_file():
         print(f"Persona Workshop draft already exported at {export}")
         return
@@ -119,6 +112,7 @@ def compile_draft(container, role, run, export):
         write_json(staged / "draft-origin.json", {
             "role": role, "observation_id": observation, "sources": evidence.get("sources", []),
             "workshop_project": project["id"], "workshop_revision": result["id"], "status": "awaiting_review",
+            **({"workshop_target": managed["target"], "target_profile_revision": managed["revision"]} if managed else {}),
         })
         staged.rename(export)
     print(f"Persona Workshop draft ready for review at {export}")
@@ -127,7 +121,8 @@ def compile_draft(container, role, run, export):
 if __name__ == "__main__":
     os.umask(0o077)
     try:
-        compile_draft(sys.argv[1], sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]))
+        compile_draft(sys.argv[1], sys.argv[2], Path(sys.argv[3]), Path(sys.argv[4]),
+                      json.loads(sys.argv[5]) if len(sys.argv) > 5 else None)
     except subprocess.CalledProcessError as error:
         sys.exit(error.stderr.strip() or "Persona Workshop API request failed")
     except (ValueError, OSError) as error:

@@ -49,7 +49,7 @@ services:
     volumes:
       - ${TELEGRAM_DATA:?}/instance:/instance
       - ${TELEGRAM_DATA:?}/exchange:/exchange
-    networks: [engine, provider]
+    networks: [engine, provider, workshop]
     healthcheck:
       test: [CMD, curl, --fail, --silent, --cacert, /exchange/ca.pem, 'https://telegram-engine:19443/']
       interval: 5s
@@ -69,3 +69,6 @@ networks:
   memory:
     name: ${TELEGRAM_MEMORY_NETWORK:-matrix-telegram-context}
     external: ${TELEGRAM_CONTEXT_ENABLED:-false}
+  workshop:
+    name: ${TELEGRAM_WORKSHOP_NETWORK:-matrix-telegram-workshop}
+    external: ${TELEGRAM_WORKSHOP_ENABLED:-false}

@@ -55,10 +55,19 @@ Transfer the enrollment file privately. On the worker, install Docker, Tailscale
 
 ```sh
 sudo ./constellation --data-dir /srv/constellation-worker remote attach \
-  --enrollment /root/worker-enrollment.json --desktop-mount /mnt/constellation-desktop
+  --enrollment /root/worker-enrollment.json --desktop-mount /mnt/constellation-desktop \
+  --workshop-host '<remote-worker-tailnet-dns-name>'
 ```
 
-Copy the resulting `receipt.json` to the coordinator and run `sudo ./constellation remote confirm remote-worker --receipt /path/to/receipt.json`. Verify a real Office handoff and a file round trip in both directions. The coordinator shows the remote worker as **Registered** after confirmation. Keep tailnet access scoped to the selected operator devices and worker hosts.
+Transfer the resulting `workshop-token`, `workshop-ca.pem`, and `receipt.json` to the coordinator through a private channel. Enroll the live Instance in Workshop with the reported HTTPS management origin.
+
+```sh
+sudo ./constellation persona-connect remote-worker \
+  --url 'https://<remote-worker-tailnet-dns-name>:19444' \
+  --token-file /root/workshop-token --ca-file /root/workshop-ca.pem
+```
+
+Then run `sudo ./constellation remote confirm remote-worker --receipt /path/to/receipt.json`. Verify a real Office handoff and a file round trip in both directions. The coordinator shows the remote worker as **Registered** after confirmation. Keep tailnet access scoped to the selected operator devices and worker hosts.
 
 ## Back up and recover
 

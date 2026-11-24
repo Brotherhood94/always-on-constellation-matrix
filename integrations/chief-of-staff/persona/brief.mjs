@@ -31,6 +31,7 @@ async function prompt(id, role) {
   const note = JSON.parse(await readFile(evidenceFile, 'utf8'));
   if (note.observation_id !== id) throw new Error('Unexpected evidence selection');
   const newRole = id.startsWith('cos-gap-');
+  if (note.agent_key && note.agent_key !== role) throw new Error('Use the managed agent cited in the observation');
   if (newRole && note.proposal_type !== 'new') throw new Error('Choose a capability review that recommends a new role');
   const safe = {};
   for (const field of fields) {

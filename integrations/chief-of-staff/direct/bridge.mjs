@@ -7,8 +7,9 @@ import { mentionMessage } from '../../../agents/connector/matrix-format.mjs';
 import { openRoomClient, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
 import { observationMessage, parseObservation, validateRoomId } from '../observation.mjs';
 import { contextRequest, interaction, writeInteraction } from './evidence.mjs';
-import { reportId } from './review.mjs';
+import { isTeamReview, reportId, workshopObservation } from './review.mjs';
 import { createCatalog, gapKey } from '../../../agents/connector/agent-catalog.mjs';
+import { reviewTeam } from './run-review.mjs';
 import { capabilityReview, confirmedGap } from './capability-review.mjs';
 
 const { MATRIX_URL: url, MATRIX_SERVER_NAME: server, MATRIX_OWNER: owner } = process.env;
@@ -32,6 +33,9 @@ db.exec(`
     event_id TEXT PRIMARY KEY, stamp INTEGER NOT NULL, raw TEXT, evidence TEXT, retry INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS pending_retry ON pending(retry, stamp);
+  CREATE TABLE IF NOT EXISTS review_requests (
+    event TEXT PRIMARY KEY, raw TEXT, response TEXT, sent INTEGER NOT NULL DEFAULT 0, retry INTEGER NOT NULL DEFAULT 0
+  );
   CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0);
 `);
 db.prepare("INSERT OR IGNORE INTO settings VALUES ('start', ?)").run(String(Date.now()));
@@ -125,6 +129,13 @@ async function sync() {
         queue.run(event.event_id, event.origin_server_ts, JSON.stringify(event));
       }
     }
+    const addReview = db.prepare('INSERT OR IGNORE INTO review_requests (event,raw) VALUES (?,?)');
+    for (const event of joined[destination]?.timeline?.events ?? []) {
+      if (event.type === 'm.room.encrypted' && event.sender === owner && event.event_id &&
+          event.origin_server_ts >= start && !event.unsigned?.redacted_because) {
+        addReview.run(event.event_id, JSON.stringify(event));
+      }
+    }
     db.prepare("INSERT OR REPLACE INTO settings VALUES ('since', ?)").run(result.next_batch);
     db.exec('COMMIT');
   } catch (error) {
@@ -169,6 +180,38 @@ async function drainEvidence() {
   }
 }
 
+async function drainReviewRequest() {
+  const row = db.prepare('SELECT * FROM review_requests WHERE sent=0 AND retry <= ? ORDER BY rowid LIMIT 1').get(Date.now());
+  if (!row) return;
+  await checkDestination();
+  let response = row.response;
+  const finish = db.prepare('UPDATE review_requests SET sent=1,raw=NULL WHERE event=?');
+  if (!response) {
+    let event;
+    try {
+      event = (await client.crypto.decryptRoomEvent(
+        new matrix.EncryptedRoomEvent(JSON.parse(row.raw)), destination)).raw;
+    } catch (error) {
+      if (error.code !== 'GenericFailure') throw error;
+      db.prepare('UPDATE review_requests SET retry=? WHERE event=?').run(Date.now() + 30000, row.event);
+      return;
+    }
+    if (!isTeamReview(event)) {
+      finish.run(row.event);
+      return;
+    }
+    try {
+      response = await reviewTeam();
+    } catch {
+      response = 'Chief of Staff could not complete the review. Send “review team” again after checking Workshop and Context Intelligence.';
+    }
+    db.prepare('UPDATE review_requests SET response=?,raw=NULL WHERE event=?').run(response, row.event);
+  }
+  await checkDestination();
+  await sendEncrypted(client, destination, 'cos-review-' + reportId(row.event), mentionMessage(response));
+  finish.run(row.event);
+}
+
 async function drainReports() {
   const outbox = '/direct/outbox';
   const names = (await readdir(outbox)).filter(name => /^[0-9a-f]{64}\.json$/.test(name)).sort();
@@ -177,12 +220,17 @@ async function drainReports() {
     const job = JSON.parse(await readFile(path, 'utf8'));
     const id = reportId(job.threads);
     if (job.room !== source || name !== id + '.json') throw new Error('Unexpected review file');
-    const note = parseObservation(job.response, job.threads);
+    const note = job.workshop ? workshopObservation(job.response, job.threads, job.workshop) :
+      parseObservation(job.response, job.threads);
     if (!note) throw new Error('The report has no observation');
     let receipt = readReport.get(id);
     if (!receipt) {
       await checkDestination();
       const content = observationMessage(note);
+      const target = note.agent_key ? `Persona draft for ${note.agent_key}. ` : '';
+      const identity = `${target}Observation ID cos-direct-${id}`;
+      content.plain += '\n\n' + identity;
+      content.rich += '\n\n' + identity;
       const eventId = await sendEncrypted(client, destination, 'cos-direct-' + id,
         mentionMessage(content.plain, undefined, content.rich));
       writeReport.run(id, eventId);
@@ -207,11 +255,14 @@ async function drainReports() {
   }
 }
 
+let review;
 for (;;) {
   try {
     await catalog.refresh();
     await sync();
     await drainEvidence();
+    review ??= drainReviewRequest().catch(() => console.warn('Chief of Staff will retry the private review request.'))
+      .finally(() => { review = undefined; });
     if (catalog.fresh()) capabilityGaps.plan(catalog.current());
     for (const job of capabilityGaps.pending()) {
       const { content, observation } = JSON.parse(job.data);

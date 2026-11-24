@@ -19,7 +19,7 @@ In Element, sign in with your new Matrix account and open **Agents → Office**.
 
 - **Dashboard.** Open **Agents → VPS Alerts → Pinned messages → Open dashboard**. The dashboard shows VPS resource history, agent health, and integration status. **Open Context Intelligence** opens the authenticated Neo4j Browser. You can also find that link in the VPS Alerts pins.
 - **Extend the team.** Add agents with `sudo ./constellation agent add --profile /path/to/agent.json`. Each general Office worker has a private workspace and read/write access to the [shared desktop](desktop/README.md). [Profile and remote-worker setup](docs/runbook.md)
-- **Review work and maintenance.** Chief of Staff observations and Root Operations approvals go to private one-to-one chats. [Chief of Staff](docs/chief-of-staff.md) · [Root Operations](integrations/root/README.md)
+- **Review work and maintenance.** Use the Chief of Staff DM for team reviews and proposed hires or profile edits. Root Operations approvals go to its own private chat. [Chief of Staff](docs/chief-of-staff.md) · [Root Operations](integrations/root/README.md)
 - **Connect integrations.** Dot can publish Office tasks and fetch their outcomes through the private tunnel. Telegram Control can prepare a draft or report updates from an approved portal. [Dot and tunnel setup](docs/dot.md) · [Telegram](docs/telegram.md)
 - **Verify and recover.** Use `sudo ./constellation status`, `backup`, and `restore-check`. Read the [acceptance checks](docs/acceptance.md) and the [communication policies](policy/README.md) before replacing an existing deployment.
 

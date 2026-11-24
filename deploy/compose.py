@@ -121,11 +121,6 @@ def definition(settings, data, registry, secrets):
                 volume(data / 'context' / f'{key}.token', '/writer-token', True),
                 volume(data / 'context/observation-reader.token', '/reader-token', True),
             ]
-            services['persona-workshop'] = {
-                **restricted, 'image': 'constellation-persona-workshop:0.7.4',
-                'build': str(SOURCE / 'integrations/chief-of-staff/persona'), 'network_mode': 'none',
-                'profiles': ['agents'], 'volumes': [volume(data / 'state/chief-of-staff/persona', '/data')],
-            }
         elif key == 'root':
             worker.update(user='992:992', command=['node', '/app/root/agent.mjs'],
                           healthcheck=health('test', '-s', '/state/synced'))
@@ -141,6 +136,17 @@ def definition(settings, data, registry, secrets):
             worker.update(healthcheck=health('test', '-s', '/tmp/matrix-agent-ready'))
             worker['volumes'] += workspace
         services[key] = worker
+    if registry['agents'] or settings['telegram']:
+        network['workshop-targets'] = {
+            'internal': not any(entry['placement'] == 'remote' for entry in registry['agents'].values())
+        }
+        services['persona-workshop'] = {
+            **restricted, 'image': 'constellation-persona-workshop:0.7.4',
+            'build': str(SOURCE / 'integrations/chief-of-staff/persona'),
+            'networks': ['workshop-targets', *(name for name in network if name.startswith('acp-'))],
+            'profiles': ['agents'], 'volumes': [volume(data / 'state/chief-of-staff/persona', '/data')],
+            'healthcheck': health('persona-workshop', '--home', '/data', 'api', 'GET', '/api/v1/status'),
+        }
     return {'name': settings['project'], 'services': services, 'networks': network,
             'volumes': {}}
 

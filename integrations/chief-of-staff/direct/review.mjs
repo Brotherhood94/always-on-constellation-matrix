@@ -5,9 +5,29 @@ import { pathToFileURL } from 'node:url';
 import { digest, parseObservation, validateRoomId } from '../observation.mjs';
 import { readInteractions, reviewPrompt, reviewThreads } from './evidence.mjs';
 
+export function isTeamReview(event) {
+  return event?.type === 'm.room.message' && event.content?.msgtype === 'm.text' &&
+    !event.content['m.relates_to'] && typeof event.content.body === 'string' &&
+    event.content.body.trim().toLowerCase() === 'review team';
+}
+
 export function reportId(threads) {
   return digest(threads);
 }
+
+export function workshopObservation(raw, threads, workshop) {
+  const note = parseObservation(raw, threads);
+  if (!note) return null;
+  const clean = raw.trim().replace(/^\x60\x60\x60(?:json)?\s*([\s\S]*?)\s*\x60\x60\x60$/i, '$1');
+  const key = JSON.parse(clean).agent_key;
+  if (key === undefined) return note;
+  const target = workshop.find(agent => agent.key === key);
+  if (!target || !note.subjects.some(id => id.startsWith(`@${key}:`))) {
+    throw new Error('A persona proposal must identify a managed agent in the cited evidence');
+  }
+  return { ...note, agent_key: key, workshop_target: target.target, workshop_revision: target.revision };
+}
+
 
 async function stage(path, value) {
   const temporary = path + '.' + randomUUID() + '.tmp';

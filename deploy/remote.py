@@ -1,5 +1,6 @@
 """Attach a separate-host Constellation worker to an existing Office."""
 from hashlib import sha256
+import json
 import os
 from pathlib import Path
 import re
@@ -7,7 +8,7 @@ import stat
 
 from compose import CONNECTOR, ENGINE, health, volume
 from installer import (
-    KEY, RUNTIME_UID, SOURCE, configure_network, directory, load, open_existing, operator_lock, run,
+    KEY, RUNTIME_UID, SOURCE, command_output, configure_network, directory, load, open_existing, operator_lock, run,
     prepare_images, compose, up, publish_inventory, save, validated_url,
 )
 
@@ -39,10 +40,12 @@ def compose_remote(data, config, desktop):
     mounts = [volume(runtime / 'work', '/workspace'), volume(desktop, '/workspace/desktop')]
     metadata = {'AGENT_USERNAME': key, 'AGENT_NAME': account['name'], 'AGENT_MODEL': account['model'],
                 'AGENT_REASONING': account['effort']}
+    management = config.get('workshop_host')
     return {'name': 'constellation-remote-' + key, 'services': {
         'engine': {**worker, 'image': ENGINE, 'networks': ['acp', 'outbound'],
                    'environment': {**metadata, 'AGENT_WORKSPACE_TOOLS': 'true',
-                                   'AGENT_INSTANCE_CERTIFICATE_NAMES': '["engine"]'},
+                                   'AGENT_INSTANCE_CERTIFICATE_NAMES': json.dumps(['engine', management] if management else ['engine'])},
+                   **({'ports': ['127.0.0.1:19444:19443']} if management else {}),
                    'volumes': [*mounts, volume(runtime / 'instance', '/instance'), volume(runtime / 'exchange', '/exchange')],
                    'healthcheck': health('curl', '-fsS', '--cacert', '/exchange/ca.pem', 'https://engine:19443/')},
         key: {**worker, 'image': CONNECTOR, 'networks': ['acp', 'outbound'],
@@ -91,6 +94,28 @@ def share_desktop(settings, data, key_file):
     print((config / 'host-key.pub').read_text().strip())
 
 
+def remote_workshop(data, host):
+    """Publish the Instance's own TLS endpoint privately and generate its profile credential."""
+    secure = json.loads(command_output('tailscale', 'status', '--json'))
+    if secure.get('Self', {}).get('DNSName', '').rstrip('.') != host:
+        raise ValueError('Use this remote worker’s Tailscale DNS name')
+
+    def engine(*arguments):
+        return compose(data, 'exec', '-T', 'engine', *arguments, capture_output=True, text=True).stdout
+
+    # Preserve the Instance TLS certificate. Workshop will pin its root CA and
+    # verify the hostname before it sends this dedicated credential.
+    run('tailscale', 'serve', '--bg', '--tcp=19444', 'tcp://127.0.0.1:19444')
+    token = data / 'workshop-token'
+    if not token.exists():
+        credential = json.loads(engine('agent-instance', '--home', '/instance', 'token', 'create',
+                                       '--name', 'Persona Workshop', '--scopes', 'observe,profiles',
+                                       '--expires-in', '25920000', '--local'))
+        save(token, credential['token'] + '\n')
+    save(data / 'workshop-ca.pem', engine('cat', '/exchange/ca.pem'))
+    print(f'Workshop management origin https://{host}:19444. Transfer {token} and {data / "workshop-ca.pem"} privately.')
+
+
 def execute(data, args):
     if args.action == 'desktop':
         with operator_lock(data):
@@ -106,6 +131,10 @@ def execute(data, args):
         key = config['key']
         if not KEY.fullmatch(key):
             raise ValueError('Invalid agent ID')
+        if args.workshop_host:
+            if not re.fullmatch(r'[a-z0-9][a-z0-9.-]+\.ts\.net', args.workshop_host):
+                raise ValueError('Use the remote worker’s Tailscale DNS name')
+            config['workshop_host'] = args.workshop_host
         for field in ('matrix_url', 'catalog', 'context'):
             validated_url(config[field])
         directory(data, 0o711)
@@ -123,6 +152,8 @@ def execute(data, args):
             compose(data, 'exec', 'engine', '/opt/amplifier-acp/.venv/bin/python', '/opt/telegram/sign_in.py')
             compose(data, 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/probe.mjs')
             up(data, key)
+            if args.workshop_host:
+                remote_workshop(data, args.workshop_host)
             save(data / 'receipt.json', {'agent': key, 'device': fingerprint(config)})
         print(f'Worker connected. Copy {data / "receipt.json"} to the coordinator for final registration.')
         return
@@ -155,6 +186,10 @@ def execute(data, args):
             receipt = private_json(args.receipt)
             if receipt != {'agent': args.key, 'device': fingerprint({'matrix_token': matrix_token})}:
                 raise ValueError('The health receipt does not match the enrolled Matrix device')
+            from installer import sync_workshop
+            managed = sync_workshop(settings, data, registry) or {}
+            if args.key not in managed or not managed[args.key]['available']:
+                raise ValueError('Connect this remote Instance in Persona Workshop before confirming it')
             entry['active'] = True
         save(data / 'agents.json', registry)
         publish_inventory(settings, data, registry)
