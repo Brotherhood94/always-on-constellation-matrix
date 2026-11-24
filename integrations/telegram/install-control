@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+[[ $EUID == 0 ]] || { echo 'Run this update from the VPS root console.' >&2; exit 1; }
+src=$(cd -- "$(dirname -- "$0")" && pwd)
+telegram=/opt/matrix-telegram
+agents=/opt/matrix-agents
+compose=(docker compose --project-directory "$agents" --profile dot)
+override="$agents/compose.override.yaml"
+runtime="$telegram/dot-runtime"
+agent_state=/srv/agents/dot/state
+
+exec 9>/run/lock/matrix-telegram-control-install.lock
+flock -n 9 || { echo 'Another Telegram Control update is running.' >&2; exit 1; }
+[[ -f "$telegram/compose.yaml" && -f "$agents/compose.yaml" && -f "$agent_state/matrix-token" ]]
+dot=$("${compose[@]}" ps --status running --quiet dot)
+[[ -n $dot ]] || { echo 'Start the existing Dot connector before installing Telegram Control.' >&2; exit 1; }
+
+backup=$(mktemp -d /opt/matrix-telegram-control-backup.XXXXXXXX)
+files=(Dockerfile compose.yaml acp.mjs control.mjs matrix.mjs policy.mjs service.mjs telegram telegram_provision.py quarantine.py)
+cat >"$backup/new-override.yaml" <<YAML
+services:
+  dot:
+    volumes:
+      - $runtime/dot-bridge.mjs:/app/dot-bridge.mjs:ro
+      - $runtime/dot-telegram.mjs:/app/dot-telegram.mjs:ro
+YAML
+had_override=false
+if [[ -e $override ]]; then
+  cmp -s "$override" "$backup/new-override.yaml" || {
+    echo 'The Matrix agents already use a Compose override. Merge the two Dot mounts into that file first.' >&2
+    exit 1
+  }
+  had_override=true
+fi
+
+docker cp "$dot:/app/dot-bridge.mjs" "$backup/dot-bridge-original.mjs"
+python3 -B "$src/patch-dot.py" "$backup/dot-bridge-original.mjs" "$backup/dot-bridge.mjs"
+install -d -m 0755 "$runtime"
+for file in "${files[@]}"; do
+  if [[ -f "$telegram/$file" ]]; then cp -p "$telegram/$file" "$backup/$file"; fi
+done
+if [[ $had_override == true ]]; then cp -a "$runtime" "$backup/runtime"; fi
+already_member=false
+[[ ! -e "$agent_state/telegram-control.json" ]] || already_member=true
+
+rollback() {
+  local status=$?
+  if (( status == 0 )); then return; fi
+  trap - EXIT
+  set +e
+  echo "Telegram Control did not finish installing. Restoring the previous service definitions from $backup." >&2
+  if [[ $already_member == false && -f "$agent_state/telegram-control.json" ]]; then
+    "$telegram/telegram" dot-control leave
+  fi
+  for file in "${files[@]}"; do
+    if [[ -f "$backup/$file" ]]; then
+      cp -p "$backup/$file" "$telegram/$file"
+    else
+      rm -f -- "$telegram/$file"
+    fi
+  done
+  if [[ $had_override == false ]]; then
+    rm -f -- "$override"
+  elif [[ -d "$backup/runtime" ]]; then
+    cp -a "$backup/runtime/." "$runtime/"
+  fi
+  "$telegram/telegram" start-agent
+  "${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 70 dot
+  exit "$status"
+}
+trap rollback EXIT
+
+for file in "${files[@]}"; do
+  mode=0644
+  if [[ $file == telegram ]]; then mode=0755; fi
+  install -m "$mode" "$src/$file" "$telegram/$file"
+done
+install -m 0644 "$backup/dot-bridge.mjs" "$runtime/dot-bridge.mjs"
+install -m 0644 "$src/dot-telegram.mjs" "$runtime/dot-telegram.mjs"
+install -m 0644 "$backup/new-override.yaml" "$override"
+"${compose[@]}" config --quiet
+"$telegram/telegram" dot-control configure
+"$telegram/telegram" upgrade-connector
+"${compose[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 70 dot
+"$telegram/telegram" dot-control join
+"$telegram/telegram" report
+trap - EXIT
+echo "Telegram Control is ready for Dot. Rollback files are at $backup."

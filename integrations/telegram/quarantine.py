@@ -21,6 +21,8 @@ if database.exists():
         session.execute("UPDATE work SET state='interrupted' WHERE state IN ('queued','running')")
         session.execute("UPDATE draft SET state='cancelled' WHERE state IN ('awaiting_approval','ready')")
         session.execute("UPDATE draft SET state='unknown' WHERE state IN ('publishing','matrix_accepted')")
+        if session.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='control_request'").fetchone():
+            session.execute("UPDATE control_request SET status='cancelled', payload=NULL, result=NULL WHERE status IN ('queued','ready')")
         assert session.execute('SELECT count(*) FROM binding WHERE active=1').fetchone() == (0,)
         assert session.execute("SELECT value FROM settings WHERE key='paused'").fetchone() == ('true',)
     for filename in ('matrix-token', 'engine-token', 'backend-verified'):

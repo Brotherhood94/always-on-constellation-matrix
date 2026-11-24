@@ -5,13 +5,15 @@ import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { TelegramStore, controlCommand, digest, pollStart, pollEnd, reviewAnswer, validateBinding } from './policy.mjs';
 import { bridgeAudit, matrixConnection, statusEvidence } from './matrix.mjs';
-import { draftWithInstance } from './acp.mjs';
+import { draftWithInstance, summarizeWithInstance } from './acp.mjs';
+import { addressedRequest, controlThread, historyRange, isDirect, matrixLink, resolveDestination, updateReply } from './control.mjs';
 
 const directory = '/state';
 const configFile = join(directory, 'config.json');
 const settings = JSON.parse(await readFile(configFile, 'utf8'));
 const owner = `@${settings.owner.split(':')[0].slice(1)}:${settings.domain}`;
 if (owner !== settings.owner || settings.agent !== `@telegram-agent:${settings.domain}` ||
+    (settings.dot !== undefined && (settings.dot !== `@dot:${settings.domain}` || settings.dot === owner)) ||
     settings.bridgeBot !== `@telegrambot:${settings.domain}` || settings.matrixUrl !== 'http://synapse:8008') {
   throw new Error('Invalid local Matrix identities.');
 }
@@ -141,9 +143,14 @@ async function run() {
       return;
     }
     if (room === settings.controlRoom) {
+      if (now - event.origin_server_ts > catchup || now + 60_000 < event.origin_server_ts) return;
       const command = controlCommand({ room, sender: event.sender, type: event.type, content: event.content, encrypted }, settings);
-      if (!command || now - event.origin_server_ts > catchup || now + 60_000 < event.origin_server_ts) return;
-      if (await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
+      if (command) {
+        if (await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
+      } else {
+        const request = addressedRequest(event, settings);
+        if (request && !pausedFile() && await matrix.verifyControl({ requireDot: true })) store.queueControl(event.event_id, request, now);
+      }
       return;
     }
     if (event.type !== 'm.room.message' || now - event.origin_server_ts > catchup || event.origin_server_ts < binding.activated) return;
@@ -211,20 +218,145 @@ async function run() {
     }
   }
 
+  async function processControl(request) {
+    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true }))) return;
+    const input = JSON.parse(request.payload);
+    const destinations = await Promise.all(store.bindings().filter(binding => binding.active).map(async binding => {
+      const state = await matrix.liveState(binding.room).catch(error => {
+        if (error.status !== 403 && error.status !== 404) throw error;
+      });
+      return { binding, state, name: state?.name || binding.id };
+    }));
+    const available = destinations.filter(({ state }) => state);
+    const named = resolveDestination(input, available);
+    const context = input.thread && store.controlContext(input.thread);
+    const result = (body, sources = [], binding) => store.controlResult(request, JSON.stringify({ body, sources }), binding);
+    let selected = named;
+    if (context) {
+      if (named && named.binding.id !== context.binding) {
+        return result('This thread is already linked to another chat. Start a new request for the other chat.');
+      }
+      selected = available.find(({ binding }) => binding.id === context.binding &&
+        binding.generation === context.generation && binding.revision === context.revision);
+      if (!selected) return result('The chat linked to this thread has changed. Start a new request with the chat name.');
+    }
+    if (!selected) {
+      const choices = available.map(({ binding, name }) =>
+        `${name} (${isDirect(binding) ? 'private chat' : 'group'})`).join(', ');
+      return result(`Specify one connected chat by name. Include “privato” or “private chat” for a direct chat.${choices ? '\nAvailable: ' + choices : ''}`);
+    }
+    const { binding, state, name } = selected;
+    const target = JSON.parse(binding.target);
+    if (await liveBinding(binding.room, target) !== target.audience) {
+      return result('The portal or its membership changed. Verify the binding before requesting another update or draft.');
+    }
+    if (input.action === 'compose') {
+      const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
+      if (pausedFile() || !(await matrix.verifyControl({ requireDot: true }))) return;
+      if (!store.prepareControlDraft(request, binding, recipient, input.text, input.source, Date.now())) {
+        result('The chat changed, cannot send from this binding, or the reply does not reference a received message in this chat.');
+      }
+      return;
+    }
+
+    const range = historyRange(input.question, request.requested);
+    const history = await matrix.recentMessages(binding.room, range);
+    const admitted = (await Promise.all(history.events.map(async event => {
+      if (event.sender === settings.owner || event.sender === settings.agent) return { ...event, author: 'owner' };
+      const source = await audit.source(binding.room, target, event, [0]);
+      if (source) return { ...event, author: source.author };
+    }))).filter(Boolean).reverse();
+    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true })) ||
+        await liveBinding(binding.room, target) !== target.audience) return;
+    if (input.action === 'reply') {
+      const latest = admitted.at(-1);
+      if (latest?.author !== 'remote') {
+        return result('There is no latest verified incoming text message to reply to in this chat.', [], binding);
+      }
+      const previous = store.controlDraft(input.thread ?? request.event, binding.id, latest.event_id);
+      if (previous && (previous.state !== 'awaiting_approval' || store.current(previous, Date.now()))) {
+        const state = previous.state === 'awaiting_approval' ? 'A draft for this message is already waiting for your approval.'
+          : 'A reply for this message has already been approved in this thread. Check its status before retrying.';
+        const links = previous.review_event ? [{ label: 'Open the draft review', url: matrixLink(settings.controlRoom, previous.review_event) }] : [];
+        return result(state, links, binding);
+      }
+      const contextMessages = admitted.slice(-8).map(({ author, body }) => ({
+        author, body: body.replace(/^(?:>.*\n)+\n/u, '').slice(0, 1000),
+      }));
+      const text = await draftWithInstance(settings.engine, null, contextMessages, () => {}, input.question);
+      if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true })) ||
+          await liveBinding(binding.room, target) !== target.audience) return;
+      const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
+      const evidence = { room: binding.room, event: latest.event_id };
+      if (!store.prepareControlDraft(request, binding, recipient, text, latest.event_id, Date.now(), evidence)) {
+        result('The chat changed while the reply was being prepared. Ask again to draft for the latest message.', [], binding);
+      }
+      return;
+    }
+    const coverage = `${name} · ${range.label} · ${admitted.length} readable text messages in the connected room.`;
+    const partial = !history.complete || history.unreadable > 0 || admitted.length !== history.events.length;
+    if (!admitted.length) return result(coverage + '\nNo verified text messages were available for this request.', [], binding);
+    const messages = admitted.map((event, index) => ({
+      number: index + 1,
+      author: (state.names.get(event.sender) || event.sender).slice(0, 100),
+      time: date.format(event.ts),
+      body: event.body.replace(/^(?:>.*\n)+\n/u, '').slice(0, 1000),
+    }));
+    const answer = await summarizeWithInstance(settings.engine, input.question, messages);
+    if (!answer) throw new Error('No summary returned.');
+    const cited = [...new Set([...answer.matchAll(/\[(\d{1,2})\]/gu)].map(match => Number(match[1])))]
+      .filter(number => number > 0 && number <= admitted.length);
+    const numbers = cited.length ? cited.slice(0, 8) : messages.slice(-3).map(message => message.number);
+    const sources = numbers.map(number => ({
+      label: `[${number}] ${messages[number - 1].author} · ${messages[number - 1].time}`,
+      url: matrixLink(binding.room, admitted[number - 1].event_id),
+    }));
+    const accessNote = partial ? ' Coverage is partial.' : '';
+    if (!pausedFile() && !store.paused()) result(coverage + accessNote + '\n\n' + answer.slice(0, 3000), sources, binding);
+  }
+
+  async function publishControlResult(request) {
+    if (!request || pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true }))) return;
+    let { body, sources } = JSON.parse(request.result);
+    if (request.binding) {
+      const current = store.binding(request.binding);
+      const target = current && JSON.parse(current.target);
+      if (!current?.active || current.generation !== request.generation || current.revision !== request.revision ||
+          await liveBinding(current.room, target) !== target.audience) {
+        body = 'The selected chat changed before the update could be delivered. Request a new update.';
+        sources = [];
+      }
+    }
+    if (!(await matrix.verifyControl({ requireDot: true }))) return;
+    const encrypted = await matrix.encryptEvent(settings.controlRoom, 'm.room.message',
+      updateReply(settings, request.event, body, sources, request.thread_root ?? request.event));
+    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true }))) return;
+    await matrix.put(settings.controlRoom, `control-${digest(request.event)}`, encrypted);
+    store.controlDelivered(request.event);
+  }
+
   async function notify(draft) {
     const awaiting = draft.state === 'awaiting_approval';
     const title = `Draft for ${draft.binding} · ${draft.id.slice(0, 8)}`;
+    const reference = draft.control_event
+      ? [`To: ${draft.recipient}`, `Request: ${matrixLink(settings.controlRoom, draft.control_event)}`,
+        ...(draft.reply_event ? [`Reply to: ${matrixLink(draft.room, draft.reply_event)}`] : [])]
+      : [`Source: https://matrix.to/#/${draft.room}/${draft.source}`];
     const content = awaiting ? [
-      title, `Source: https://matrix.to/#/${draft.room}/${draft.source}`, '', draft.body, '',
+      title, ...reference, '', draft.body, '',
       `Expires: ${date.format(draft.until)}`, `telegram approve ${draft.id} ${draft.version}`,
       `telegram reject ${draft.id} ${draft.version}`,
     ].join('\n') : `${draft.binding}: ${draft.state.replaceAll('_', ' ')}. Draft ${draft.id}.`;
-    const prepared = await matrix.encrypted(settings.controlRoom, content);
+    const relation = draft.control_event && controlThread(store.controlThread(draft.control_event), draft.control_event);
+    const prepared = relation
+      ? await matrix.encryptEvent(settings.controlRoom, 'm.room.message', { msgtype: 'm.text', body: content, 'm.relates_to': relation })
+      : await matrix.encrypted(settings.controlRoom, content);
     if (!(await matrix.verifyControl())) throw new Error('Control room changed.');
     await matrix.put(settings.controlRoom, `notice-${digest([draft.id, draft.state])}`, prepared);
     if (awaiting && store.draft(draft.id).state === 'awaiting_approval') {
       const question = `${title}\nReview the draft above before sending.`;
       const poll = await matrix.encryptEvent(settings.controlRoom, pollStart, {
+        ...(relation && { 'm.relates_to': relation }),
         [pollText]: question,
         [pollStart]: {
           kind: 'org.matrix.msc3381.poll.disclosed',
@@ -259,12 +391,16 @@ async function run() {
   async function publish() {
     const draft = store.nextSend(Date.now());
     if (!draft || pausedFile() || store.paused() || Date.now() - lastGood > 15_000) return;
+    if (draft.control_event && !(await matrix.verifyControl({ requireDot: true }))) return store.stale(draft.id);
     const target = JSON.parse(draft.target);
     if (await liveBinding(draft.room, target) !== target.audience || !(await matrix.verifyControl())) {
       store.pause(draft.binding, 'portal_or_control_room_changed');
       return;
     }
-    const ciphertext = draft.ciphertext ?? await matrix.encrypted(draft.room, draft.body);
+    const ciphertext = draft.ciphertext ?? await matrix.encryptEvent(draft.room, 'm.room.message', {
+      msgtype: 'm.text', body: draft.body,
+      ...(draft.reply_event ? { 'm.relates_to': { 'm.in_reply_to': { event_id: draft.reply_event } } } : {}),
+    });
     if (await liveBinding(draft.room, target) !== target.audience) {
       store.pause(draft.binding, 'portal_or_audience_changed');
       return;
@@ -296,12 +432,19 @@ async function run() {
       }
       await closeReviewedPoll();
       await publish();
+      await publishControlResult(store.nextControl('ready', now));
       if (!worker && !pausedFile() && !store.paused()) {
         const work = store.nextWork(Date.now());
         if (work) worker = processWork(work).catch(() => {
           store.finish(work, 'backend_failed');
           store.pause(work.binding, 'backend_turn_failed');
         }).finally(() => { worker = null; });
+        else {
+          const request = store.nextControl('queued', now);
+          if (request) worker = processControl(request).catch(() => {
+            store.controlResult(request, JSON.stringify({ body: 'The Telegram request failed. Try again from Telegram Control.' }));
+          }).finally(() => { worker = null; });
+        }
       }
     } catch {
       lastGood = 0;

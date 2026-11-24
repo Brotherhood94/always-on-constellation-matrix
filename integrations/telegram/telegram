@@ -104,6 +104,14 @@ case ${1:-} in
     [[ -s "$TELEGRAM_DATA/connector/backend-verified" ]] || { echo 'Run telegram probe first.' >&2; exit 1; }
     "${compose[@]}" --profile agent up -d --no-deps --build connector
     ;;
+  upgrade-connector)
+    [[ $# == 1 && -s "$TELEGRAM_DATA/connector/backend-verified" ]]
+    "${compose[@]}" --profile agent up -d --wait --wait-timeout 60 --no-deps --build connector
+    ;;
+  dot-control)
+    [[ $# == 2 ]]
+    PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" dot-control "$TELEGRAM_DATA" /srv/agents/dot/state "$2"
+    ;;
   bind|rotate)
     [[ $# == 2 && -f "$2" ]] || { echo 'Use telegram bind|rotate PRIVATE_BINDING_JSON' >&2; exit 2; }
     binding=$(python3 -B - "$2" <<'PYTHON'

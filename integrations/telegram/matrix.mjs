@@ -6,7 +6,7 @@ import matrix from '@vector-im/matrix-bot-sdk';
 import pg from 'pg';
 import { digest } from './policy.mjs';
 
-const { MatrixClient, RustSdkCryptoStorageProvider, SimpleFsStorageProvider, LogService } = matrix;
+const { MatrixClient, RustSdkCryptoStorageProvider, SimpleFsStorageProvider, LogService, EncryptedRoomEvent } = matrix;
 const silent = () => {};
 LogService.setLogger({ trace: silent, debug: silent, info: silent, warn: silent, error: silent });
 const encryptedType = 'm.room.encrypted';
@@ -41,20 +41,60 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
   async function liveState(room) {
     const state = await request('GET', `${route(room)}/state`);
     const content = (type) => state.find(event => event.type === type && event.state_key === '')?.content;
-    const members = state.filter(event => event.type === 'm.room.member' && ['join', 'invite'].includes(event.content?.membership))
+    const active = state.filter(event => event.type === 'm.room.member' && ['join', 'invite'].includes(event.content?.membership));
+    const members = active
       .map(event => [event.state_key, event.content.membership]).sort((a, b) => a[0].localeCompare(b[0]));
     return {
-      members, audience: digest(members),
+      members, audience: digest(members), name: content('m.room.name')?.name,
+      names: new Map(active.map(event => [event.state_key, event.content.displayname])),
       encrypted: content('m.room.encryption')?.algorithm === 'm.megolm.v1.aes-sha2',
       private: content('m.room.join_rules')?.join_rule === 'invite' && content('m.room.create')?.['m.federate'] === false,
       tombstone: Boolean(content('m.room.tombstone')),
     };
   }
 
-  async function verifyControl() {
+  async function verifyControl({ requireDot = false } = {}) {
     const state = await liveState(config.controlRoom);
-    return state.encrypted && state.private && !state.tombstone && state.members.length === 2 &&
-      state.members.every(([member, status]) => [config.owner, config.agent].includes(member) && status === 'join');
+    const members = new Map(state.members);
+    return state.encrypted && state.private && !state.tombstone &&
+      members.get(config.owner) === 'join' && members.get(config.agent) === 'join' &&
+      [...members.keys()].every(member => [config.owner, config.agent, config.dot].includes(member)) &&
+      (!requireDot || members.get(config.dot) === 'join');
+  }
+
+  async function recentMessages(room, range) {
+    const events = [];
+    let from;
+    let unreadable = 0;
+    let complete = false;
+    for (let page = 0; page < 4 && !complete; page++) {
+      const params = new URLSearchParams({ dir: 'b', limit: '40', filter: JSON.stringify({ types: [encryptedType] }) });
+      if (from) params.set('from', from);
+      const batch = await request('GET', `${route(room)}/messages?${params}`);
+      for (const raw of batch.chunk ?? []) {
+        if (raw.origin_server_ts < range.since) {
+          complete = true;
+          break;
+        }
+        if (raw.type !== encryptedType || raw.unsigned?.redacted_because ||
+            !Number.isSafeInteger(raw.origin_server_ts) || !range.includes(raw.origin_server_ts)) continue;
+        let event;
+        try {
+          event = (await sdk.crypto.decryptRoomEvent(new EncryptedRoomEvent(raw), room)).raw;
+        } catch {
+          unreadable++;
+          continue;
+        }
+        const body = event.content?.body;
+        if (event.type !== messageType || event.content?.msgtype !== 'm.text' ||
+            event.content['m.new_content'] || typeof body !== 'string' || !body.trim()) continue;
+        events.push({ event_id: raw.event_id, sender: raw.sender, ts: raw.origin_server_ts, body });
+        if (events.length === 30) return { events, unreadable, complete: false };
+      }
+      if (!batch.end || batch.end === from) complete = true;
+      from = batch.end;
+    }
+    return { events, unreadable, complete };
   }
 
   async function sync(since, timeout = 1_000) {
@@ -103,7 +143,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     }
   }
 
-  return { sync, applySync, liveState, verifyControl, joinPortal, encrypted, encryptEvent, put,
+  return { sync, applySync, liveState, verifyControl, recentMessages, joinPortal, encrypted, encryptEvent, put,
     close: () => sdk.crypto?.engine.machine.close(), tokenHash: digest([who.user_id, who.device_id, token]) };
 }
 
@@ -129,9 +169,9 @@ export function bridgeAudit(config) {
     return portal.room_kind === '';
   }
 
-  async function source(room, target, event) {
-    for (const wait of [0, 200, 400, 800, 1600]) {
-      await delay(wait);
+  async function source(room, target, event, waits = [0, 200, 400, 800, 1600]) {
+    for (const wait of waits) {
+      if (wait) await delay(wait);
       const { rows } = await pool.query(`SELECT sender_id, sender_mxid, ts_ms FROM telegram_audit_message
         WHERE room=$1 AND peer=$2 AND receiver=$3 AND event=$4`, [room, target.peer, target.receiver, event.event_id]);
       if (rows.length !== 1) continue;

@@ -7,15 +7,22 @@ synapse=$base-synapse
 postgres=$base-postgres
 state=$base-state
 network=$base-net
+fixture=$(mktemp -d)
 images=dock.mau.dev/mautrix/telegram:v26.11@sha256:fe78dbce96dca82f077371f429776ab1fee3b65ddc83924a257279b142160945
 syn=ghcr.io/element-hq/synapse:v1.165.0
 py=python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+connector_image=${TELEGRAM_CONNECTOR_TEST_IMAGE:-matrix-telegram-connector:0.2.1}
 cleanup() {
   docker rm -f "$bridge" "$synapse" "$postgres" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
   docker volume rm "$state" >/dev/null 2>&1 || true
+  rm -rf -- "$fixture"
 }
 trap cleanup EXIT
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+  -keyout "$fixture/key.pem" -out "$fixture/cert.pem" >/dev/null 2>&1
+chmod 0755 "$fixture"
+chmod 0644 "$fixture/key.pem"
 docker network create --internal "$network" >/dev/null
 docker volume create "$state" >/dev/null
 docker run --rm --network none -v "$state:/state" --entrypoint sh "$py" -c 'umask 077; mkdir /state/bridge /state/synapse; chown 991:991 /state/bridge; echo "{\"api_id\":42,\"api_hash\":\"0123456789abcdef0123456789abcdef\"}" >/state/dummy.json'
@@ -54,6 +61,8 @@ data['listeners']=[{'type':'http','port':8008,'tls':False,'resources':[{'names':
 data['app_service_config_files']=['/state/bridge/registration.yaml']
 data['enable_registration']=True
 data['enable_registration_without_verification']=True
+data['rc_registration']={'per_second': 1, 'burst_count': 10}
+data['rc_message']={'per_second': 20, 'burst_count': 50}
 data['media_store_path']='/state/synapse/media_store'
 data['database']={'name':'psycopg2','args':{'user':'synapse','password':'fixture','database':'synapse','host':'postgres'}}
 p.write_text(yaml.safe_dump(data))
@@ -62,9 +71,10 @@ Path('/state/bridge').chmod(0o755)
 PY
 docker run -d --name "$postgres" --network "$network" --network-alias postgres -e POSTGRES_USER=synapse -e POSTGRES_PASSWORD=fixture -e POSTGRES_DB=synapse -e POSTGRES_INITDB_ARGS="--encoding=UTF8 --locale=C" postgres:17.12-bookworm >/dev/null
 for i in $(seq 1 45); do
-  if docker exec "$postgres" pg_isready -U synapse -d synapse >/dev/null 2>&1; then break; fi
+  if docker exec "$postgres" pg_isready -h 127.0.0.1 -U synapse -d synapse >/dev/null 2>&1; then break; fi
   sleep 1
 done
+docker exec "$postgres" pg_isready -h 127.0.0.1 -U synapse -d synapse >/dev/null
 docker run --rm --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" -B /src/bridge_config.py database-sql /state |
   docker exec -i "$postgres" psql -qX --set ON_ERROR_STOP=1 -U synapse -d postgres
 docker run -d --name "$synapse" --network "$network" --network-alias synapse -v "$state:/state" --entrypoint python "$syn" -m synapse.app.homeserver -c /state/synapse/homeserver.yaml >/dev/null
@@ -89,15 +99,21 @@ echo 'Pinned mautrix started against Synapse, migrated PostgreSQL, and exposed n
 # Leave the AppService identity available, but isolate the following synthetic room from bridge automation.
 docker stop --timeout 3 "$bridge" >/dev/null
 docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gid=991,mode=0700 \
-  -v "$state:/fixture:ro" --entrypoint node matrix-telegram-connector:0.1.2 --input-type=module - <<'JS'
+  -v "$state:/fixture:ro" -v "$fixture:/acp-fixture:ro" \
+  -v "$src/policy.mjs:/app/policy.mjs:ro" -v "$src/matrix.mjs:/app/matrix.mjs:ro" \
+  -v "$src/acp.mjs:/app/acp.mjs:ro" -v "$src/control.mjs:/app/control.mjs:ro" -v "$src/service.mjs:/app/service.mjs:ro" \
+  --entrypoint node "$connector_image" --input-type=module - <<'JS'
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:https';
 import { setTimeout as delay } from 'node:timers/promises';
 import pg from 'pg';
+import { WebSocketServer } from 'ws';
 import { matrixConnection } from './matrix.mjs';
 import { TelegramStore, pollStart, reviewAnswer } from './policy.mjs';
+import { telegramRequest } from './control.mjs';
 const url = 'http://synapse:8008';
 const root = '/_matrix/client/v3';
 async function api(path, body, token) {
@@ -141,8 +157,12 @@ sender.close();
 console.log('Telegram connector Matrix crypto round trip and exact-transaction retry passed.');
 
 const agent = await register('telegram-agent');
+const dot = await register('dot');
 const bridgeBot = '@telegrambot:telegram.test';
 const botToken = (await readFile('/fixture/bridge/registration.yaml', 'utf8')).match(/^as_token:\s+(\S+)$/m)[1];
+const remoteDevice = 'FIXTURE_REMOTE';
+const remote = { ...await api('/register', { type:'m.login.application_service', username:'telegram_67890',
+  device_id:remoteDevice }, botToken), device:remoteDevice };
 async function privateRoom(token, invite, asUser) {
   const path = '/createRoom' + (asUser ? '?user_id=' + encodeURIComponent(asUser) : '');
   const created = await api(path, {preset:'private_chat',visibility:'private',
@@ -150,11 +170,17 @@ async function privateRoom(token, invite, asUser) {
     initial_state:[{type:'m.room.encryption',state_key:'',content:{algorithm:'m.megolm.v1.aes-sha2'}}]}, token);
   return created.room_id;
 }
-const controlRoom = await privateRoom(agent.access_token, [b.user_id]);
+const controlRoom = await privateRoom(agent.access_token, [b.user_id, dot.user_id]);
 await api('/join/' + encodeURIComponent(controlRoom), {}, b.access_token);
-const portal = await privateRoom(botToken, [agent.user_id, b.user_id], bridgeBot);
+await api('/join/' + encodeURIComponent(controlRoom), {}, dot.access_token);
+const dotClient = await connect(dot, 'dot');
+await dotClient.applySync(await dotClient.sync(null, 0), async () => {});
+const portal = await privateRoom(botToken, [agent.user_id, b.user_id, remote.user_id], bridgeBot);
 const portalRoute = '/rooms/' + encodeURIComponent(portal);
 await api(portalRoute + '/join', {}, b.access_token);
+await api(portalRoute + '/join', {}, remote.access_token);
+const remoteClient = await connect(remote, 'remote');
+await remoteClient.applySync(await remoteClient.sync(null, 0), async () => {});
 const portalState = await fetch(url + root + portalRoute + '/state', {
   headers:{authorization:'Bearer ' + b.access_token},
 });
@@ -163,23 +189,46 @@ const events = await portalState.json();
 assert.equal(events.find(event => event.type === 'm.room.create').sender, bridgeBot);
 assert.deepEqual(events.filter(event => event.type === 'm.room.member').map(event => [
   event.state_key, event.content.membership,
-]).sort(), [[agent.user_id,'invite'],[b.user_id,'join'],[bridgeBot,'join']].sort());
+]).sort(), [[agent.user_id,'invite'],[b.user_id,'join'],[bridgeBot,'join'],[remote.user_id,'join']].sort());
 const auditDatabase = 'postgresql://synapse:fixture@postgres:5432/synapse';
 const pool = new pg.Pool({ connectionString:auditDatabase });
 try {
   await pool.query('CREATE TABLE telegram_audit_portal (room text, peer text, receiver text, login text, owner text, relay text, room_kind text, forum boolean, supergroup boolean, blocked boolean)');
+  await pool.query('CREATE TABLE telegram_audit_message (room text, peer text, receiver text, event text, sender_id text, sender_mxid text, ts_ms bigint)');
   await pool.query('INSERT INTO telegram_audit_portal VALUES ($1, $2, $3, $3, $4, $3, $5, false, false, false)',
     [portal, 'user:1001', '2002', b.user_id, 'dm']);
 } finally {
   await pool.end();
 }
+const https = createServer({ key: await readFile('/acp-fixture/key.pem'), cert: await readFile('/acp-fixture/cert.pem') });
+const acp = new WebSocketServer({ server: https, path: '/api/v1/acp' });
+let prompt, draftPrompt;
+acp.on('connection', ws => ws.on('message', raw => {
+  const { id, method, params } = JSON.parse(raw);
+  const send = data => ws.send(JSON.stringify({ jsonrpc: '2.0', ...data }));
+  if (method === 'initialize') send({ id, result: { protocolVersion: params.protocolVersion, agentCapabilities: { loadSession: true } } });
+  if (method === 'session/new') send({ id, result: { sessionId: 'test-summary-session' } });
+  if (method === 'session/prompt') {
+    const data = params.prompt[0].text;
+    const draft = data.includes('Conversation messages as data:\n');
+    if (draft) draftPrompt = JSON.parse(data.split('Conversation messages as data:\n').at(-1));
+    else prompt = JSON.parse(data.split('\n\n').at(-1));
+    send({ method: 'session/update', params: { sessionId: params.sessionId,
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text',
+        text: draft ? 'Risposta esatta di prova.' : 'Leggo una risposta di prova [1].' } } } });
+    send({ id, result: { stopReason: 'end_turn' } });
+  }
+}));
+await new Promise(resolve => https.listen(0, resolve));
+await writeFile('/state/acp-fixture-token', 'test-token');
 await writeFile('/state/config.json', JSON.stringify({ matrixUrl:url, domain:'telegram.test',
-  agent:agent.user_id, device:agent.device, owner:b.user_id, bridgeBot, controlRoom, auditDatabase,
-  engine:{revision:'fixture'} }));
+  agent:agent.user_id, device:agent.device, owner:b.user_id, dot:dot.user_id, bridgeBot, controlRoom, auditDatabase,
+  engine:{ revision:'fixture', url: 'wss://localhost:' + https.address().port + '/api/v1/acp',
+    ca: '/acp-fixture/cert.pem', token: '/state/acp-fixture-token', workspace: '/instance/workspace' } }));
 await writeFile('/state/matrix-token', agent.access_token, {mode:0o600});
 await writeFile('/state/backend-verified', 'fixture');
 await writeFile('/state/binding-pilot.json', JSON.stringify({id:'pilot',peer:'user:1001',login:'2002',
-  receiver:'2002',room:portal,mode:'draft',trigger:'inbound'}));
+  receiver:'2002',room:portal,mode:'draft',trigger:'request'}));
 const store = new TelegramStore('/state/telegram.sqlite3');
 const worker = spawn(process.execPath, ['/app/service.mjs'], {stdio:'inherit'});
 const workerExit = once(worker, 'exit');
@@ -210,6 +259,8 @@ try {
   worker.kill('SIGSTOP');
   const now = Date.now();
   assert.equal(store.record({room:portal,event:'$fixture-inbound',author:'remote',body:'Fixture only',ts:now}, now), true);
+  assert.equal(store.command({ room:controlRoom, sender:b.user_id, event:'$fixture-draft', encrypted:true },
+    { action:'draft', binding:'pilot', source:'$fixture-inbound' }, { controlRoom, owner:b.user_id }, now), true);
   const draft = store.saveCandidate(store.nextWork(now), 'A synthetic Telegram draft.', now);
   worker.kill('SIGCONT');
 
@@ -245,6 +296,114 @@ try {
   assert.equal(store.get('SELECT closed FROM draft_review WHERE event=?', review.event).closed, 1);
   console.log('Both review options arrived encrypted, and a single encrypted approval closed the poll and sent only into the disposable Matrix portal.');
 
+  const compose = await dotClient.encryptEvent(controlRoom, 'm.room.message', {
+    msgtype:'m.text', body:'Prepare a message to the test chat.',
+    'm.mentions': {user_ids:[agent.user_id]},
+    [telegramRequest]: {action:'compose', destination:'pilot', chat_type:'direct', text:'Exact test text from Dot'},
+  });
+  const request = await dotClient.put(controlRoom, 'fixture-dot-compose', compose);
+  assert.equal(await dotClient.put(controlRoom, 'fixture-dot-compose', compose), request);
+  await waitFor(() => store.get('SELECT 1 FROM draft WHERE control_event=?', request), 'the Dot draft');
+  const fromDot = store.get('SELECT * FROM draft WHERE control_event=?', request);
+  assert.equal(fromDot.state, 'awaiting_approval');
+  assert.equal(fromDot.recipient, 'pilot (private chat)');
+  assert.equal(fromDot.body, 'Exact test text from Dot');
+  await waitFor(() => store.get('SELECT event FROM draft_review WHERE draft=?', fromDot.id), 'the Dot draft poll');
+  const dotVote = await dotClient.encrypted(controlRoom, 'telegram approve ' + fromDot.id + ' 1');
+  const beforeVote = store.setting('last_sync');
+  await dotClient.put(controlRoom, 'fixture-dot-unauthorized-vote', dotVote);
+  await waitFor(() => store.setting('last_sync') > beforeVote, 'a sync after the rejected Dot vote');
+  assert.equal(store.draft(fromDot.id).state, 'awaiting_approval');
+  assert.equal(store.get('SELECT count(*) AS n FROM draft WHERE control_event=?', request).n, 1);
+  const ownerReject = await reader.encrypted(controlRoom, 'telegram reject ' + fromDot.id + ' 1');
+  await reader.put(controlRoom, 'fixture-owner-reject-dot-draft', ownerReject);
+  await waitFor(() => store.draft(fromDot.id).state === 'cancelled', 'the operator decision');
+  console.log('An encrypted Dot request produced one exact draft. Dot could not approve it.');
+
+  const update = await reader.encryptEvent(controlRoom, 'm.room.message', {
+    msgtype:'m.text', body:'@telegram-agent, cosa è successo oggi nel privato pilot?',
+    'm.mentions': {user_ids:[agent.user_id]},
+  });
+  const updateId = await reader.put(controlRoom, 'fixture-owner-summary', update);
+  await waitFor(() => store.get('SELECT status FROM control_request WHERE event=?', updateId)?.status === 'done',
+    'the linked summary in Control');
+  assert.equal(prompt.question, 'cosa è successo oggi nel privato pilot?');
+  assert.deepEqual(prompt.messages.map(message => message.body), ['A synthetic Telegram draft.']);
+  await waitFor(async () => {
+    const sync = await reader.sync(controlCursor, 0);
+    controlCursor = sync.next_batch;
+    let found = false;
+    await reader.applySync(sync, async (roomId, event, encrypted, failed) => {
+      if (roomId !== controlRoom || event.content?.['m.relates_to']?.event_id !== updateId || !encrypted || failed) return;
+      assert.deepEqual(event.content['m.mentions'].user_ids, [b.user_id, dot.user_id]);
+      assert.match(event.content.body, /Leggo una risposta di prova/);
+      assert.ok(event.content.body.includes(encodeURIComponent(portal)));
+      found = true;
+    });
+    return found;
+  }, 'a private threaded update with both mentions and a real source link');
+  console.log('An owner update read the selected encrypted portal and returned a referenced reply with two Matrix mentions.');
+
+  const replyInThread = { rel_type:'m.thread', event_id:updateId, is_falling_back:true, 'm.in_reply_to':{event_id:updateId} };
+  async function ownerFollowup(transaction, body) {
+    const message = await reader.encryptEvent(controlRoom, 'm.room.message', {
+      msgtype:'m.text', body, 'm.mentions':{ user_ids:[agent.user_id] }, 'm.relates_to':replyInThread,
+    });
+    return reader.put(controlRoom, transaction, message);
+  }
+  const followup = await ownerFollowup('fixture-thread-update', '@telegram-agent: Cosa ha detto prima?');
+  await waitFor(() => store.get('SELECT status FROM control_request WHERE event=?', followup)?.status === 'done', 'the same-thread update');
+  assert.equal(prompt.question, 'Cosa ha detto prima?');
+  assert.deepEqual(prompt.messages.map(message => message.body), ['A synthetic Telegram draft.']);
+  await waitFor(async () => {
+    const sync = await reader.sync(controlCursor, 0);
+    controlCursor = sync.next_batch;
+    let found = false;
+    await reader.applySync(sync, async (roomId, event, encrypted, failed) => {
+      const relation = event.content?.['m.relates_to'];
+      if (roomId !== controlRoom || relation?.['m.in_reply_to']?.event_id !== followup || !encrypted || failed) return;
+      assert.equal(relation.event_id, updateId);
+      found = true;
+    });
+    return found;
+  }, 'an answer under the original root instead of a nested thread');
+
+  const latestCipher = await remoteClient.encrypted(portal, 'Latest incoming fixture.');
+  const latest = await remoteClient.put(portal, 'fixture-telegram-incoming', latestCipher);
+  const mapping = new pg.Pool({ connectionString:auditDatabase });
+  await mapping.query('INSERT INTO telegram_audit_message VALUES ($1,$2,$3,$4,$5,$6,$7)',
+    [portal, 'user:1001', '2002', latest, '67890', remote.user_id, Date.now()]);
+  await mapping.end();
+  await waitFor(() => store.get('SELECT 1 FROM inbound WHERE room=? AND event=?', portal, latest), 'the verified inbound message');
+  assert.ok(store.binding('pilot').active);
+  const sendRequest = await ownerFollowup('fixture-thread-reply', '@telegram-agent: rispondi');
+  await waitFor(() => store.get('SELECT 1 FROM draft WHERE control_event=?', sendRequest), 'the thread reply draft');
+  assert.equal(draftPrompt.at(-1).body, 'Latest incoming fixture.');
+  const threadDraft = store.get('SELECT * FROM draft WHERE control_event=?', sendRequest);
+  assert.equal(threadDraft.body, 'Risposta esatta di prova.');
+  assert.equal(threadDraft.reply_event, latest);
+  assert.equal(threadDraft.state, 'awaiting_approval');
+  assert.equal(threadDraft.event, null);
+  await waitFor(() => store.get('SELECT event FROM draft_review WHERE draft=?', threadDraft.id), 'the review poll in the original thread');
+  const threadReview = store.get('SELECT event FROM draft_review WHERE draft=?', threadDraft.id).event;
+  await waitFor(async () => {
+    const sync = await reader.sync(controlCursor, 0);
+    controlCursor = sync.next_batch;
+    let found = false;
+    await reader.applySync(sync, async (roomId, event, encrypted, failed) => {
+      if (roomId !== controlRoom || event.event_id !== threadReview || !encrypted || failed) return;
+      assert.equal(event.type, pollStart);
+      assert.equal(event.content['m.relates_to'].event_id, updateId);
+      assert.equal(event.content['m.relates_to']['m.in_reply_to'].event_id, sendRequest);
+      found = true;
+    });
+    return found;
+  }, 'the operator to decrypt the approval poll inside the same thread');
+  const repeat = await ownerFollowup('fixture-thread-repeat', '@telegram-agent: rispondi');
+  await waitFor(() => store.get('SELECT status FROM control_request WHERE event=?', repeat)?.status === 'done', 'the duplicate draft notice');
+  assert.equal(store.get('SELECT count(*) AS count FROM draft WHERE operator_approval=1 AND reply_event=?', latest).count, 1);
+  console.log('A threaded follow-up reused the portal, and “rispondi” prepared one unsent reply for approval.');
+
   await api(portalRoute + '/leave', {}, agent.access_token);
   await waitFor(() => store.binding('pilot').active === 0, 'the binding to pause after leaving');
   assert.equal(store.setting('pause_reason:pilot'), 'portal_membership_lost');
@@ -256,5 +415,9 @@ try {
   await workerExit;
   store.db.close();
   reader.close();
+  dotClient.close();
+  remoteClient.close();
+  acp.close();
+  https.close();
 }
 JS

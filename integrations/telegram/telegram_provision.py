@@ -36,7 +36,7 @@ def read_room_state(route, token):
             for event in request('GET', route + '/state', token=token)}
 
 
-def create_room(alias, name, token, domain, owner, agent, *, space=False):
+def create_room(alias, name, token, domain, owner, agent, *, space=False, dot=None):
     alias_route = '/_matrix/client/v3/directory/room/' + quote(f'#{alias}:{domain}', safe='')
     rooms_route = '/_matrix/client/v3/rooms/'
     try:
@@ -75,8 +75,8 @@ def create_room(alias, name, token, domain, owner, agent, *, space=False):
             raise SystemExit('Telegram Control must remain encrypted.')
         active = {entry['state_key'] for entry in state.values() if entry['type'] == 'm.room.member' and
                   entry['content']['membership'] in ('invite', 'join')}
-        if active - {agent, owner}:
-            raise SystemExit('Telegram Control must contain only the operator and connector.')
+        if active - {agent, owner, dot}:
+            raise SystemExit('An unexpected member is present in Telegram Control.')
     creation = state['m.room.create', '']
     if creation['sender'] == agent and owner != agent and owner not in creation['content'].get('additional_creators', []):
         levels = data['m.room.power_levels']
@@ -113,11 +113,14 @@ def bootstrap(root):
         if who['user_id'] != agent or who['device_id'] != device:
             raise SystemExit('Unexpected Matrix connector identity.')
         write(token_path, (token + '\n').encode(), uid=991)
-    control = create_room('telegram-control', 'Telegram Control', token, domain, owner, agent)
-    space = create_room('telegram', 'Telegram', token, domain, owner, agent, space=True)
-    space_child(space, control, token, domain)
     out = directory / 'config.json'
     current = load(out) if out.exists() else {}
+    dot = current.get('dot')
+    if dot is not None and dot != f'@dot:{domain}':
+        raise SystemExit('Unexpected Dot identity in Telegram Control configuration.')
+    control = create_room('telegram-control', 'Telegram Control', token, domain, owner, agent, dot=dot)
+    space = create_room('telegram', 'Telegram', token, domain, owner, agent, space=True)
+    space_child(space, control, token, domain)
     if current.get('controlRoom', control) != control or current.get('space', space) != space:
         raise SystemExit('The Telegram operator rooms changed. Reconcile the connector before replacing the configuration.')
     model = os.environ.get('TELEGRAM_MODEL', 'gpt-6.2-sol')
@@ -147,6 +150,59 @@ def channel_credentials(root):
     write(directory / 'engine-ca.pem', (root / 'exchange/ca.pem').read_bytes(), uid=991)
 
 
+def configure_dot(root, dot_state, operation):
+    directory = root / 'connector'
+    path = directory / 'config.json'
+    config = load(path)
+    domain, control, owner, agent = (config[key] for key in ('domain', 'controlRoom', 'owner', 'agent'))
+    dot = f'@dot:{domain}'
+    if owner in (dot, agent) or agent != f'@telegram-agent:{domain}' or config.get('dot', dot) != dot:
+        raise SystemExit('Unexpected local identities in the Telegram configuration.')
+    token = (directory / 'matrix-token').read_text().strip()
+    route = '/_matrix/client/v3/rooms/' + quote(control, safe='')
+    state = read_room_state(route, token)
+    active = {key: entry['content']['membership'] for (kind, key), entry in state.items()
+              if kind == 'm.room.member' and entry['content'].get('membership') in ('invite', 'join')}
+    data = {kind: entry['content'] for (kind, key), entry in state.items() if not key}
+    if (data.get('m.room.create', {}).get('m.federate') is not False or
+            data.get('m.room.join_rules', {}).get('join_rule') != 'invite' or
+            data.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2' or
+            'm.room.tombstone' in data or active.get(agent) != 'join' or active.get(owner) != 'join' or
+            active.keys() - {owner, agent, dot}):
+        raise SystemExit('Telegram Control membership or encryption could not be verified.')
+
+    dot_token = (dot_state / 'matrix-token').read_text().strip()
+    identity = request('GET', '/_matrix/client/v3/account/whoami', token=dot_token)
+    if identity.get('user_id') != dot or identity.get('device_id') != 'MATRIXDOT':
+        raise SystemExit('Unexpected Dot Matrix device.')
+    if operation == 'configure':
+        config['dot'] = dot
+        write(path, config, uid=991)
+        write(dot_state / 'telegram-control.json', {'room': control, 'owner': owner}, uid=991)
+        print('Dot configuration is staged for the current Telegram Control room.')
+    elif operation == 'join':
+        if config.get('dot') != dot or load(dot_state / 'telegram-control.json') != {'room': control, 'owner': owner}:
+            raise SystemExit('Configure both connectors before adding Dot.')
+        if dot not in active:
+            request('POST', route + '/invite', {'user_id': dot}, token)
+        if active.get(dot) != 'join':
+            joined = request('POST', '/_matrix/client/v3/join/' + quote(control, safe=''), {}, dot_token)
+            if joined.get('room_id') != control:
+                raise SystemExit('Dot joined an unexpected Matrix room.')
+        if membership(control, dot, token) != 'join':
+            raise SystemExit('Dot membership could not be verified.')
+        print('Dot joined the encrypted Telegram Control room.')
+    elif operation == 'leave':
+        if dot in active:
+            request('POST', route + '/leave', {}, dot_token)
+        config.pop('dot', None)
+        write(path, config, uid=991)
+        (dot_state / 'telegram-control.json').unlink(missing_ok=True)
+        print('Dot left Telegram Control. Restart both connectors after rolling back the code.')
+    else:
+        raise SystemExit('Unknown Dot configuration operation.')
+
+
 if __name__ == '__main__':
     action, state, *arguments = sys.argv[1:]
     root = Path(state)
@@ -154,6 +210,8 @@ if __name__ == '__main__':
         bootstrap(root)
     elif action == 'channel':
         channel_credentials(root)
+    elif action == 'dot-control':
+        configure_dot(root, Path(arguments[0]), arguments[1])
     elif action == 'add-to-space':
         config = load(root / 'connector/config.json')
         agent_token = (root / 'connector/matrix-token').read_text().strip()

@@ -4,6 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TelegramStore, controlCommand, reviewAnswer } from './policy.mjs';
+import { addressedRequest, historyRange, resolveDestination, telegramRequest, updateReply } from './control.mjs';
+import { verifyTelegramControlState } from './dot-telegram.mjs';
 
 const now = 2_000_000;
 const config = { controlRoom: '!control:test', owner: '@test:test' };
@@ -193,4 +195,88 @@ test('interrupted model work pauses only its binding and rotation prevents sessi
   store.reset(dm, config.controlRoom, now + 5);
   assert.equal(store.binding(dm.id).session, null);
   assert.equal(store.binding(dm.id).generation, 2);
+});
+
+test('Dot can submit a real mention and never act on a draft approval', () => {
+  const settings = { ...config, dot: '@dot:test', agent: '@telegram-agent:test' };
+  const message = { sender: settings.dot, type: 'm.room.message', event_id: '$dot-1', content: {
+    msgtype: 'm.text', body: '@telegram-agent: Prepare a message.',
+    'm.mentions': { user_ids: [settings.agent] },
+    [telegramRequest]: { action: 'compose', destination: 'group', chat_type: 'group', text: 'Exact message' },
+  } };
+  assert.equal(addressedRequest(message, settings).text, 'Exact message');
+  assert.equal(addressedRequest({ ...message, sender: '@unrelated:test' }, settings), null);
+  assert.equal(addressedRequest({ ...message, content: { ...message.content, 'm.mentions': {} } }, settings), null);
+  assert.equal(addressedRequest({ ...message, content: { ...message.content, 'm.relates_to': { rel_type: 'm.replace' } } }, settings), null);
+  const store = fixture({ bindings: [dm, { ...group, mode: 'auto' }] });
+  const request = addressedRequest(message, settings);
+  assert.equal(store.queueControl(message.event_id, request, now), true);
+  assert.equal(store.queueControl(message.event_id, request, now), false);
+  const queued = store.nextControl('queued', now);
+  const binding = store.binding('group');
+  assert.equal(store.prepareControlDraft(queued, binding, 'Project Room (group)', request.text, '$wrong-room', now), false);
+  assert.equal(store.prepareControlDraft(queued, binding, 'Project Room (group)', request.text, null, now), true);
+  assert.equal(store.prepareControlDraft(queued, binding, 'Project Room (group)', request.text, null, now), false);
+  const draft = store.pendingNotice();
+  assert.equal(draft.state, 'awaiting_approval');
+  assert.equal(draft.body, request.text);
+  assert.equal(store.nextSend(now), undefined);
+  const approve = { action: 'approve', draft: draft.id, version: 1 };
+  assert.equal(store.command({ sender: settings.dot, room: config.controlRoom, event: '$dot-approval', encrypted: true },
+    approve, settings, now), false);
+  assert.equal(cmd(store, approve), true);
+  assert.equal(store.prepareSend(draft.id, '{}', now + 6), true);
+});
+
+test('updates require a single connected chat and mention both people in the request thread', () => {
+  const store = fixture();
+  const destinations = [{ name: 'Sam Example', binding: store.binding('first') },
+    { name: 'Progetto Energia', binding: store.binding('group') }];
+  assert.equal(resolveDestination({ question: 'Aggiornami su Sam' }, destinations), null);
+  assert.equal(resolveDestination({ question: 'Cosa ha detto Sam nella chat privata?' }, destinations).binding.id, 'first');
+  assert.equal(resolveDestination({ question: 'Novità su Progetto Energia oggi?' }, destinations).binding.id, 'group');
+  assert.equal(resolveDestination({ destination: 'Sam Example', chatType: 'group' }, destinations), null);
+  assert.equal(resolveDestination({ destination: 'Sam Example', chatType: 'direct' }, destinations).binding.id, 'first');
+  const range = historyRange('cosa è successo oggi', Date.parse('2026-11-23T23:30:00+01:00'));
+  assert.equal(range.includes(Date.parse('2026-11-22T23:00:00+01:00')), false);
+  assert.equal(range.includes(Date.parse('2026-11-23T00:00:00+01:00')), true);
+  const settings = { ...config, dot: '@dot:test', agent: '@telegram-agent:test' };
+  const reply = updateReply(settings, '$request', 'Message <with markup>', [{ label: '[1] Source', url: 'https://matrix.to/#/room/event' }]);
+  assert.deepEqual(reply['m.mentions'].user_ids, [settings.owner, settings.dot]);
+  assert.equal(reply['m.relates_to'].event_id, '$request');
+  assert.match(reply.formatted_body, /&lt;with markup&gt;/);
+  assert.match(reply.formatted_body, /href="https:\/\/matrix.to\/#\/room\/event"/);
+});
+
+test('Dot checks the exact encrypted Control audience before posting', () => {
+  const members = [config.owner, '@dot:test', '@telegram-agent:test'];
+  const state = [
+    { type: 'm.room.create', state_key: '', content: { 'm.federate': false } },
+    { type: 'm.room.join_rules', state_key: '', content: { join_rule: 'invite' } },
+    { type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } },
+    ...members.map(state_key => ({ type: 'm.room.member', state_key, content: { membership: 'join' } })),
+  ];
+  assert.equal(verifyTelegramControlState(state, { members }), true);
+  assert.equal(verifyTelegramControlState(state.slice(0, -1), { members }), false);
+  assert.equal(verifyTelegramControlState([...state, { type: 'm.room.member', state_key: '@unexpected:test',
+    content: { membership: 'invite' } }], { members }), false);
+});
+
+test('an operator can explicitly reply or ask a follow-up in the same thread', () => {
+  const settings = { ...config, dot: '@dot:test', agent: '@telegram-agent:test' };
+  const request = { sender: settings.owner, type: 'm.room.message', event_id: '$follow-up', content: {
+    msgtype: 'm.text', body: '@telegram-agent: rispondi',
+    'm.mentions': { user_ids: [settings.agent] },
+    'm.relates_to': { rel_type: 'm.thread', event_id: '$root', 'm.in_reply_to': { event_id: '$agent-update' } },
+  } };
+  assert.deepEqual(addressedRequest(request, settings), { action: 'reply', question: 'rispondi', thread: '$root' });
+  assert.deepEqual(addressedRequest({ ...request, content: { ...request.content, body: '@telegram-agent: cosa ha detto prima?' } }, settings),
+    { action: 'update', question: 'cosa ha detto prima?', thread: '$root' });
+  assert.equal(addressedRequest({ ...request, content: { ...request.content, 'm.relates_to': { rel_type: 'm.replace', event_id: '$root' } } }, settings),
+    null);
+  assert.equal(addressedRequest({ ...request, content: { ...request.content, body: '> @telegram-agent: rispondi\n\n', } }, settings), null);
+
+  const reply = updateReply(settings, '$follow-up', 'Follow-up result', [], '$root');
+  assert.equal(reply['m.relates_to'].event_id, '$root');
+  assert.equal(reply['m.relates_to']['m.in_reply_to'].event_id, '$follow-up');
 });

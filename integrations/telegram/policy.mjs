@@ -9,6 +9,7 @@ const portalID = /^(user|chat|channel):[1-9][0-9]{0,18}$/u;
 const roomID = /^![^\s\x00-\x1f]{1,254}$/u;
 const modes = new Set(['manual', 'draft', 'auto']);
 const minimum = 60_000;
+const day = 24 * 60 * minimum;
 const maxAge = 15 * minimum;
 const expiry = 30 * minimum;
 export const pollStart = 'org.matrix.msc3381.poll.start';
@@ -85,6 +86,10 @@ export class TelegramStore {
         event TEXT PRIMARY KEY, room TEXT NOT NULL, status TEXT NOT NULL, timing INTEGER NOT NULL
       );
       CREATE TABLE IF NOT EXISTS controls (event TEXT PRIMARY KEY, at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS control_request (
+        event TEXT PRIMARY KEY, requested INTEGER NOT NULL, payload TEXT, status TEXT NOT NULL DEFAULT 'queued',
+        result TEXT, binding TEXT, generation INTEGER, revision INTEGER, thread_root TEXT
+      );
       CREATE TABLE IF NOT EXISTS draft_review (
         event TEXT PRIMARY KEY, draft TEXT NOT NULL REFERENCES draft(id), version INTEGER NOT NULL,
         hash TEXT NOT NULL, closed INTEGER NOT NULL DEFAULT 0,
@@ -94,7 +99,21 @@ export class TelegramStore {
       CREATE INDEX IF NOT EXISTS work_status ON work(state, queued);
       CREATE INDEX IF NOT EXISTS draft_status ON draft(state, until);
       CREATE INDEX IF NOT EXISTS inbound_recent ON inbound(binding, generation, at);
+      CREATE INDEX IF NOT EXISTS control_request_status ON control_request(status, requested);
     `);
+    this.atomic(() => {
+      const columns = new Set(this.all('PRAGMA table_info(draft)').map(({ name }) => name));
+      for (const [name, type] of [
+        ['operator_approval', 'INTEGER NOT NULL DEFAULT 0'], ['control_event', 'TEXT'],
+        ['recipient', 'TEXT'], ['reply_event', 'TEXT'],
+      ]) {
+        if (!columns.has(name)) this.db.exec(`ALTER TABLE draft ADD COLUMN ${name} ${type}`);
+      }
+      if (!this.all('PRAGMA table_info(control_request)').some(({ name }) => name === 'thread_root')) {
+        this.db.exec('ALTER TABLE control_request ADD COLUMN thread_root TEXT');
+      }
+      this.db.exec('CREATE INDEX IF NOT EXISTS control_request_thread ON control_request(thread_root, requested)');
+    });
   }
 
   get(sql, ...values) { return this.db.prepare(sql).get(...values); }
@@ -166,7 +185,10 @@ export class TelegramStore {
 
   pause(id, reason = 'operator_paused') {
     this.atomic(() => {
-      if (!id) this.set('paused', true);
+      if (!id) {
+        this.set('paused', true);
+        this.run("UPDATE control_request SET status='cancelled', payload=NULL, result=NULL WHERE status IN ('queued','ready')");
+      }
       for (const item of id ? this.bindings().filter(row => row.id === id) : this.bindings()) {
         this.invalidate(item.id, 'cancelled');
         const update = this.run('UPDATE binding SET active=0, revision=revision+1 WHERE id=? AND active=1', item.id);
@@ -192,6 +214,8 @@ export class TelegramStore {
     this.run(`UPDATE draft SET state='stale' WHERE state IN ('ready','awaiting_approval') AND until<=?`, now);
     this.run(`UPDATE draft SET state='unknown' WHERE state='matrix_accepted' AND attempted<?`, now - 5 * minimum);
     this.run(`UPDATE work SET state='stale' WHERE state='queued' AND queued<?`, now - maxAge);
+    this.run("UPDATE control_request SET status='expired', payload=NULL, result=NULL WHERE status IN ('queued','ready') AND requested<?",
+      now - maxAge);
   }
 
   retain(now) {
@@ -199,6 +223,66 @@ export class TelegramStore {
     this.run(`UPDATE draft SET body='',ciphertext=NULL WHERE body<>'' AND until<?
       AND state IN ('bridge_confirmed','failed','cancelled','stale')`, now - 24 * 60 * minimum);
     this.run(`DELETE FROM receipt WHERE timing<?`, now - 24 * 60 * minimum);
+    this.run("DELETE FROM control_request WHERE requested<? AND status NOT IN ('queued','ready')", now - day);
+  }
+
+  queueControl(event, request, now) {
+    return this.atomic(() => {
+      if (!eventID.test(event) || this.paused() ||
+          this.get('SELECT count(*) AS count FROM control_request WHERE requested>?', now - 60 * minimum).count >= 24) return false;
+      if (request.thread && !eventID.test(request.thread)) return false;
+      return !!this.run('INSERT OR IGNORE INTO control_request(event, requested, payload, thread_root) VALUES (?, ?, ?, ?)',
+        event, now, JSON.stringify(request), request.thread ?? event).changes;
+    });
+  }
+
+  nextControl(status, now) {
+    return this.get('SELECT * FROM control_request WHERE status=? AND requested>=? ORDER BY requested LIMIT 1',
+      status, now - maxAge);
+  }
+
+  controlContext(thread) {
+    return this.get(`SELECT binding, generation, revision FROM control_request
+      WHERE (thread_root=? OR event=?) AND status IN ('ready','done') AND binding IS NOT NULL
+      ORDER BY requested DESC LIMIT 1`, thread, thread);
+  }
+
+  controlThread(event) {
+    return this.get('SELECT thread_root FROM control_request WHERE event=?', event)?.thread_root ?? event;
+  }
+
+  controlDraft(thread, binding, reply) {
+    return this.get(`SELECT draft.*, review.event AS review_event FROM draft
+      JOIN control_request request ON request.event=draft.control_event
+      LEFT JOIN draft_review review ON review.draft=draft.id AND review.version=draft.version
+      WHERE (request.thread_root=? OR request.event=?) AND draft.binding=? AND draft.reply_event=?
+        AND draft.state IN ('awaiting_approval','ready','publishing','matrix_accepted','bridge_confirmed','unknown')
+      ORDER BY draft.until DESC LIMIT 1`, thread, thread, binding, reply);
+  }
+
+  controlResult(request, result, binding) {
+    this.run("UPDATE control_request SET status='ready', payload=NULL, result=?, binding=?, generation=?, revision=? WHERE event=? AND status='queued'",
+      result, binding?.id ?? null, binding?.generation ?? null, binding?.revision ?? null, request.event);
+  }
+
+  controlDelivered(event) {
+    this.run("UPDATE control_request SET status='done', payload=NULL, result=NULL WHERE event=?", event);
+  }
+
+  prepareControlDraft(request, binding, recipient, text, reply, now, evidence) {
+    return this.atomic(() => {
+      const verified = evidence?.room === binding.room && evidence.event === reply;
+      if (!this.get("SELECT 1 FROM control_request WHERE event=? AND status='queued' AND requested>=?", request.event, now - maxAge) ||
+          !this.current({ ...binding, binding: binding.id }, now) || binding.mode === 'manual' ||
+          !eventID.test(reply ?? request.event) || typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 3500 ||
+          (reply && !verified && !this.get(`SELECT 1 FROM inbound WHERE room=? AND event=? AND binding=? AND generation=? AND author='remote'`,
+            binding.room, reply, binding.id, binding.generation))) return false;
+      this.insertDraft(binding, text, reply ?? request.event, now, { control: request.event, recipient, reply });
+      this.run('UPDATE control_request SET binding=?, generation=?, revision=? WHERE event=?',
+        binding.id, binding.generation, binding.revision, request.event);
+      this.controlDelivered(request.event);
+      return true;
+    });
   }
 
   record(incoming, now) {
@@ -236,7 +320,10 @@ export class TelegramStore {
     return this.atomic(() => {
       if (!this.run('INSERT OR IGNORE INTO controls VALUES (?, ?)', event.event, now).changes) return false;
       if (command.action === 'pause') {
-        if (!command.binding) this.set('paused', true);
+        if (!command.binding) {
+          this.set('paused', true);
+          this.run("UPDATE control_request SET status='cancelled', payload=NULL, result=NULL WHERE status IN ('queued','ready')");
+        }
         for (const binding of this.bindings()) {
           if (command.binding && command.binding !== binding.id) continue;
           this.invalidate(binding.id, 'cancelled');
@@ -316,15 +403,20 @@ export class TelegramStore {
       if (typeof body !== 'string' || !body.trim() || Buffer.byteLength(body) > 3_500) {
         return this.finish(work, 'invalid_candidate');
       }
-      const id = randomUUID();
-      const hash = digest(body);
-      const state = binding.mode === 'auto' ? 'ready' : 'awaiting_approval';
-      this.run(`INSERT INTO draft (id,binding,generation,room,target,revision,context,source,version,body,hash,until,state,txn)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`, id, binding.id, binding.generation,
-      binding.room, binding.target, binding.revision, binding.context, work.source, body, hash, now + expiry, state, `telegram-${id}`);
+      const id = this.insertDraft(binding, body, work.source, now);
       this.finish(work, 'completed');
       return id;
     });
+  }
+
+  insertDraft(binding, body, source, now, { control, recipient, reply } = {}) {
+    const id = randomUUID();
+    const state = !control && binding.mode === 'auto' ? 'ready' : 'awaiting_approval';
+    this.run(`INSERT INTO draft (id,binding,generation,room,target,revision,context,source,version,body,hash,until,state,txn,
+      operator_approval,control_event,recipient,reply_event) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id, binding.id, binding.generation, binding.room, binding.target, binding.revision, binding.context, source,
+    body, digest(body), now + expiry, state, `telegram-${id}`, Number(!!control), control ?? null, recipient ?? null, reply ?? null);
+    return id;
   }
 
   draft(id) { return this.get('SELECT * FROM draft WHERE id=?', id); }
@@ -356,7 +448,7 @@ export class TelegramStore {
       if (!draft || draft.state !== 'ready' || !this.current(draft, now)) return false;
       const binding = this.binding(draft.binding);
       if (binding.target !== draft.target || binding.room !== draft.room || digest(draft.body) !== draft.hash) return false;
-      if (binding.mode === 'draft') {
+      if (binding.mode === 'draft' || draft.operator_approval) {
         const approval = JSON.parse(draft.approval ?? '{}');
         if (approval.sender !== JSON.parse(binding.target).operator || approval.hash !== draft.hash ||
           approval.version !== draft.version || approval.room !== draft.room ||
