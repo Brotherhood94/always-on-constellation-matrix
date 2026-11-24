@@ -25,6 +25,8 @@ jobs:
       - run: bash integrations/context-execution/tests/isolated
       - run: docker build -t matrix-telegram-connector:0.2.1 integrations/telegram
       - run: bash integrations/telegram/tests/bridge-smoke
+      - run: docker build -t matrix-telegram-engine:0.1.2 integrations/telegram/engine
+      - run: bash integrations/telegram/tests/engine-smoke
       - run: sudo apt-get update && sudo apt-get install -y restic
       - run: sudo env VERIFY_RESTIC=1 bash tests/install-smoke
 
@@ -33,7 +35,17 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - run: tests/rootless-install
+      - name: Provision rootless Docker on the runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y uidmap slirp4netns docker-ce-rootless-extras
+          sudo loginctl enable-linger "$(id -un)"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          dockerd-rootless-setuptool.sh install --force
+          printf 'DOCKER_HOST=unix://%s/docker.sock\n' "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+      - name: Install and exercise the workspace as a regular user
+        run: CONSTELLATION_ROOTLESS_SMOKE=1 VERIFY_RESTIC=1 bash tests/install-smoke
 
   persona-workshop:
     runs-on: ubuntu-24.04

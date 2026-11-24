@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 here=$(cd -- "$(dirname -- "$0")/.." && pwd)
 fixture=$(mktemp -d /tmp/context-timeline.XXXXXXXX)
-prefix="context-timeline-${fixture##*.}"
+suffix=$(printf '%s' "${fixture##*.}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
+prefix="context-timeline-$suffix"
 neo4j="$prefix-db"
 server="$prefix-api"
 image="${CONTEXT_EXECUTION_TEST_IMAGE:-$prefix:isolated}"

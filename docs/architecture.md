@@ -9,3 +9,7 @@ The operator-managed registry drives provisioning and role capabilities. The das
 Agents submit scoped execution metadata to one Context Intelligence service. Context Intelligence attributes each write to the authenticated contributor. Neo4j stores the timeline relationships. Telegram and Root use separate workspace grants within the same service.
 
 See [communication policies](../policy/README.md), [installation and recovery](runbook.md), and [acceptance checks](acceptance.md).
+
+## Logo sources
+
+The diagram uses official service marks to identify the components of this independent project. The Element marks belong to Element Creations Ltd. The Matrix logo is a trademark of The Matrix.org Foundation. The PostgreSQL elephant is a trademark of the PostgreSQL Community Association. [Element](https://element.io/logo) · [Matrix.org](https://matrix.org/branding/) · [PostgreSQL](https://www.postgresql.org/about/press/presskit18/base/) · [Telegram](https://telegram.org/tour/screenshots) · [Tailscale](https://tailscale.com/press) · [Amplifier](https://github.com/microsoft/amplifier/tree/main/assets/branding)

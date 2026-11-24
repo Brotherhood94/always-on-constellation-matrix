@@ -69,17 +69,59 @@ for attempt in range(12):
 PYTHON
 printf '%s\n' 'Clean coordinator install, rerun and graph browser proxy verified.'
 if [[ $EUID != 0 ]]; then
+  cat > "$work/worker.json" <<'JSON'
+{
+  "key": "fixture-worker",
+  "name": "Fixture Worker",
+  "model": "gpt-6.2-sol",
+  "effort": "low",
+  "subscription": "Fixture secondary",
+  "profile": {
+    "role": "worker",
+    "limits": "Check synthetic files in Office.",
+    "capabilities": [
+      {"code": "verify-artifact", "description": "Check a fixture artifact.", "resources": ["task:*"]}
+    ]
+  }
+}
+JSON
+  "$src/constellation_matrix" --data-dir "$data" agent add --profile "$work/worker.json" \
+    --owner-password-file "$work/password"
+  cp "$data/workshop-management/targets.json" "$work/initial-targets.json"
+  "$src/constellation_matrix" --data-dir "$data" agent add --profile "$work/worker.json" \
+    --owner-password-file "$work/password"
   "$src/constellation_matrix" --data-dir "$data" status --refresh
-  python3 - "$data" <<'PYTHON'
+  python3 - "$data" "$work" <<'PYTHON'
 import json
 from pathlib import Path
 import sys
-from urllib.request import urlopen
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
-settings = json.loads((Path(sys.argv[1]) / 'settings.json').read_text())
+data, work = map(Path, sys.argv[1:])
+settings = json.loads((data / 'settings.json').read_text())
 assert settings['rootless'] and not settings['systemd']
-registry = json.loads((Path(sys.argv[1]) / 'agents.json').read_text())
+registry = json.loads((data / 'agents.json').read_text())
 assert registry['agents']['manager']['active'] is False
+worker = registry['agents']['fixture-worker']
+assert worker['active'] is False and worker['subscription'] == 'Fixture secondary'
+
+first = json.loads((work / 'initial-targets.json').read_text())
+targets = json.loads((data / 'workshop-management/targets.json').read_text())
+assert set(targets) == {'manager', 'fixture-worker'}
+for key in targets:
+    assert targets[key]['target'] == first[key]['target']
+
+matrix = f"http://127.0.0.1:{settings['matrix_port']}/_matrix/client/v3/"
+login = json.dumps({'type': 'm.login.password', 'identifier': {'type': 'm.id.user', 'user': 'operator'},
+                    'password': (work / 'password').read_text().strip()}).encode()
+with urlopen(Request(matrix + 'login', data=login, headers={'Content-Type': 'application/json'}), timeout=5) as response:
+    token = json.load(response)['access_token']
+office = quote(json.loads((data / 'rooms.json').read_text())['office'], safe='')
+with urlopen(Request(matrix + f'rooms/{office}/joined_members',
+                     headers={'Authorization': 'Bearer ' + token}), timeout=5) as response:
+    assert '@fixture-worker:fixture.test' in json.load(response)['joined']
+
 base = f"http://127.0.0.1:{settings['dashboard_port']}/"
 with urlopen(base + 'dashboard.mjs', timeout=5) as response:
     assert response.headers.get_content_type() == 'application/javascript'
@@ -87,8 +129,9 @@ with urlopen(base + 'links.json', timeout=5) as response:
     links = json.load(response)
     assert links['context'] == settings['context_url']
 with urlopen(base + 'agents.json', timeout=5) as response:
-    agents = json.load(response)['agents']
-    assert any(agent['name'] == 'Manager' and agent['status'] == 'Sign-in required' for agent in agents)
+    statuses = {agent['name']: agent['status'] for agent in json.load(response)['agents']}
+    assert statuses == {'Manager': 'Sign-in required', 'Fixture Worker': 'Sign-in required'}
+print('New agent joined Office once, retained its Workshop target, and appeared pending sign-in on the dashboard.')
 PYTHON
 fi
 if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then

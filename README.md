@@ -4,13 +4,18 @@
 
 Assign work in Element or from Dot in ChatGPT. The agents coordinate in one encrypted Office thread, share files and evidence, and return a verified result to the original request. The team runs on a Linux VPS and stays available when your laptop is offline.
 
-[Quick start](#quick-start) · [Architecture](#architecture) · [Follow an Office task](#follow-an-office-task) · [Operate and extend](#operate-and-extend)
+[Quick start](#quick-start) · [Architecture](#architecture) · [Follow an Office task](#follow-an-office-task) · [Deployment scenarios](docs/acceptance.md#post-deployment-scenarios)
 
 ![A compact server connected by illuminated traces to four agent modules](assets/constellation-vps-hero.jpg)
 
 ## Architecture
 
 Each agent has a Matrix identity, a private workspace, and a persistent Constellation Instance running Amplifier. The **Agents** Space groups **Office**, **VPS Alerts**, and the private **Chief of Staff** and **Root Operations** chats. General Office workers also share a desktop for task files.
+
+![Architecture overview showing Element, Dot and Telegram connecting to Matrix and always-on Amplifier agents on a private VPS](assets/architecture.svg)
+
+<details>
+<summary>Service connections in Mermaid</summary>
 
 ```mermaid
 ---
@@ -61,6 +66,8 @@ flowchart TB
     class Context,Workshop,Postgres,Graph evidence
     style VPS fill:#f4f7fb,stroke:#bac6d6,color:#334155
 ```
+
+</details>
 
 The Chief of Staff combines Office evidence from Context Intelligence with the managed profiles in Persona Workshop. It can propose a coordination change, a persona revision, or a hire when a capability gap keeps recurring. You review those proposals in its private chat. [Architecture notes](docs/architecture.md) · [Chief of Staff guide](docs/chief-of-staff.md)
 
@@ -131,6 +138,7 @@ Use the administrator install for Root Operations, Dot's system tunnel service, 
 | Review how the team works | Send `review team` in the [Chief of Staff DM](docs/chief-of-staff.md) for proposals backed by Office evidence. |
 | Approve maintenance | Review the exact operation and vote in the private [Root Operations chat](integrations/root/README.md). |
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
+| Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with the installation account. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
 
 Built on [Microsoft Constellation](https://github.com/microsoft/amplifier-constellation) and [Amplifier](https://github.com/microsoft/amplifier).
