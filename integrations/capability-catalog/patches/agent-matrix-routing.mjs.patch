@@ -1,0 +1,49 @@
+--- installed
++++ updated
+@@ -3,2 +3,3 @@
+ import { acceptedManaged, managedReply, replyLimit } from './managed-task.mjs';
++import { applyDispatch } from './capability-dispatch.mjs';
+ 
+@@ -12,3 +13,3 @@
+ export const mediaTypes = new Set(['m.file', 'm.image', 'm.audio', 'm.video']);
+-const replyControl = /(?:^|\n)(HANDOFF|HANDOFF_ROUTE|TASK_OUTCOME|ATTACH_FILES):[ \t]+([^\r\n]*)$/;
++const replyControl = /(?:^|\n)(HANDOFF|HANDOFF_ROUTE|TASK_OUTCOME|ATTACH_FILES|CAPABILITY_GAP):[ \t]+([^\r\n]*)$/;
+ const directRequests = [
+@@ -78,3 +79,3 @@
+ 
+-export function acceptedMessage(event, { roomId, owner, userId, agents, activatedAt, planner, displayNames = {} }) {
++export function acceptedMessage(event, { roomId, owner, userId, agents, activatedAt, planner, displayNames = {}, routingPolicy, acceptAttachments = true }) {
+   if (event?.room_id !== roomId || event.sender === userId ||
+@@ -85,2 +86,3 @@
+   const hasFile = mediaTypes.has(content?.msgtype);
++  if (hasFile && !acceptAttachments) return null;
+   if ((!hasFile && content?.msgtype !== 'm.text') || content[directReplyKey] === true || event.type !== 'm.room.message' ||
+@@ -117,3 +119,3 @@
+   }
+-  const managed = acceptedManaged(event, displayNames, userId, delegated, direct);
++  const managed = acceptedManaged(event, displayNames, userId, delegated, direct, routingPolicy);
+   if (managed === null) return null;
+@@ -121,3 +123,3 @@
+   if (hasFile) refs.set(event.event_id, true);
+-  if (event.sender === owner) {
++  if (acceptAttachments && event.sender === owner) {
+     for (const id of [relation?.['m.in_reply_to']?.event_id, relation?.rel_type === 'm.thread' && relation.event_id]) {
+@@ -125,3 +127,3 @@
+     }
+-  } else if (number > 1 && Array.isArray(content[attachmentKey])) {
++  } else if (acceptAttachments && number > 1 && Array.isArray(content[attachmentKey])) {
+     for (const id of content[attachmentKey]) {
+@@ -207,4 +209,4 @@
+ 
+-export function threadReply(event, reply, peers = [], requesterName, outcomeRecipients = [], delivery = {}) {
+-  const parts = replyParts(reply);
++export function threadReply(event, reply, peers = [], requesterName, outcomeRecipients = [], delivery = {}, decision) {
++  const parts = applyDispatch(replyParts(reply), decision);
+   const { body, outcome: declared, handoff } = parts;
+@@ -222,4 +224,4 @@
+   }
+-  const peer = handoff && peers.find(candidate => candidate.name === handoff);
+-  let outcome = event.replyTo || handoff ? null : declared;
++  const peer = parts.target || (handoff && peers.find(candidate => candidate.name === handoff));
++  let outcome = event.replyTo || peer || handoff ? null : declared;
+   if (!event.replyTo && peer && number === replyLimit) {

@@ -39,9 +39,13 @@ Start from a working Matrix and agent deployment. Obtain the matching Chief of S
 
 Reviews are currently started by the operator. Use the [collaboration scenarios](acceptance.md#chief-of-staff-collaboration-scenarios) to assess whether the evidence supports a workflow or persona change.
 
+With capability routing enabled, a confirmed capability gap starts a targeted review automatically. The same reader records the event and thread reference in Context Intelligence and groups reports by capability and resource. An isolated report recommends collecting evidence or adjusting the process. Reports from at least two distinct requests can support proposing a new role. The Chief of Staff mentions the operator privately and links the evidence. The operator chooses whether to act.
+
 ## Draft a persona
 
 Choose a role and an archived observation whose evidence supports a role-specific change. Replace `<observation-id>` with the archived ID from Context Intelligence.
+
+After approving a new role proposed in a capability review, use `persona draft PROPOSED_ROLE cos-gap-…` with the full observation ID shown in the private room. This creates a reviewable Persona Workshop draft.
 
 ```bash
 /opt/matrix-agents/chief-of-staff/persona/persona draft coder '<observation-id>'

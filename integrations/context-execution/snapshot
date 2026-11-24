@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+pilot=${COS_PILOT_DIR:-/opt/matrix-agents/chief-of-staff}
+state=${COS_STATE_DIR:-/srv/agents/chief-of-staff}
+export COS_MEMORY_STATE="$state/memory"
+project=${COS_CONTEXT_PROJECT:-matrix-context}
+worker=${COS_WORKER_IMAGE:-matrix-agents-connector:constellation-0.15.14}
+uid=${COS_READER_UID:-991:991}
+archive_image=matrix-context-intelligence:6.13.0-1622b48
+compose=(docker compose -p "$project" -f "$pilot/memory/compose.yaml")
+[[ $# == 2 && -d $2 ]] || { echo 'Use snapshot capture|verify SNAPSHOT_DIRECTORY.' >&2; exit 2; }
+destination="$2/chief-of-staff-memory"
+[[ $project =~ ^matrix-context(-[a-z0-9]+)?$ ]] || { echo 'Invalid Context Intelligence project.' >&2; exit 2; }
+
+graph_digest() {
+    docker run --rm --network "${project}_memory" --user "$uid" --read-only --cap-drop ALL \
+        --security-opt no-new-privileges --cgroup-parent matrix-workload.slice \
+        --volume "$pilot:/app/chief-of-staff:ro" \
+        --volume "$COS_MEMORY_STATE/reader-token:/reader-token:ro" \
+        "$worker" node /app/chief-of-staff/memory/store.mjs list |
+    python3 -B -c 'import hashlib,json,sys
+notes=sorted(json.load(sys.stdin), key=lambda note: note["observation_id"])
+print(hashlib.sha256(json.dumps(notes, sort_keys=True, ensure_ascii=True).encode()).hexdigest())'
+}
+
+volume_tar() {
+    local operation=$1 volume=$2
+    local mount="type=volume,source=${project}_$volume,target=/volume"
+    local args=(--rm --network none --user 0 --read-only --cgroup-parent matrix-workload.slice)
+    docker volume inspect "${project}_$volume" >/dev/null
+    if [[ $operation == capture ]]; then
+        docker run "${args[@]}" --mount "$mount,readonly" --entrypoint tar \
+            "$archive_image" --numeric-owner --sparse -C /volume -cf - .
+    else
+        docker run "${args[@]}" -i --mount "$mount" --entrypoint tar \
+            "$archive_image" --numeric-owner -C /volume -xpf -
+    fi
+}
+
+load_volumes() {
+    local keys
+    keys=$("${compose[@]}" config --format json | python3 -B -c '
+import json, sys
+config=json.load(sys.stdin)
+for service in ("context", "neo4j"):
+    matches=[v["source"] for v in config["services"][service]["volumes"] if v["type"] == "volume" and v["target"] == "/data"]
+    if len(matches) != 1 or matches[0] not in config["volumes"]:
+        raise SystemExit("Unexpected memory data volume")
+    print(matches[0])')
+    mapfile -t volumes <<< "$keys"
+}
+
+case $1 in
+    capture)
+        load_volumes
+        exec 9>"$state/operator.lock"
+        flock -w 30 9 || { echo 'Chief of Staff is busy.' >&2; exit 1; }
+        mkdir "$destination"
+        cp -a -- "$COS_MEMORY_STATE" "$destination/credentials"
+        cp -p -- "$pilot/memory/compose.yaml" "$destination/compose.yaml"
+        graph_digest > "$destination/observations.sha256"
+        restart() {
+            "${compose[@]}" up -d --no-build --wait --wait-timeout 120
+        }
+        trap restart EXIT
+        "${compose[@]}" stop --timeout 60 context
+        "${compose[@]}" stop --timeout 60 neo4j
+        for volume in "${volumes[@]}"; do
+            volume_tar capture "$volume" > "$destination/$volume.tar"
+        done
+        restart
+        trap - EXIT
+        echo 'Chief of Staff volumes captured.'
+        ;;
+    verify)
+        [[ -d $destination ]] || { echo 'The snapshot predates Chief of Staff memory integration.'; exit 0; }
+        restored=$(mktemp -d "$2/context-restore.XXXXXXXX")
+        suffix=$(basename -- "$restored" | tr '[:upper:]' '[:lower:]')
+        project="matrix-context-restore-${suffix##*.}"
+        compose=(docker compose -p "$project" -f "$destination/compose.yaml")
+        export COS_MEMORY_STATE="$restored/credentials"
+        cleanup() {
+            if "${compose[@]}" down --volumes; then rm -rf -- "$restored"; fi
+        }
+        cp -a -- "$destination/credentials" "$COS_MEMORY_STATE"
+        load_volumes
+        trap cleanup EXIT
+        "${compose[@]}" create --no-build
+        for volume in "${volumes[@]}"; do
+            volume_tar restore "$volume" < "$destination/$volume.tar"
+        done
+        "${compose[@]}" up -d --no-build --wait --wait-timeout 120
+        graph_digest > "$restored/observations.sha256"
+        cmp -- "$destination/observations.sha256" "$restored/observations.sha256"
+        cleanup
+        trap - EXIT
+        echo 'Isolated Chief of Staff memory restore passed.'
+        ;;
+    *) echo 'Use snapshot capture|verify SNAPSHOT_DIRECTORY.' >&2; exit 2 ;;
+esac

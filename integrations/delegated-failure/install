@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+[[ $EUID -eq 0 ]] || { echo 'Run this update from the macai root console.' >&2; exit 1; }
+release=$(cd -- "$(dirname -- "$0")" && pwd)
+project=/opt/matrix-agents
+override=$project/compose.override.yaml
+compose=(docker compose --project-directory "$project" --profile '*')
+services=(coder manager)
+files=(acp.mjs connector.mjs managed-task.mjs)
+exec 9>/run/lock/matrix-agent-catalog.lock
+flock -n 9
+[[ -f "$override" ]]
+
+candidate=$(mktemp -d "$project/delegated-failure.XXXXXXXX")
+install -d -m 0755 "$candidate/live"
+install -d -m 0700 "$candidate/previous"
+for service in "${services[@]}"; do
+  container=$("${compose[@]}" ps --status running --quiet "$service")
+  [[ -n "$container" ]] || { echo "$service is not running." >&2; exit 1; }
+  install -d -m 0700 "$candidate/previous/$service"
+  for file in "${files[@]}"; do
+    docker cp "$container:/app/$file" "$candidate/previous/$service/$file" >/dev/null
+    docker exec -i "$container" node --input-type=module --check < "$release/connector/$file"
+  done
+done
+
+python3 -B - "$project" "$release" "$candidate" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+import yaml
+
+project, release, candidate = map(Path, sys.argv[1:])
+expected = json.loads((release / 'expected.json').read_text())
+override = project / 'compose.override.yaml'
+config = yaml.safe_load(override.read_text())
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def destination(mount):
+    return mount['target'] if isinstance(mount, dict) else mount.split(':')[1]
+
+for name, checksums in expected.items():
+    checksums.append(digest(release / 'connector' / name))
+    for path in [project / 'connector' / name, *(candidate / 'previous' / service / name for service in ('coder', 'manager'))]:
+        if digest(path) not in checksums:
+            raise SystemExit(f'{path} differs from the supported connector baseline. No running files were changed.')
+
+targets = {f'/app/{name}' for name in expected}
+for service in ('coder', 'manager'):
+    entry = config['services'][service]
+    entry['volumes'] = [mount for mount in entry.get('volumes', []) if destination(mount) not in targets]
+    for name in expected:
+        entry['volumes'].append(dict(type='bind', source=str(candidate / 'live' / name),
+                                     target=f'/app/{name}', read_only=True))
+(candidate / 'next.yaml').write_text(yaml.safe_dump(config, sort_keys=False))
+PY
+
+cp -p -- "$override" "$candidate/previous/compose.override.yaml"
+for file in "${files[@]}"; do cp -p -- "$project/connector/$file" "$candidate/previous/$file"; done
+coder_container=$("${compose[@]}" ps --status running --quiet coder)
+docker logs --since 45m --timestamps "$coder_container" 2>&1 | awk '
+  $2 == "Constellation" && $3 == "turn" && $4 == "failed:" && NF == 5 &&
+  ($5 ~ /^-?[0-9]+$/ || $5 ~ /^(Error|TypeError|AbortError|ENOENT|EACCES|EPIPE)$/) {
+    stamp=$1; code=$5
+  }
+  END { if (code) print "Previous Coder failure in the last 45 minutes: " stamp " (" code ")." }
+' || true
+
+rollback() {
+  status=$?
+  trap - ERR
+  set +e
+  cp -p -- "$candidate/previous/compose.override.yaml" "$override"
+  for file in "${files[@]}"; do cp -p -- "$candidate/previous/$file" "$project/connector/$file"; done
+  "${compose[@]}" up -d --no-build --no-deps --force-recreate --wait --wait-timeout 95 "${services[@]}"
+  echo "Update failed. Previous files are in $candidate/previous." >&2
+  exit "$status"
+}
+
+trap rollback ERR
+chmod 0755 "$candidate"
+for file in "${files[@]}"; do
+  install -m 0644 "$release/connector/$file" "$candidate/live/$file"
+  install -m 0644 "$release/connector/$file" "$project/connector/$file"
+done
+install -m "$(stat -c %a "$override")" "$candidate/next.yaml" "$override"
+"${compose[@]}" config --quiet
+"${compose[@]}" up -d --no-build --no-deps --force-recreate --wait --wait-timeout 95 "${services[@]}"
+trap - ERR
+echo 'Coder now reports delegated runtime diagnostics and recovery steps to Manager.'
+printf 'Previous files: %s\n' "$candidate/previous"

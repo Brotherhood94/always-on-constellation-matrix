@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+here=$(cd -- "$(dirname -- "$0")/.." && pwd)
+fixture=$(mktemp -d /tmp/context-timeline.XXXXXXXX)
+prefix="context-timeline-${fixture##*.}"
+neo4j="$prefix-db"
+server="$prefix-api"
+image="${CONTEXT_EXECUTION_TEST_IMAGE:-$prefix:isolated}"
+cleanup() {
+  docker rm -f -v "$server" "$neo4j" >/dev/null 2>&1 || true
+  docker network rm "$prefix" >/dev/null 2>&1 || true
+  rm -rf -- "$fixture"
+}
+trap cleanup EXIT
+if [[ -z ${CONTEXT_EXECUTION_TEST_IMAGE:-} ]]; then
+  docker build --platform linux/amd64 -t "$image" "$here"
+fi
+python3 -B "$here/smoke.py" config > "$fixture/server.json"
+chmod 0755 "$fixture"
+chmod 0644 "$fixture/server.json"
+docker network create --internal "$prefix" >/dev/null
+docker run -d --name "$neo4j" --network "$prefix" --network-alias neo4j \
+  -e NEO4J_AUTH=none neo4j:5.26.22-community >/dev/null
+for attempt in $(seq 1 40); do
+  if docker exec "$neo4j" cypher-shell 'RETURN 1' >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+docker exec "$neo4j" cypher-shell 'RETURN 1' >/dev/null
+docker run -d --platform linux/amd64 --name "$server" --network "$prefix" --network-alias context \
+  -e AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE=/tmp/server.json \
+  -e CONTEXT_EXECUTION_MIN_EPOCH_MS=1700000000000 \
+  -v "$fixture/server.json:/tmp/server.json:ro" -v "$here/smoke.py:/tmp/smoke.py:ro" \
+  "$image" >/dev/null
+for attempt in $(seq 1 35); do
+  if [[ $(docker inspect -f '{{.State.Running}}' "$server") != true ]]; then break; fi
+  if docker exec "$server" /app/.venv/bin/python -c \
+    'import json, urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8000/status", timeout=3))["neo4j_connected"]' >/dev/null 2>&1; then
+    docker exec "$server" /app/.venv/bin/python /tmp/smoke.py
+    exit 0
+  fi
+  sleep 1
+done
+docker logs --tail 35 "$server" >&2
+exit 1

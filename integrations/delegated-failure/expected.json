@@ -1,0 +1,13 @@
+{
+  "acp.mjs": [
+    "cb8e41a00e7e674ed3fc273b928a3e8764d6a24513f50b405e88541d57ca4233",
+    "ec5961cb942857aa1c0bbc64fee6fbdd2decf62d1f330e8bc4285d985db1c9b6"
+  ],
+  "connector.mjs": [
+    "5b66aaf283131ed84c865af055fc1a719b81a546690352698c5ebbc11fb955f8"
+  ],
+  "managed-task.mjs": [
+    "02bcbf5c3a983c74a53735d3a5a1a853049384c8ccfc76406a73a36eb223dc54",
+    "2ab7b527147566dcbace01a6b0f71d24ea9915d816ef9c09a6da57083c4e982d"
+  ]
+}

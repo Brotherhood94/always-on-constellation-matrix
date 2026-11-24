@@ -1,0 +1,2438 @@
+"""Neo4j implementation of GraphStore and QueryableStore protocols.
+
+Provides a workspace-scoped, buffered graph store backed by Neo4j.
+Writes are buffered in memory and persisted via UNWIND-based batch Cypher on flush.
+Both ``GraphStore`` and ``QueryableStore`` protocols are satisfied.
+
+Canonical workspace naming is used throughout; all scoping is done via the
+``workspace`` attribute exclusively.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+from collections.abc import Generator
+from datetime import datetime
+from typing import Any, LiteralString, cast
+
+from neo4j import AsyncGraphDatabase
+from neo4j import unit_of_work as _unit_of_work
+from neo4j.exceptions import DriverError, Neo4jError
+
+from context_intelligence_server.config import Neo4jClientConfig
+from context_intelligence_server.execution_timeline import update_timelines
+from context_intelligence_server.graph_store import (
+    AmbiguousSessionError,
+    GraphDeleteResult,
+    SessionGraph,
+)
+
+_LOG = logging.getLogger(__name__)
+
+
+def build_bounded_neo4j_driver(
+    config: Neo4jClientConfig,
+    *,
+    max_connection_pool_size: int,
+    connection_acquisition_timeout: float | None = None,
+) -> Any:
+    """Construct an AsyncGraphDatabase driver with a bounded connection pool.
+
+    Single source of truth for the pool-bounding kwargs applied to any driver
+    meant to be shared across many logical callers (the lifespan admin driver,
+    the lifespan query driver, the registry's shared per-session driver). All
+    three construct through here so they can never diverge.
+
+    Args:
+        max_connection_pool_size:
+            Hard cap on concurrent bolt connections for this driver.
+        connection_acquisition_timeout:
+            How long a caller waits for a free pooled connection before
+            failing. ``None`` (the lifespan drivers) leaves the driver default
+            in place, matching what those two did before they were routed
+            through this helper. ``SessionRegistry`` passes
+            ``settings.neo4j_lock_timeout`` so the shared per-session driver
+            keeps the acquisition budget the per-session drivers it replaced
+            carried -- and it matters more now, not less: one bounded pool is
+            shared by every session, so acquisition can genuinely queue.
+
+    ``max_connection_lifetime`` is deliberately not set: the neo4j driver
+    already recycles pooled connections at 3600 s by default, so passing it
+    would be a knob that changes nothing.
+    """
+    kwargs: dict[str, Any] = {
+        "max_connection_pool_size": max_connection_pool_size,
+        # Explicit auto-retry budget for transient errors (e.g. deadlocks) so
+        # the managed-transaction retry window is deliberate and reviewable
+        # rather than relying on the driver default implicitly. Carried over
+        # verbatim from the per-session driver construction this helper
+        # subsumed.
+        "max_transaction_retry_time": 30.0,
+    }
+    if (
+        connection_acquisition_timeout is not None
+        and connection_acquisition_timeout > 0
+    ):
+        kwargs["connection_acquisition_timeout"] = connection_acquisition_timeout
+    return AsyncGraphDatabase.driver(config.url, auth=config.auth, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Cypher identifier validation
+# ---------------------------------------------------------------------------
+
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DEFAULT_EDGE_TYPE = "RELATED"
+
+# ---------------------------------------------------------------------------
+# Temporal property registry
+# ---------------------------------------------------------------------------
+# Every property name in this set is stored as a Neo4j ZONED DATETIME.
+#
+# On WRITE: _convert_temporal_props() parses ISO strings to Python datetime;
+#   the Neo4j driver then writes those datetime objects as ZONED DATETIME nodes.
+# On READ:  _normalize_temporal() converts neo4j.time.DateTime back to Python
+#   datetime objects.
+#
+# IMPORTANT: neo4j.time types must NEVER leave this module.
+#   services.py, pipeline.py, and handlers deal in Python stdlib types only.
+#
+# RULE: add a name here whenever you add a temporal property to any handler.
+#   Forgetting means the value lands as a plain string silently — no error,
+#   no warning, just wrong data.
+#
+# Note: last_updated is the one field that does NOT follow the *_at convention
+#   and is listed deliberately.  Do NOT replace this explicit set with a suffix
+#   heuristic — a heuristic would silently miss last_updated.
+#
+# FUTURE: when the first duration-typed property arrives, convert this frozenset
+#   to TEMPORAL_PROPERTIES: dict[str, type] and add neo4j.time.Duration to the
+#   _sanitize_properties allow-list at that point — not before.
+TEMPORAL_PROPS: frozenset[str] = frozenset(
+    {
+        "started_at",
+        "ended_at",
+        "occurred_at",
+        "completed_at",
+        "last_updated",  # only temporal field NOT ending in _at
+        "resumed_at",
+        "cancelled_at",
+        "last_loop_iteration_at",
+        "loop_completed_at",
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Terminal-label lattice
+# ---------------------------------------------------------------------------
+# The three terminal Session-type labels form a strict lattice:
+#   ForkedSession > SubSession > RootSession
+#
+# _LATTICE_NORMALIZATION is appended (in-line) to any Cypher SET statement
+# that adds at least one terminal label.  Running the normalization inside the
+# SAME Cypher statement as the SET ensures the node write-lock is still held
+# when the CASE WHEN conditions are evaluated, so the later-committing writer
+# in a concurrent two-drainer race always normalises to exactly one terminal.
+#
+# Race-safety guarantee (READ_COMMITTED):
+#   The naive "WHERE NOT n:ForkedSession … SET n:SubSession" pattern evaluates
+#   the guard at MATCH time and can re-introduce a dual if a SubSession SET
+#   commits after a concurrent ForkedSession SET.  By placing the REMOVE
+#   AFTER the SET (separated only by WITH n), the lock is already held before
+#   the CASE WHEN is evaluated, so no interleaving can escape normalisation.
+#
+# Invariants:
+#   • n:ForkedSession  → REMOVE n:SubSession, REMOVE n:RootSession
+#   • n:SubSession     → REMOVE n:RootSession  (only when ForkedSession absent)
+_TERMINAL_LABELS: frozenset[str] = frozenset(
+    {"ForkedSession", "SubSession", "RootSession"}
+)
+_LATTICE_NORMALIZATION = (
+    " WITH n"
+    " FOREACH (_ IN CASE WHEN n:ForkedSession THEN [1] ELSE [] END |"
+    " REMOVE n:SubSession REMOVE n:RootSession)"
+    " WITH n"
+    " FOREACH (_ IN CASE WHEN n:SubSession THEN [1] ELSE [] END |"
+    " REMOVE n:RootSession)"
+)
+
+# Universal node label.  EVERY node (Session and non-Session alike) carries
+# :Node, and there is a composite :Node(node_id, workspace) index.  This lets
+# the non-Session node MERGE seek the index instead of doing an AllNodesScan
+# over the whole graph (the 1.3M-node drain stall).  :Node is an *additional*
+# label only — it is never the sole identity of a node and never replaces a
+# type label, so it preserves the original label-free MERGE semantics: identity
+# is still (node_id, workspace), independent of which type labels a node has
+# accumulated across flush cycles.
+_UNIVERSAL_NODE_LABEL = "Node"
+
+# The non-Session node MERGE, extracted so tests can assert its query plan
+# (NodeIndexSeek, never AllNodesScan).  MERGE on the universal :Node label so
+# the composite :Node(node_id, workspace) index backs the lookup.
+# ON CREATE SET n.created_by: write-once provenance stamp — applied only when
+# the node is first created, never overwritten by subsequent updates.  The
+# value is passed as the $created_by query parameter (never in row.props so it
+# cannot affect node identity or uniqueness constraints).
+_NODE_MERGE_CYPHER = (
+    "UNWIND $rows AS row "
+    f"MERGE (n:{_UNIVERSAL_NODE_LABEL} "
+    "{node_id: row.node_id, workspace: row.props.workspace}) "
+    "ON CREATE SET n.created_by = $created_by "
+    "SET n += row.props"
+)
+
+# Single-node lookup-by-identity MATCH prefix, seeking the universal :Node
+# label so the composite :Node(node_id, workspace) index backs the lookup
+# (NodeIndexSeek) instead of an AllNodesScan.  Shared by every label-write
+# query in _write_batch (the per-node label SET and the label-patch add/remove)
+# so they are DRY and the tests can assert their query plan against the exact
+# production string.
+_NODE_MATCH_BY_ID = (
+    f"MATCH (n:{_UNIVERSAL_NODE_LABEL} {{node_id: $node_id, workspace: $workspace}})"
+)
+
+# Single-node read-by-identity, built on the shared _NODE_MATCH_BY_ID prefix so
+# it can never drift back to a label-free MATCH.  This is the get_node() Neo4j
+# fallback, which runs on the hot per-event path (touch_session -> get_node), so
+# it MUST plan as a NodeUniqueIndexSeek: as a label-free MATCH it planned as an
+# AllNodesScan over the whole graph and, at 12.09M nodes, took ~60s per call
+# while holding its pooled connection for the duration.
+_NODE_GET_BY_ID_CYPHER = (
+    f"{_NODE_MATCH_BY_ID} RETURN properties(n) AS props, labels(n) AS lbls"
+)
+
+# Single-edge read-by-endpoints, anchored on BOTH :Node endpoints so the
+# planner seeks the :Node(node_id, workspace) unique index twice and then walks
+# only that node's own relationships.
+#
+# The previous form was ``MATCH ()-[r]->() WHERE r.src_id = ... AND r.dst_id =
+# ... AND r.workspace = ...``: relationship property indexes in Neo4j are
+# TYPE-scoped, and this pattern names no type, so no index could back it and it
+# planned as an AllRelationshipsScan -- the same defect class as the label-free
+# get_node() MATCH, over a set that is larger still (a graph has more
+# relationships than nodes).
+#
+# The relationship-property predicates are deliberately RETAINED after the
+# anchor. They are now evaluated against the handful of relationships incident
+# to one node rather than every relationship in the graph, so they cost nothing
+# -- and keeping them makes this a strictly NARROWING change: any edge the old
+# form would have returned and the new one would not is one whose endpoints do
+# not exist as :Node, which the edge writer (_edge_merge_cypher, which MERGEs
+# both :Node endpoints) structurally cannot produce.
+_EDGE_GET_BY_ENDPOINTS_CYPHER = (
+    f"MATCH (src:{_UNIVERSAL_NODE_LABEL} "
+    "{node_id: $src_id, workspace: $workspace})-[r]->"
+    f"(dst:{_UNIVERSAL_NODE_LABEL} "
+    "{node_id: $dst_id, workspace: $workspace}) "
+    "WHERE r.src_id = $src_id AND r.dst_id = $dst_id "
+    "AND r.workspace = $workspace "
+    "RETURN properties(r) AS props"
+)
+
+# Delegation lookup by the session it spawned. Named here (rather than inlined
+# at the call site) so it sits beside the composite index that backs it --
+# idx_delegation_sub_session on :Delegation(sub_session_id, workspace), created
+# in ensure_neo4j_schema. The query shape was already correct; before that index
+# existed it simply had nothing to seek and planned as a NodeByLabelScan across
+# every :Delegation node.
+_DELEGATION_BY_SUB_SESSION_CYPHER = (
+    "MATCH (d:Delegation {sub_session_id: $sid, workspace: $workspace}) "
+    "RETURN properties(d) AS props"
+)
+
+
+def _edge_merge_cypher(edge_type: str) -> str:
+    """Return the UNWIND edge-MERGE query for *edge_type* — self-healing endpoints.
+
+    src/dst are ``MERGE``d (not ``MATCH``ed) on the universal :Node label, then the
+    relationship is ``MERGE``d.  ``MERGE`` on the composite :Node(node_id, workspace)
+    key uses a NodeIndexSeek (idx_node_universal / the :Node uniqueness constraint),
+    never an AllNodesScan, so the 1.3M-node index-seek behaviour from #19 is kept.
+
+    Why MERGE and not MATCH: the old ``MATCH (src) MATCH (dst)`` was an inner join
+    that SILENTLY dropped the edge whenever either endpoint was not yet committed
+    (the HAS_SUBSESSION parent-absent race — but pervasive: SOURCED_FROM and ~20
+    other edge types legitimately write edges to not-yet-committed endpoints).
+    ``MERGE`` creates a bare ``:Node`` placeholder for an absent endpoint instead
+    of dropping the edge; the placeholder converges with the later typed write
+    because every node writer keys identity on ``:Node`` (Session/Event/etc. add
+    their type label via ``SET``), backed by the :Node(node_id, workspace)
+    uniqueness constraint so concurrent MERGEs stay atomic.  Never-silent without
+    aborting the legitimate eventual-consistency ingest.
+
+    *edge_type* MUST already be validated via ``_validate_identifier`` by the
+    caller (it is interpolated into the Cypher, so it cannot be user input).
+    """
+    return (
+        "UNWIND $rows AS row "
+        f"MERGE (src:{_UNIVERSAL_NODE_LABEL} "
+        "{node_id: row.src_id, workspace: $workspace}) "
+        f"MERGE (dst:{_UNIVERSAL_NODE_LABEL} "
+        "{node_id: row.dst_id, workspace: $workspace}) "
+        f"MERGE (src)-[r:{edge_type}]->(dst) "
+        "ON CREATE SET r.created_by = $created_by "
+        "SET r += row.props"
+    )
+
+
+# Batch size for the one-time :Node backfill migration (CALL ... IN
+# TRANSACTIONS OF N ROWS).  A literal int is required by Cypher for the batch
+# size, so this constant is interpolated (never user-supplied).
+_NODE_BACKFILL_BATCH = 10_000
+
+# ---------------------------------------------------------------------------
+# Entry-session workspace discovery (resolve_session_graph/delete_session_graph)
+# ---------------------------------------------------------------------------
+# Neither method takes a workspace as input any more. Instead, this query
+# finds every ":Session" node with the given node_id -- no workspace filter
+# at all -- and returns the distinct set of workspace values found on those
+# nodes. Session ids are supposed to be unique, so in the normal case this
+# returns exactly one row (one workspace). Zero rows means the session id is
+# unknown anywhere. More than one distinct workspace means the same session
+# id exists in more than one workspace -- the caller must refuse and raise
+# rather than silently pick one and risk resolving (or deleting) the wrong
+# graph.
+_ENTRY_SESSION_WORKSPACE_CYPHER = (
+    "MATCH (start:Session {node_id: $session_id}) "
+    "RETURN DISTINCT start.workspace AS workspace"
+)
+
+# ---------------------------------------------------------------------------
+# Session-graph resolution (resolve_session_graph)
+# ---------------------------------------------------------------------------
+# Graph membership is defined purely via HAS_SUBSESSION/FORKED edges, which
+# _handle_start/_handle_fork (session.py) create exactly once per session as
+# it is classified -- each session has at most one such incoming edge, so the
+# graph is a tree (no cycles, unique parent).
+#
+# $workspace here is the workspace ALREADY DISCOVERED by
+# _ENTRY_SESSION_WORKSPACE_CYPHER above, not something the caller supplied --
+# by the time this query runs, the caller has already confirmed $session_id
+# lives in exactly this one workspace, so scoping every step of the walk by
+# it keeps the whole resolution inside that one workspace.
+#
+# Step 1: expand UP from $session_id via incoming HAS_SUBSESSION/FORKED edges.
+# OPTIONAL MATCH returns one row per ancestor found (or one null row if
+# $session_id is already the root); the ancestor reached by the LONGEST
+# upward path is the root, by construction of the tree (no bound needed --
+# the walk always terminates because the graph is acyclic).
+# Step 2: expand DOWN from that root via the same edge types, `*0..` so the
+# root itself is included, to enumerate every graph member.
+_GRAPH_RESOLVE_CYPHER = (
+    "MATCH (start:Session {node_id: $session_id, workspace: $workspace}) "
+    "OPTIONAL MATCH p = (start)<-[:HAS_SUBSESSION|FORKED*]-(ancestor:Session {workspace: $workspace}) "
+    "WITH start, ancestor, p "
+    "ORDER BY length(p) DESC "
+    "LIMIT 1 "
+    "WITH coalesce(ancestor, start) AS root "
+    "MATCH (root:Session)-[:HAS_SUBSESSION|FORKED*0..]->(member:Session {workspace: $workspace}) "
+    "RETURN DISTINCT member.node_id AS session_id, root.node_id AS root_id, "
+    "properties(member) AS props"
+)
+
+# Graph subgraph traversal -- collected by a frontier BFS in the application
+# layer (``_collect_graph_node_ids``), NOT a single variable-length path query.
+#
+# A ``MATCH path = (s)-[*0..]->(n) WHERE ALL(x IN nodes(path) ...)`` binds the
+# path and inspects its nodes, which disqualifies Neo4j's pruning var-length
+# expansion: the planner must enumerate EVERY path before it can dedupe nodes.
+# A parallel tool-call / delegation group is written as a transitive tournament
+# (each member edged to every prior member -- see data_layer_2/tool_call.py and
+# data_layer_3/delegation.py), and a tournament on k nodes has Theta(2^k) paths,
+# so a single k~20 group would enumerate ~1e6 paths on both delete and summary.
+#
+# These two one-hop queries drive a visited-set BFS instead: expand only FROM
+# non-concept nodes, so a :SST_CONCEPT node (Agent/Orchestrator/Recipe, shared
+# across graphs) is INCLUDED when reached but never expanded THROUGH -- the same
+# boundary rule, at O(nodes + edges) with every node and edge visited once.
+
+# Resolve the seed session nodes to their elementIds (the BFS start frontier).
+_GRAPH_SEED_ELEMENT_IDS_CYPHER = (
+    "UNWIND $session_ids AS sid "
+    "MATCH (s:Session {node_id: sid, workspace: $workspace}) "
+    "RETURN elementId(s) AS eid"
+)
+
+# One BFS hop: every outgoing edge from a frontier node to an in-workspace node.
+# ``(a WHERE elementId(a) = eid)`` is a direct NodeByElementIdSeek (the inline
+# form keeps it off the label-free-scan tripwire); the caller supplies only
+# non-concept frontier ids, so this never expands through a boundary concept.
+_GRAPH_EXPAND_HOP_CYPHER = (
+    "UNWIND $frontier AS eid "
+    "MATCH (a WHERE elementId(a) = eid)-[r]->(b {workspace: $workspace}) "
+    "RETURN elementId(r) AS rid, elementId(b) AS bid, b:SST_CONCEPT AS is_concept"
+)
+
+# Distinct count of relationships incident (either direction) to any of the
+# owned nodes named in $element_ids -- exactly the set DETACH DELETE removes.
+# Must run BEFORE the delete batches below (the relationships are gone after).
+_GRAPH_REL_COUNT_CYPHER = (
+    "UNWIND $element_ids AS eid "
+    "MATCH (n) WHERE elementId(n) = eid "
+    "OPTIONAL MATCH (n)-[r]-() "
+    "RETURN count(DISTINCT r) AS rel_count"
+)
+
+# 2-phase delete primitive: enumerate elementIds (above), then DETACH DELETE
+# by elementId in batches -- the proven pattern from ci_session_purge, which
+# deleted a 2601-node graph this way. DETACH DELETE on an owned node removes
+# every relationship touching it, including any edge into a surviving
+# :SST_CONCEPT node -- that edge's removal IS the "detach" the design calls for.
+_GRAPH_DELETE_BATCH_CYPHER = (
+    "UNWIND $element_ids AS eid "
+    "MATCH (n) WHERE elementId(n) = eid "
+    "DETACH DELETE n"
+)
+
+# elementId-list existence count -- shared by both post-delete gate checks
+# (owned nodes must be gone, concept nodes must survive).
+_COUNT_NODES_BY_ELEMENT_ID_CYPHER = (
+    "UNWIND $element_ids AS eid "
+    "MATCH (n) WHERE elementId(n) = eid "
+    "RETURN count(n) AS c"
+)
+
+# Row cap per DETACH DELETE batch. elementId strings are tiny, so only the row
+# bound matters in practice; the byte bound is kept generous as a defensive
+# ceiling, mirroring the dual-bound _chunk_list contract used by the flush path.
+_DELETE_BATCH_ROWS = 500
+_DELETE_BATCH_BYTES = 10_000_000
+
+
+def _validate_identifier(name: str, kind: str) -> None:
+    """Raise ``ValueError`` if *name* is not a safe Neo4j label / relationship-type identifier.
+
+    Accepts only ``[A-Za-z_][A-Za-z0-9_]*`` — i.e. no spaces, hyphens, parentheses,
+    or other characters that could be exploited for Cypher injection.
+
+    Args:
+        name: The identifier string to validate.
+        kind: Human-readable category used in the error message (e.g. ``"label"``).
+
+    Raises:
+        ValueError: If *name* contains unsafe characters.
+    """
+    if not _SAFE_IDENTIFIER_RE.match(name):
+        raise ValueError(f"Invalid Neo4j {kind} identifier: {name!r}")
+
+
+def _convert_temporal_props(props: dict[str, Any]) -> None:
+    """Parse ISO-8601 strings to Python ``datetime`` objects for registered temporal properties.
+
+    Mutates *props* in place; returns ``None``.
+
+    Rules:
+    - Iterates over ``TEMPORAL_PROPS``; skips keys absent from *props*.
+    - Skips values that are not ``str`` or are empty strings (already ``datetime``
+      or other type, or empty string handled downstream by ``_sanitize_properties``).
+    - Parses non-empty strings via ``datetime.fromisoformat`` (Python 3.11+
+      accepts trailing ``Z`` as a synonym for ``+00:00``).
+    - On ``ValueError``, logs a WARNING including the key and value, leaves the
+      value unchanged, and does NOT raise (non-fatal).
+
+    Must be called as a statement before ``_sanitize_properties``:
+        ``_convert_temporal_props(props)``
+        ``props = Neo4jGraphStore._sanitize_properties(props)``
+    Never chain: ``props = _convert_temporal_props(props)``  — returns ``None``.
+    """
+    for key in TEMPORAL_PROPS:
+        if key not in props:
+            continue
+        value = props[key]
+        if not isinstance(value, str) or value == "":
+            continue
+        try:
+            props[key] = datetime.fromisoformat(value)
+        except ValueError:
+            _LOG.warning(
+                "_convert_temporal_props: could not parse %r=%r as ISO 8601 datetime; "
+                "leaving value unchanged",
+                key,
+                value,
+            )
+
+
+def _normalize_temporal(value: Any) -> Any:
+    """Convert neo4j.time.DateTime to Python datetime via .to_native().
+
+    The Neo4j driver returns temporal properties as neo4j.time.DateTime;
+    convert to Python datetime via .to_native() so no neo4j.time type ever
+    leaves this module; all other values returned unchanged.
+
+    This is the read-path half of the type boundary,
+    _convert_temporal_props is the write-path half.
+
+    Rationale: getattr (not isinstance against neo4j.time.DateTime) avoids
+    importing the driver's temporal class at module top-level and transparently
+    handles Date, Time, and DateTime (all expose .to_native()); plain
+    Python/JSON values have no .to_native() and pass straight through.
+    """
+    to_native = getattr(value, "to_native", None)
+    if callable(to_native):
+        return to_native()
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Benign schema-error allow-list for constraint creation.
+# ---------------------------------------------------------------------------
+# These four codes are the ONLY ones treated as benign when CREATE CONSTRAINT
+# fails — benign concurrent-create-race / already-exists codes (incl.
+# DeadlockDetected from a concurrent CREATE CONSTRAINT race). Every one is kept
+# deliberately, and none can mask data corruption:
+#
+#   * Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists
+#   * Neo.TransientError.Transaction.DeadlockDetected
+#   * Neo.ClientError.Schema.IndexWithNameAlreadyExists
+#   * Neo.ClientError.Schema.ConstraintWithNameAlreadyExists
+#
+# Rationale:
+#   - Real duplicate data NEVER surfaces as one of these — it surfaces as a
+#     DIFFERENT code, Neo.ClientError.Schema.ConstraintCreationFailed, which is
+#     deliberately NOT in this set and is surfaced at ERROR.
+#   - IndexWithNameAlreadyExists is the actual production-observed symptom of a
+#     concurrent-schema race (a backing index already present).
+#   - DeadlockDetected is NOT an "already exists" signal: it is the empirically
+#     verified CONCURRENT-CREATE RACE loser — a second worker issuing the same
+#     CREATE CONSTRAINT at the same time loses the deadlock. It is benign because
+#     the winner creates the constraint.
+#   - EquivalentSchemaRuleAlreadyExists and DeadlockDetected were reproduced by
+#     an empirical spike on neo4j:5.26.22-community / driver 6.1.0.
+#
+# Note: this benign-code set is NOT shared with _create_index above, which keys
+# only off EquivalentSchemaRuleAlreadyExists. What the constraint blocks below
+# and _create_index DO share (after widening _create_index) is the DriverError
+# tolerance: a non-Neo4jError connectivity DriverError is logged and swallowed
+# rather than re-raised into the flush path.
+_BENIGN_SCHEMA_CODES: frozenset[str] = frozenset(
+    {
+        "Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists",
+        "Neo.TransientError.Transaction.DeadlockDetected",
+        "Neo.ClientError.Schema.IndexWithNameAlreadyExists",
+        "Neo.ClientError.Schema.ConstraintWithNameAlreadyExists",
+    }
+)
+
+# ---------------------------------------------------------------------------
+# Fail-loud guard for the :Node uniqueness constraint (Step 6 below).
+#
+# These are the Neo4j error codes that mean "the constraint could not be
+# created because existing data violates it" -- i.e. the graph still has
+# untagged/duplicate legacy nodes. This is NOT benign like the codes above
+# (already-exists / concurrent-creation races); it means the migration
+# (dedup + :Node backfill) has never been run against this graph, and cold
+# start must refuse to silently proceed (re-keyed writers could fork a
+# legacy node's identity). Distinguished from _BENIGN_SCHEMA_CODES so the two
+# cases route to different outcomes: benign -> swallow, data-conflict -> raise.
+# ---------------------------------------------------------------------------
+_CONSTRAINT_DATA_CONFLICT_CODES: frozenset[str] = frozenset(
+    {
+        "Neo.ClientError.Schema.ConstraintValidationFailed",
+        "Neo.DatabaseError.Schema.ConstraintCreationFailed",
+    }
+)
+
+
+def _is_constraint_data_conflict(exc: Exception) -> bool:
+    """Return True when *exc* means a uniqueness constraint could not be
+    created because pre-existing data violates it (untagged/duplicate legacy
+    nodes), as opposed to a benign already-exists/concurrent-race error.
+
+    Kept as a standalone predicate (rather than inlined) so it is directly
+    unit-testable without needing a real Neo4jError from a live driver.
+    """
+    code = getattr(exc, "code", None)
+    return code in _CONSTRAINT_DATA_CONFLICT_CODES
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-node detection/removal Cypher.
+#
+# One shared detection subquery (_DUPLICATE_DETECT_CYPHER) backs both the
+# read-only count (count_duplicate_nodes) and the actual removal
+# (dedup_duplicate_nodes) -- single logic home, never copy-pasted.
+# ---------------------------------------------------------------------------
+_DUPLICATE_DETECT_CYPHER = (
+    "MATCH (n) "
+    "WITH n.node_id AS nid, n.workspace AS ws, collect(n) AS nodes "
+    "WHERE size(nodes) > 1 "
+    # keep the node carrying the most labels (typed > bare placeholder)
+    "WITH nodes, reduce(best = nodes[0], x IN nodes | "
+    "CASE WHEN size(labels(x)) > size(labels(best)) THEN x ELSE best END) "
+    "AS keep "
+    "UNWIND [x IN nodes WHERE x <> keep] AS duplicate"
+)
+_DEDUP_GLOBAL_CYPHER = (
+    f"{_DUPLICATE_DETECT_CYPHER} DETACH DELETE duplicate RETURN count(duplicate) AS c"
+)
+_DUPLICATE_COUNT_CYPHER = f"{_DUPLICATE_DETECT_CYPHER} RETURN count(duplicate) AS c"
+
+_DEDUP_SESSION_CYPHER = (
+    "MATCH (s:Session) "
+    "WITH s.node_id AS nid, s.workspace AS ws, collect(s) AS nodes "
+    "WHERE size(nodes) > 1 "
+    "UNWIND tail(nodes) AS duplicate "
+    "DETACH DELETE duplicate "
+    "RETURN count(duplicate) AS c"
+)
+_DEDUP_EVENT_CYPHER = (
+    "MATCH (e:Event) "
+    "WITH e.node_id AS nid, e.workspace AS ws, collect(e) AS nodes "
+    "WHERE size(nodes) > 1 "
+    "UNWIND tail(nodes) AS duplicate "
+    "DETACH DELETE duplicate "
+    "RETURN count(duplicate) AS c"
+)
+
+# Shared by backfill_node_labels (pre/post count) -- single logic home for the
+# ":Node label missing" count. This is an AllNodesScan (O(graph-size)); kept
+# ONLY for backfill_node_labels's pre/post accounting during a doctor --fix
+# repair (an already-expensive O(graph-size) write operation, so an extra
+# O(graph-size) read alongside it is not a new cost). NOT used by
+# count_untagged_nodes below -- that needs an O(1) answer since it now also
+# runs on every server boot (see the counts-store queries below).
+_UNTAGGED_COUNT_CYPHER = (
+    f"MATCH (n) WHERE NOT n:{_UNIVERSAL_NODE_LABEL} RETURN count(n) AS c"
+)
+
+# O(1) counts-store queries used by count_untagged_nodes. Neo4j maintains a
+# label-cardinality counts store, so "MATCH (n) RETURN count(n)" and
+# "MATCH (n:Label) RETURN count(n)" are answered directly from that store
+# (NodeCountFromCountStore in EXPLAIN) without touching any node -- unlike
+# "MATCH (n) WHERE NOT n:Label RETURN count(n)", which the planner cannot
+# answer from the counts store and instead executes as an AllNodesScan
+# (confirmed via EXPLAIN against a live Neo4j 5.26 instance). Untagged count
+# is therefore computed as the difference of two O(1) counts rather than a
+# single O(graph-size) scan.
+_TOTAL_NODE_COUNT_CYPHER = "MATCH (n) RETURN count(n) AS c"
+_TAGGED_NODE_COUNT_CYPHER = f"MATCH (n:{_UNIVERSAL_NODE_LABEL}) RETURN count(n) AS c"
+
+
+async def _run_single_count(session: Any, statement: str) -> int:
+    """Run *statement* (expected to ``RETURN ... AS c``) and return that int.
+
+    Reads via ``async for`` (rather than ``.single()``) so this works against
+    both the real async driver and the test-suite's mock session, which only
+    implements async iteration.
+    """
+    result = await session.run(statement)
+    async for record in result:
+        return int(record["c"])
+    return 0
+
+
+async def dedup_duplicate_nodes(driver: Any, database: str = "neo4j") -> int:
+    """Best-effort removal of duplicate (node_id, workspace) nodes.
+
+    Extracted from what was formerly Step 1 of ``ensure_neo4j_schema`` so it
+    is no longer a per-boot cost -- it now runs ONLY when explicitly invoked
+    (via ``run_repair`` / ``context-intelligence-server doctor --fix``), never
+    on cold start. This is an O(graph-size) full scan; on an already-migrated
+    graph it is pure dead weight, which is exactly why it was moved out of the
+    hot path.
+
+    Three passes, all against the same shared detection query
+    (see module docstring above): global by (node_id, workspace) across every
+    label (required for the :Node uniqueness constraint), then Session- and
+    Event-specific passes (redundant after the global pass, but cheap and
+    explicit). Each pass keeps the richest node (most labels) and
+    ``DETACH DELETE``s the rest.
+
+    Best-effort: a failing pass is logged and treated as 0 removed for that
+    pass; it does not abort the remaining passes.
+
+    Returns:
+        Total number of duplicate nodes removed across all three passes.
+    """
+    removed = 0
+    async with driver.session(database=database) as session:
+        for statement in (
+            _DEDUP_GLOBAL_CYPHER,
+            _DEDUP_SESSION_CYPHER,
+            _DEDUP_EVENT_CYPHER,
+        ):
+            try:
+                removed += await _run_single_count(session, statement)
+            except Exception as exc:  # noqa: BLE001
+                _LOG.warning("dedup_duplicate_nodes: pass failed (non-fatal): %s", exc)
+    return removed
+
+
+async def backfill_node_labels(driver: Any, database: str = "neo4j") -> int:
+    """Best-effort tagging of legacy nodes with the universal ``:Node`` label.
+
+    Extracted from what was formerly Step 5 of ``ensure_neo4j_schema`` so it
+    is no longer a per-boot cost -- it now runs ONLY when explicitly invoked
+    (via ``run_repair`` / ``context-intelligence-server doctor --fix``), never
+    on cold start. This is an O(graph-size) full scan; on an already-migrated
+    graph it is pure dead weight.
+
+    Nodes written before the universal ``:Node`` label existed have no
+    ``:Node`` label, so the indexed MERGE used by writers would CREATE a
+    duplicate of them rather than match them. Tagging every such node makes
+    the universal-identity model consistent graph-wide.
+
+    Batched + idempotent: ``CALL (n) { ... } IN TRANSACTIONS`` commits in
+    chunks (so large graphs don't blow the per-transaction memory cap), and
+    the ``WHERE NOT n:Node`` guard makes re-runs converge to a no-op once the
+    graph is fully tagged.
+
+    Returns:
+        Number of nodes newly tagged (best-effort; 0 if the count could not
+        be determined, e.g. a pre/post count query failed).
+    """
+    async with driver.session(database=database) as session:
+        try:
+            before = await _run_single_count(session, _UNTAGGED_COUNT_CYPHER)
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning("backfill_node_labels: pre-count failed (non-fatal): %s", exc)
+            return 0
+
+        try:
+            await session.run(
+                cast(
+                    LiteralString,
+                    f"MATCH (n) WHERE NOT n:{_UNIVERSAL_NODE_LABEL} "
+                    f"CALL (n) {{ SET n:{_UNIVERSAL_NODE_LABEL} }} "
+                    f"IN TRANSACTIONS OF {int(_NODE_BACKFILL_BATCH)} ROWS",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOG.warning(
+                "backfill_node_labels: :Node backfill did not complete "
+                "(non-fatal, re-run doctor --fix): %s",
+                exc,
+            )
+
+        try:
+            remaining = await _run_single_count(session, _UNTAGGED_COUNT_CYPHER)
+        except Exception as exc:  # noqa: BLE001 - observability only
+            _LOG.debug("backfill_node_labels: post-count skipped (benign): %s", exc)
+            return 0
+
+        if remaining:
+            _LOG.warning(
+                "backfill_node_labels: :Node backfill incomplete -- %d node(s) "
+                "still lack the :Node label; re-run doctor --fix.",
+                remaining,
+            )
+        else:
+            _LOG.info("backfill_node_labels: :Node backfill complete (0 untagged).")
+        return max(before - remaining, 0)
+
+
+async def count_untagged_nodes(driver: Any, database: str = "neo4j") -> int:
+    """Read-only: number of nodes still lacking the universal ``:Node`` label.
+
+    O(1) via the counts store: computed as (total node count) minus (:Node
+    count), each answered directly from Neo4j's label-cardinality counts
+    store (NodeCountFromCountStore) -- NOT via the ``WHERE NOT n:Node`` full
+    scan (AllNodesScan) that ``_UNTAGGED_COUNT_CYPHER`` performs. This
+    function is called from ``diagnose`` (doctor) AND from the server's
+    startup health check on every boot, so it must stay O(1) regardless of
+    graph size -- an AllNodesScan here is exactly the 25-30s stall PR #67
+    removed from the write path; re-introducing it via a health check would
+    regress the same problem via a different door.
+
+    No writes. Safe to call at any time, including on every request if needed.
+    """
+    async with driver.session(database=database) as session:
+        total = await _run_single_count(session, _TOTAL_NODE_COUNT_CYPHER)
+        tagged = await _run_single_count(session, _TAGGED_NODE_COUNT_CYPHER)
+        return max(total - tagged, 0)
+
+
+async def count_duplicate_nodes(driver: Any, database: str = "neo4j") -> int:
+    """Read-only: number of duplicate (node_id, workspace) nodes graph-wide.
+
+    Reuses the same detection subquery as ``dedup_duplicate_nodes`` (single
+    logic home) but only counts -- no writes.
+    """
+    async with driver.session(database=database) as session:
+        return await _run_single_count(session, _DUPLICATE_COUNT_CYPHER)
+
+
+async def diagnose(driver: Any, database: str = "neo4j") -> dict[str, int]:
+    """Read-only graph health diagnosis (no writes).
+
+    Returns:
+        ``{"untagged_nodes": int, "duplicate_nodes": int}``. Zero on both
+        means the graph is fully migrated and the :Node uniqueness
+        constraint can be safely established at cold start.
+    """
+    return {
+        "untagged_nodes": await count_untagged_nodes(driver, database=database),
+        "duplicate_nodes": await count_duplicate_nodes(driver, database=database),
+    }
+
+
+async def run_repair(driver: Any, database: str = "neo4j") -> dict[str, int]:
+    """Repair core: dedup -> :Node backfill -> schema DDL. Idempotent.
+
+    This is the shared logic behind ``context-intelligence-server doctor
+    --fix``. It is the ONLY place these O(graph-size) migrations run --
+    never on cold start (see ``ensure_neo4j_schema``, which no longer calls
+    either).
+
+    Returns:
+        ``{"duplicates_removed": int, "nodes_tagged": int}``.
+    """
+    duplicates_removed = await dedup_duplicate_nodes(driver, database=database)
+    nodes_tagged = await backfill_node_labels(driver, database=database)
+    # After dedup + backfill the graph should be clean, so fail CLOSED here:
+    # if the :Node constraint still can't be created, that's a real repair
+    # failure the operator needs to see, not something to silently swallow.
+    await ensure_neo4j_schema(driver, database=database, fail_on_data_conflict=True)
+    return {
+        "duplicates_removed": duplicates_removed,
+        "nodes_tagged": nodes_tagged,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Process-wide schema latch.
+#
+# ``ensure_neo4j_schema`` has two callers whose SCOPES differ, and conflating
+# them is what turned a connectivity blip into a per-flush DDL storm:
+#
+#   - The FastAPI lifespan (``main.py``) runs it ONCE PER PROCESS, before the
+#     server accepts a single request, with ``fail_on_data_conflict=True`` --
+#     it refuses to boot unless the schema is fully established.
+#   - ``Neo4jGraphStore._ensure_schema`` runs it from inside ``_flush_body``,
+#     latched on ``self._schema_initialized`` -- a PER-STORE flag, and a store
+#     is constructed PER SESSION (``registry.get_or_create``).
+#
+# So the per-store latch made every new session pay a full ~11-statement DDL
+# pass on its first flush, and -- whenever that pass could not complete -- pay
+# it again on EVERY subsequent flush of EVERY session, with no backoff. Each
+# attempt opens a session and issues ~11 sequential catalog statements, every
+# one of which must acquire a pooled bolt connection; under pool starvation
+# each acquisition burns the full acquisition timeout before failing. That is
+# a large, futile, self-reinforcing load applied at exactly the moment the
+# pool is already exhausted, and it runs BEFORE any data is written
+# (``_flush_body`` awaits ``_ensure_schema`` ahead of Phase 1).
+#
+# Two changes fix that without weakening the self-heal:
+#
+#   1. ``_SCHEMA_READY`` is PROCESS-wide. The lifespan seeds it via
+#      ``mark_schema_ready()`` once its own fail-closed pass succeeds, so in
+#      the server the per-flush call becomes a single boolean read forever --
+#      it can never discover anything cold start did not already establish.
+#      Contexts with no lifespan (tests, CLI tools, direct store use) never
+#      seed it and keep today's behaviour: the first store to fully establish
+#      the schema sets it for the process.
+#   2. A failed pass no longer retries on the very next flush.
+#      ``_SCHEMA_RETRY_BACKOFF_SECONDS`` puts a floor between attempts, so a
+#      connectivity blip can no longer become a per-flush storm. The self-heal
+#      survives -- it just stops competing with the writes it is meant to
+#      enable.
+# ---------------------------------------------------------------------------
+_SCHEMA_RETRY_BACKOFF_SECONDS = 30.0
+
+_SCHEMA_READY: bool = False
+_SCHEMA_LAST_ATTEMPT: float | None = None
+
+
+def mark_schema_ready() -> None:
+    """Record that the Neo4j schema is fully established for THIS process.
+
+    Called by the FastAPI lifespan after its own fail-closed
+    ``ensure_neo4j_schema(..., fail_on_data_conflict=True)`` pass succeeds, and
+    by any store whose own pass fully establishes the schema. Once set, every
+    per-flush ``_ensure_schema`` call short-circuits to a boolean read.
+    """
+    global _SCHEMA_READY
+    _SCHEMA_READY = True
+
+
+def schema_ready() -> bool:
+    """Whether the schema has been fully established in this process."""
+    return _SCHEMA_READY
+
+
+def reset_schema_state() -> None:
+    """Clear the process-wide schema latch and backoff clock.
+
+    Exists for tests: the latch is deliberately process-global, so without an
+    explicit reset one test that establishes the schema would silently suppress
+    the schema path in every test that ran after it.
+    """
+    global _SCHEMA_READY, _SCHEMA_LAST_ATTEMPT
+    _SCHEMA_READY = False
+    _SCHEMA_LAST_ATTEMPT = None
+
+
+def _schema_retry_allowed() -> bool:
+    """Whether enough time has passed since the last un-latched schema attempt.
+
+    Records the attempt time as a side effect when it returns True, so two
+    concurrent flushes cannot both decide to run a full DDL pass.
+    """
+    global _SCHEMA_LAST_ATTEMPT
+    now = time.monotonic()
+    if (
+        _SCHEMA_LAST_ATTEMPT is not None
+        and now - _SCHEMA_LAST_ATTEMPT < _SCHEMA_RETRY_BACKOFF_SECONDS
+    ):
+        return False
+    _SCHEMA_LAST_ATTEMPT = now
+    return True
+
+
+async def ensure_neo4j_schema(
+    driver: Any,
+    database: str = "neo4j",
+    workspace: str = "",
+    *,
+    fail_on_data_conflict: bool = False,
+) -> bool:
+    """Create Neo4j indexes and constraints idempotently.
+
+    Intended to be called **once at server startup** (before any requests are
+    accepted) so that the uniqueness constraint on Session nodes is active before
+    concurrent ``flush()`` transactions execute ``MERGE``.
+
+    IMPORTANT (post-migration-extraction): this function no longer runs the
+    duplicate-node dedup pass or the ``:Node`` label backfill -- those were
+    O(graph-size) full scans that used to run on every cold start regardless
+    of whether the graph needed them (pure dead weight once a graph is
+    migrated). They are now standalone functions (``dedup_duplicate_nodes``,
+    ``backfill_node_labels``) invoked explicitly via ``run_repair`` /
+    ``context-intelligence-server doctor --fix``, never automatically at
+    startup. This function only creates cheap, idempotent (``IF NOT EXISTS``)
+    catalog objects -- indexes and uniqueness constraints -- which are no-ops
+    on an already-migrated graph.
+
+    Because the dedup/backfill no longer run here, the ``:Node`` uniqueness
+    constraint (Step 6) can fail if the graph still has untagged/duplicate
+    legacy nodes. Whether that failure raises or is swallowed depends on
+    *fail_on_data_conflict* (see below) -- this function has TWO callers with
+    OPPOSITE correctness requirements:
+
+    - **Cold start** (the lifespan handler, ``main.py``): must fail CLOSED.
+      Refusing to boot against an un-migrated graph is correct -- pass
+      ``fail_on_data_conflict=True``.
+    - **Mid-flight flush** (``Neo4jGraphStore._ensure_schema``, called from
+      inside ``_flush_body``'s try block on every flush until the schema
+      latches): must NOT raise. A ``RuntimeError`` escaping here propagates
+      through ``_flush_body``'s ``except ... raise`` and gets counted as a
+      flush failure, which dead-letters the entire in-flight batch of real
+      activity records -- data loss, not merely a refused boot. Leave the
+      default (``False``) at this call site so a data conflict is logged and
+      reported via the return value instead, letting the batch survive and
+      the next flush retry once the graph has been repaired.
+
+    Args:
+        driver:    An ``AsyncDriver`` instance created via
+                   ``AsyncGraphDatabase.driver(...)``.
+        database:  Target Neo4j database name (default: ``"neo4j"``).
+        workspace: Reserved for future workspace-scoped schema; currently unused.
+        fail_on_data_conflict: When True, a genuine data conflict on the
+                   ``:Node`` uniqueness constraint (Step 6) raises
+                   ``RuntimeError`` (fail-closed; correct for cold start).
+                   When False (default), the same conflict is logged as a
+                   WARNING pointing at ``doctor --fix`` and this function
+                   returns ``False`` instead of raising (fail-open; correct
+                   for the flush path, where raising would dead-letter real
+                   events -- see caller-specific guidance above).
+
+    Returns:
+        ``True`` iff the schema is **fully established** — every index and
+        uniqueness constraint was created (or already exists via a benign race).
+        ``False`` if any index/constraint could not be created -- e.g. Neo4j was
+        unreachable and the connectivity error was swallowed, or (when
+        *fail_on_data_conflict* is False) the ``:Node`` constraint hit a data
+        conflict -- to avoid dead-lettering real events. Callers use this to
+        decide whether to retry schema init on a later flush rather than
+        latching a half-built schema and leaving the uniqueness constraint
+        permanently absent.
+
+    Raises:
+        RuntimeError: if *fail_on_data_conflict* is True and the ``:Node``
+            uniqueness constraint (Step 6) cannot be created because the graph
+            still has un-migrated legacy data (see
+            ``_is_constraint_data_conflict``). The message points the operator
+            at ``context-intelligence-server doctor --fix``.
+    """
+    async with driver.session(database=database) as session:
+        # ------------------------------------------------------------------
+        # Step 2: create node_id indexes (idempotent via IF NOT EXISTS).
+        # ``CREATE INDEX ... IF NOT EXISTS`` is idempotent for serial callers,
+        # but two callers racing on a fresh database can both pass the existence
+        # check and then collide, surfacing
+        # ``Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists``. Because
+        # multiple independent stores auto-run this on their first concurrent
+        # flush (each store has its own ``_schema_initialized`` flag), that race
+        # is reachable. The colliding rule is exactly the one we wanted, so the
+        # error is benign — swallow it (mirroring the constraint handling below)
+        # while re-raising any other schema error.
+        # ------------------------------------------------------------------
+        async def _create_index(statement: str) -> bool:
+            try:
+                await session.run(statement)
+            except (Neo4jError, DriverError) as exc:
+                if (
+                    isinstance(exc, Neo4jError)
+                    and exc.code
+                    == "Neo.ClientError.Schema.EquivalentSchemaRuleAlreadyExists"
+                ):
+                    _LOG.debug(
+                        "ensure_neo4j_schema: index already exists (concurrent "
+                        "create race, benign): %s",
+                        statement,
+                    )
+                    # The index exists / will exist via the race winner: established.
+                    return True
+                elif isinstance(exc, Neo4jError):
+                    # A dangerous Neo4jError code we do not recognise as benign.
+                    raise
+                else:
+                    # A connectivity DriverError that is NOT a Neo4jError
+                    # (ServiceUnavailable / SessionExpired). It has no meaningful
+                    # .code for our allow-list. Crucially, we continue rather than
+                    # re-raise: index creation runs on the flush path via
+                    # _ensure_schema (BEFORE the constraint steps), and a re-raise
+                    # would be counted as a flush failure and could dead-letter real
+                    # events. This mirrors the DriverError tolerance in the
+                    # constraint blocks below.
+                    _LOG.error(
+                        "ensure_neo4j_schema: could not create index (connectivity "
+                        "error); continuing without it: %s",
+                        exc,
+                    )
+                    # Index NOT created: report failure so the caller does not latch.
+                    return False
+            # session.run succeeded: the index is established.
+            return True
+
+        # Track whether every index/constraint was established. We attempt them
+        # ALL each run (no short-circuit) so a single transient failure does not
+        # skip the rest — but the aggregate latches only when nothing was missed.
+        fully_established = True
+
+        for label in (
+            "Session",
+            "OrchestratorRun",
+            "Step",
+            "ToolExecution",
+            "Event",
+        ):
+            fully_established = (
+                await _create_index(
+                    f"CREATE INDEX IF NOT EXISTS FOR (n:{label}) ON (n.node_id)"
+                )
+                and fully_established
+            )
+        fully_established = (
+            await _create_index(
+                "CREATE INDEX idx_session_workspace IF NOT EXISTS "
+                "FOR (n:Session) ON (n.workspace)"
+            )
+            and fully_established
+        )
+        fully_established = (
+            await _create_index(
+                "CREATE INDEX idx_session_created_by IF NOT EXISTS "
+                "FOR (n:Session) ON (n.created_by)"
+            )
+            and fully_established
+        )
+        # Backs find_delegation_by_sub_session's lookup
+        # (_DELEGATION_BY_SUB_SESSION_CYPHER). Without it that MATCH names a
+        # label but no indexed property, so it plans as a NodeByLabelScan over
+        # EVERY :Delegation node in the graph. It is not a rare path -- the
+        # self-delegation resolver hits it on live ingest whenever a parent
+        # Delegation has already flushed out of the in-memory buffer -- and it
+        # grows without bound as delegation volume grows.
+        fully_established = (
+            await _create_index(
+                "CREATE INDEX idx_delegation_sub_session IF NOT EXISTS "
+                "FOR (n:Delegation) ON (n.sub_session_id, n.workspace)"
+            )
+            and fully_established
+        )
+        # NOTE: relationship created_by is intentionally NOT indexed in v1 — no consumer
+        # yet; querying edges by contributor is unsupported until indexed in a future phase.
+
+        # NOTE: the composite :Node(node_id, workspace) lookup index that backs the
+        # universal-label node MERGE (NodeIndexSeek, not AllNodesScan — the
+        # 1.3M-node drain-stall fix) is now provided by the :Node UNIQUENESS
+        # CONSTRAINT created in Step 6 below (a uniqueness constraint carries its
+        # own backing range index).  A standalone ``CREATE INDEX idx_node_universal``
+        # here would CONFLICT with that constraint ("a constraint cannot be created
+        # until the index has been dropped"), so it is intentionally NOT created
+        # here; Step 6 drops any legacy idx_node_universal first, then creates the
+        # constraint.
+
+        # ------------------------------------------------------------------
+        # Steps 3 & 4: uniqueness constraints on Session then Event nodes.
+        # Both must run AFTER deduplication (step 1) so pre-existing duplicates
+        # do not cause constraint creation to fail. Combined with MERGE (n ...)
+        # in flush(), they make concurrent MERGEs atomic and prevent duplicate
+        # Session/Event nodes under load. The two constraints are identical in
+        # shape, so both route through the single _create_constraint helper.
+        # ------------------------------------------------------------------
+        async def _create_constraint(
+            session: Any,
+            name: str,
+            statement: str,
+            *,
+            fail_on_data_conflict: bool = False,
+        ) -> bool:
+            """Create a uniqueness constraint, tolerating benign races and
+            connectivity errors (never re-raise into the flush path) -- UNLESS
+            *fail_on_data_conflict* is True and the failure means the graph has
+            un-migrated legacy data (see ``_is_constraint_data_conflict``), in
+            which case this raises ``RuntimeError`` with a guided message
+            instead of silently continuing without the constraint.
+
+            Benign already-exists / concurrent-schema-race codes (the
+            ``_BENIGN_SCHEMA_CODES`` allow-list) are swallowed at DEBUG. Anything
+            else — either a dangerous Neo4jError code (e.g. ConstraintCreationFailed)
+            or a connectivity DriverError that is NOT a Neo4jError (ServiceUnavailable
+            / SessionExpired, which has no meaningful ``.code`` for our allow-list) —
+            is reported generically at ERROR. Crucially, we continue rather than
+            re-raise: this runs on the flush path via _ensure_schema, and a re-raise
+            would be counted as a flush failure and could dead-letter real events.
+            The one exception is the fail-loud data-conflict case above.
+
+            Returns ``True`` when the constraint is established (the statement
+            succeeded, or a benign code means the winner created/will create it) and
+            ``False`` on the ERROR-and-continue path (constraint NOT created) so the
+            caller can decide whether to retry rather than latch a half-built schema.
+            """
+            try:
+                await session.run(statement)
+            except (Neo4jError, DriverError) as exc:
+                if isinstance(exc, Neo4jError) and exc.code in _BENIGN_SCHEMA_CODES:
+                    _LOG.debug(
+                        "ensure_neo4j_schema: %s uniqueness constraint already "
+                        "present (benign concurrent-schema race, code=%s)",
+                        name,
+                        exc.code,
+                    )
+                    # The constraint exists / will exist via the race winner.
+                    return True
+                is_data_conflict = isinstance(
+                    exc, Neo4jError
+                ) and _is_constraint_data_conflict(exc)
+                if fail_on_data_conflict and is_data_conflict:
+                    raise RuntimeError(
+                        "Neo4j graph has un-migrated legacy nodes (untagged "
+                        ":Node or duplicates); cold start no longer "
+                        "auto-migrates. Run: context-intelligence-server "
+                        "doctor --fix"
+                    ) from exc
+                code = exc.code if isinstance(exc, Neo4jError) else None
+                if is_data_conflict:
+                    # fail_on_data_conflict is False here (the fail_on_data_conflict
+                    # and is_data_conflict branch above already handled the True
+                    # case). This is the mid-flight flush path
+                    # (Neo4jGraphStore._ensure_schema): a RuntimeError here would
+                    # escape _flush_body's try block and dead-letter the whole
+                    # in-flight batch of real activity records. Log a clear,
+                    # actionable WARNING instead and report failure via the
+                    # return value so _schema_initialized stays False and the
+                    # NEXT flush retries -- self-healing once the graph is
+                    # repaired, with no data lost in the meantime.
+                    _LOG.warning(
+                        "ensure_neo4j_schema: %s uniqueness constraint could "
+                        "not be created — Neo4j graph has un-migrated legacy "
+                        "nodes (untagged :Node or duplicates, code=%s). "
+                        "Continuing without it so the current batch is not "
+                        "dead-lettered; will retry on the next flush. Run: "
+                        "context-intelligence-server doctor --fix",
+                        name,
+                        code,
+                    )
+                else:
+                    _LOG.error(
+                        "ensure_neo4j_schema: could not create %s uniqueness "
+                        "constraint (code=%s); continuing without it — duplicate "
+                        "%s data may be present: %s",
+                        name,
+                        code,
+                        name,
+                        exc,
+                    )
+                # Constraint NOT created: report failure so the caller retries.
+                return False
+            # session.run succeeded: the constraint is established.
+            return True
+
+        fully_established = (
+            await _create_constraint(
+                session,
+                "Session",
+                "CREATE CONSTRAINT session_node_id_workspace_unique IF NOT EXISTS "
+                "FOR (n:Session) REQUIRE (n.node_id, n.workspace) IS UNIQUE",
+            )
+            and fully_established
+        )
+        fully_established = (
+            await _create_constraint(
+                session,
+                "Event",
+                "CREATE CONSTRAINT event_node_id_workspace_unique IF NOT EXISTS "
+                "FOR (n:Event) REQUIRE (n.node_id, n.workspace) IS UNIQUE",
+            )
+            and fully_established
+        )
+
+        # ------------------------------------------------------------------
+        # Step 6: universal :Node identity uniqueness constraint.
+        # Every node writer now keys identity on :Node (Session/Event/etc. add
+        # their type label via SET), and the cross-session edge writer MERGEs
+        # bare :Node endpoint placeholders.  This constraint is the atomicity
+        # guard that keeps concurrent MERGEs on (node_id, workspace) from
+        # creating divergent duplicate nodes — the role the :Session constraint
+        # used to play for the Session MERGE.
+        #
+        # NO LONGER preceded by an in-line dedup/backfill pass (moved to
+        # dedup_duplicate_nodes / backfill_node_labels, invoked via
+        # run_repair / `doctor --fix`, never automatically at cold start).
+        # If the graph still has untagged/duplicate legacy nodes, whether this
+        # constraint creation FAILS LOUD or logs-and-continues is threaded
+        # through from the outer ``fail_on_data_conflict`` parameter (True for
+        # cold start / doctor --fix, False for the mid-flight flush path —
+        # see the function docstring) — see _is_constraint_data_conflict and
+        # _create_constraint.
+        #
+        # A uniqueness constraint carries its OWN backing range index, and Neo4j
+        # refuses to create it while a standalone index on the same (label,
+        # properties) exists ("a constraint cannot be created until the index has
+        # been dropped").  #19 shipped a plain `idx_node_universal` index on
+        # :Node(node_id, workspace); drop it first (IF EXISTS, idempotent) so the
+        # constraint can take over the seek role.
+        # ------------------------------------------------------------------
+        try:
+            await session.run("DROP INDEX idx_node_universal IF EXISTS")
+        except (Neo4jError, DriverError) as exc:  # pragma: no cover - tolerate
+            _LOG.debug(
+                "ensure_neo4j_schema: DROP INDEX idx_node_universal skipped "
+                "(benign): %s",
+                exc,
+            )
+        fully_established = (
+            await _create_constraint(
+                session,
+                "Node",
+                "CREATE CONSTRAINT node_node_id_workspace_unique IF NOT EXISTS "
+                "FOR (n:Node) REQUIRE (n.node_id, n.workspace) IS UNIQUE",
+                fail_on_data_conflict=fail_on_data_conflict,
+            )
+            and fully_established
+        )
+
+        return fully_established
+
+
+def _serialized_row_size(value: Any) -> int:
+    """Return a cheap conservative proxy for the serialized byte size of *value*.
+
+    Uses ``json.dumps(value, default=str)`` so that non-JSON-serialisable values
+    (e.g. ``datetime`` objects) are converted via ``str()`` rather than raising.
+    This measures the *serialized* form — not ``len()`` on a dict/list, which
+    returns the number of keys/elements and is blind to fat nested payloads such
+    as large ``messages`` arrays or ``context_snapshot`` dicts.
+
+    Not an exact wire-byte count (no encoding overhead, no Neo4j framing), but a
+    consistent, crash-free lower bound suitable for chunk-size decisions.
+    """
+    try:
+        return len(json.dumps(value, default=str))
+    except (TypeError, ValueError):
+        return len(str(value))
+
+
+def _chunk_dict(
+    snapshot: dict[Any, Any],
+    max_rows: int,
+    max_bytes: int,
+) -> Generator[dict[Any, Any], None, None]:
+    """Yield sub-dicts of *snapshot* bounded by *max_rows* and *max_bytes*.
+
+    Dual-bound slicing: a chunk is emitted when either the row count OR the
+    accumulated byte size would be exceeded by the next row.  A single row that
+    is larger than *max_bytes* is always yielded alone (one-row floor), so the
+    generator never loops forever on an oversized row.
+
+    An empty *snapshot* yields nothing.
+    """
+    chunk: dict[Any, Any] = {}
+    cur_rows = 0
+    cur_bytes = 0
+    for key, value in snapshot.items():
+        size = _serialized_row_size(value)
+        if chunk and (cur_rows + 1 > max_rows or cur_bytes + size > max_bytes):
+            yield chunk
+            chunk = {}
+            cur_rows = 0
+            cur_bytes = 0
+        chunk[key] = value
+        cur_rows += 1
+        cur_bytes += size
+    if chunk:
+        yield chunk
+
+
+def _chunk_list(
+    snapshot: list[Any],
+    max_rows: int,
+    max_bytes: int,
+) -> Generator[list[Any], None, None]:
+    """Yield sub-lists of *snapshot* bounded by *max_rows* and *max_bytes*.
+
+    Identical dual-bound logic to :func:`_chunk_dict` but operates on an
+    ordered list rather than a mapping.  A single oversized element is always
+    yielded alone (one-row floor).
+
+    An empty *snapshot* yields nothing.
+    """
+    chunk: list[Any] = []
+    cur_rows = 0
+    cur_bytes = 0
+    for item in snapshot:
+        size = _serialized_row_size(item)
+        if chunk and (cur_rows + 1 > max_rows or cur_bytes + size > max_bytes):
+            yield chunk
+            chunk = []
+            cur_rows = 0
+            cur_bytes = 0
+        chunk.append(item)
+        cur_rows += 1
+        cur_bytes += size
+    if chunk:
+        yield chunk
+
+
+def _build_node_props(data: dict[str, Any], workspace: str) -> dict[str, Any]:
+    """Assemble the sanitized props dict for a single node row.
+
+    ``labels``, ``created_by``, ``working_dir``, and ``status_if_absent`` are
+    excluded from the returned dict:
+    - ``labels`` are applied separately via ``SET n:Label`` statements (not stored as props).
+    - ``created_by`` travels ONLY as the ``$created_by`` query param (never a node property)
+      so it cannot affect node identity or clobber the ``ON CREATE SET n.created_by`` stamp.
+    - ``working_dir`` is held out of the blind ``SET n += row.props`` so the Session
+      MERGE can apply ``coalesce(n.working_dir, row.working_dir)`` instead of
+      last-write-wins — an already-attributed session is never re-attributed,
+      even by a concurrent writer or a replayed batch.
+    - ``status_if_absent`` is held out for the same reason and lifted onto the
+      Session row exactly like ``working_dir`` (see ``_write_batch``), so the
+      MERGE can ``coalesce(n.status, row.status_if_absent)`` instead of
+      overwriting a status a session's own authoritative writer already set.
+      This is applied on SESSION ROWS ONLY — a non-Session row carrying this
+      key simply drops it silently, since only Session nodes have a status
+      MERGE clause to coalesce against.
+    """
+    raw = {
+        k: v
+        for k, v in data.items()
+        if k not in ("labels", "created_by", "working_dir", "status_if_absent")
+    }
+    _convert_temporal_props(raw)  # ISO str -> datetime, in place
+    props = Neo4jGraphStore._sanitize_properties(raw)
+    props["workspace"] = workspace
+    return props
+
+
+async def _write_batch(
+    tx: Any,
+    node_snapshot: dict[str, dict[str, Any]],
+    edge_snapshot: dict[tuple[str, str], dict[str, Any]],
+    patch_snapshot: list[dict[str, Any]],
+    workspace: str,
+    created_by: str | None = None,
+) -> None:
+    """Execute one buffered batch of node, label, and edge writes on ``tx``.
+
+    Operates on the supplied managed-transaction object ``tx``; it never opens
+    or commits a transaction itself, so the same coroutine can run inside either
+    a raw ``begin_transaction()`` block or a driver-managed ``execute_write``.
+
+    Idempotency rule #1: the batch is captured by the caller *before* this
+    coroutine is invoked (the snapshots are passed as parameters and never read
+    from a mutable buffer here), so this is a pure function of its parameters.
+    The driver may therefore safely re-run it on a transient error
+    (``TransientError`` / ``DeadlockDetected``) without corrupting state.
+
+    Every Cypher result is consumed (``await res.consume()``) rather than
+    returned, so this coroutine never leaks a raw ``Result`` object across the
+    transaction boundary.
+    """
+    # ---- nodes ---- (Session nodes use label-aware MERGE + uniqueness constraint)
+    session_rows: list[dict[str, Any]] = []  # have Session label
+    other_rows: list[dict[str, Any]] = []  # everything else
+    label_assignments: list[dict[str, Any]] = []
+
+    for node_id, data in node_snapshot.items():
+        labels: list[str] = data.get("labels", [])
+        props = _build_node_props(data, workspace)
+        row: dict[str, Any] = {"node_id": node_id, "props": props}
+
+        if "Session" in labels:
+            # working_dir rides as a separate top-level row key (deliberately
+            # NOT inside row.props) so the MERGE below can coalesce it rather
+            # than blindly overwrite. Omitted when absent/empty, in which case
+            # row.working_dir is null and the coalesce is a no-op.
+            working_dir_value = data.get("working_dir")
+            if working_dir_value:
+                row["working_dir"] = working_dir_value
+            # status_if_absent rides the same way, for the same reason: kept
+            # out of row.props so the MERGE below can coalesce it against an
+            # existing status instead of blindly overwriting one already set
+            # by session:end (the sole authoritative writer of status).
+            status_if_absent_value = data.get("status_if_absent")
+            if status_if_absent_value:
+                row["status_if_absent"] = status_if_absent_value
+            session_rows.append(row)
+        else:
+            other_rows.append(row)
+
+        if labels:
+            for label in labels:
+                _validate_identifier(label, "label")
+            label_assignments.append(
+                {"node_id": node_id, "labels": sorted(set(labels))}
+            )
+
+    # Session nodes: MERGE by the universal :Node identity (atomic under concurrency
+    # via the :Node(node_id, workspace) uniqueness constraint); the :Session type
+    # label is added via SET.
+    # Lock-order hygiene: sort by stable key so every writer acquires node locks in one
+    # global order, preventing the out-of-order lock cycle that causes deadlocks.
+    session_rows.sort(key=lambda r: r["node_id"])
+    if session_rows:
+        # MERGE key is :Node (NOT :Session) so a bare :Node placeholder created by a
+        # cross-session edge write (_edge_merge_cypher MERGEs its endpoints) CONVERGES
+        # with this typed write instead of splitting into two nodes.  Identity is
+        # purely (node_id, workspace) on :Node — every node carries :Node, and the
+        # :Node uniqueness constraint (ensure_neo4j_schema) makes concurrent MERGEs
+        # atomic, the role the :Session constraint used to play for this MERGE.
+        res = await tx.run(
+            "UNWIND $rows AS row "
+            f"MERGE (n:{_UNIVERSAL_NODE_LABEL} "
+            "{node_id: row.node_id, workspace: row.props.workspace}) "
+            "ON CREATE SET n.created_by = $created_by "
+            "SET n += row.props, n:Session "
+            # Populate-if-missing: fill working_dir only while it is still null,
+            # never clobber a value an earlier event (or a concurrent writer)
+            # already set. Rows without a working_dir carry a null row key, so
+            # this degrades to a no-op for them.
+            "SET n.working_dir = coalesce(n.working_dir, row.working_dir) "
+            # Populate-if-missing for status, same rule, applied AFTER
+            # `SET n += row.props` above so an authoritative status carried in
+            # THIS SAME row (e.g. session:end's props.status = "completed")
+            # is already on `n` by the time this coalesce runs and is never
+            # overridden by a stub's status_if_absent. Rows without one carry
+            # a null row key, so this degrades to a no-op for them.
+            "SET n.status = coalesce(n.status, row.status_if_absent)",
+            rows=session_rows,
+            created_by=created_by,
+        )
+        await res.consume()
+
+    # Non-session nodes: MERGE on the universal :Node label so the composite
+    # :Node(node_id, workspace) index backs the lookup (NodeIndexSeek) instead
+    # of an AllNodesScan over the entire graph.  Identity is still purely
+    # (node_id, workspace) — :Node is on every node, so this matches the exact
+    # same set the old label-free MERGE did, without splitting a node whose type
+    # labels change across flush cycles.
+    other_rows.sort(key=lambda r: r["node_id"])
+    if other_rows:
+        res = await tx.run(
+            cast(LiteralString, _NODE_MERGE_CYPHER),
+            rows=other_rows,
+            created_by=created_by,
+        )
+        await res.consume()
+
+    # Set all labels for labeled nodes (primary + extra in one SET per node).
+    # For Session nodes, Session label is already set by the MERGE above — this
+    # adds any additional type labels (RootSession, SubSession, ForkedSession, etc.)
+    # Lattice normalisation: whenever a terminal label is included in the SET, the
+    # _LATTICE_NORMALIZATION suffix is appended to the SAME Cypher statement so the
+    # node write-lock is held before the CASE WHEN conditions are evaluated.  This
+    # prevents the concurrent-writer dual-label race (see _LATTICE_NORMALIZATION).
+    label_assignments.sort(key=lambda i: i["node_id"])
+    for item in label_assignments:
+        labels_str = ":".join(item["labels"])
+        # Seek via :Node (idx_node_universal) instead of an AllNodesScan.
+        cypher = f"{_NODE_MATCH_BY_ID} SET n:{labels_str}"
+        if set(item["labels"]) & _TERMINAL_LABELS:
+            cypher += _LATTICE_NORMALIZATION
+        res = await tx.run(
+            cast(LiteralString, cypher),
+            node_id=item["node_id"],
+            workspace=workspace,
+        )
+        await res.consume()
+
+    # ---- label patches (must run AFTER node writes — nodes must exist in Neo4j before MATCH) ----
+    for lp in patch_snapshot:
+        pid = lp["node_id"]
+        for label in lp.get("remove", []):
+            _validate_identifier(label, "label")
+            res = await tx.run(
+                cast(
+                    LiteralString,
+                    f"{_NODE_MATCH_BY_ID} REMOVE n:{label}",
+                ),
+                node_id=pid,
+                workspace=workspace,
+            )
+            await res.consume()
+        for label in lp.get("add", []):
+            _validate_identifier(label, "label")
+            # Lattice normalisation for patch-adds of terminal labels: same lock-first
+            # guarantee — append the normalization to the SET statement.
+            cypher = f"{_NODE_MATCH_BY_ID} SET n:{label}"
+            if label in _TERMINAL_LABELS:
+                cypher += _LATTICE_NORMALIZATION
+            res = await tx.run(
+                cast(LiteralString, cypher),
+                node_id=pid,
+                workspace=workspace,
+            )
+            await res.consume()
+
+    # ---- edges ----
+    edge_groups: dict[str, list[dict[str, Any]]] = {}
+    for (src_id, dst_id), data in edge_snapshot.items():
+        edge_type: str = data.get("type", _DEFAULT_EDGE_TYPE)
+        # created_by travels ONLY as the $created_by query param (never a rel property)
+        # so it cannot clobber the ON CREATE SET r.created_by provenance stamp.
+        edge_props = {k: v for k, v in data.items() if k not in ("type", "created_by")}
+        _convert_temporal_props(edge_props)  # ISO str -> datetime, in place
+        props = Neo4jGraphStore._sanitize_properties(edge_props)
+        props["workspace"] = workspace
+        # Store src_id/dst_id on the relationship so the
+        # get_edge() fallback query (WHERE r.src_id = $src_id
+        # AND r.dst_id = $dst_id) can locate it after a flush.
+        props["src_id"] = src_id
+        props["dst_id"] = dst_id
+        row = {"src_id": src_id, "dst_id": dst_id, "props": props}
+        edge_groups.setdefault(edge_type, []).append(row)
+
+    for edge_type, rows in edge_groups.items():
+        _validate_identifier(edge_type, "edge_type")
+        edge_merge_query = _edge_merge_cypher(edge_type)
+        rows.sort(key=lambda r: (r["src_id"], r["dst_id"]))
+        res = await tx.run(
+            edge_merge_query,  # type: ignore[arg-type]
+            rows=rows,
+            workspace=workspace,
+            created_by=created_by,
+        )
+        await res.consume()
+
+    await update_timelines(tx, edge_groups, workspace)
+
+
+class Neo4jGraphStore:
+    """Neo4j-backed implementation of the GraphStore and QueryableStore protocols.
+
+    Writes are buffered in memory (``_node_buffer``, ``_edge_buffer``) and flushed
+    to Neo4j via UNWIND-based batch Cypher. Workspace-scoped; schema indexes are
+    created idempotently on first flush.
+    """
+
+    def __init__(
+        self,
+        uri: str,
+        auth: tuple | None = None,
+        database: str = "neo4j",
+        workspace: str | None = None,
+        flush_chunk_rows: int = 100,
+        flush_chunk_bytes: int = 4_194_304,
+        neo4j_lock_timeout: float | None = None,
+        driver: Any | None = None,
+    ) -> None:
+        """Initialise the store, reusing or creating the async Neo4j driver.
+
+        Args:
+            uri:               Bolt/neo4j URI, e.g. ``bolt://localhost:7687``.
+                               Ignored when ``driver`` is provided.
+            auth:              ``(username, password)`` tuple, or ``None`` for no-auth.
+                               Ignored when ``driver`` is provided.
+            database:          Target Neo4j database name (default: ``"neo4j"``).
+            workspace:         Workspace to scope writes to.  ``None`` resolves to
+                               ``"default"`` via the ``workspace`` property.
+            neo4j_lock_timeout: Server-side transaction timeout in seconds
+                               (Layer B — fail loud).  When set, every
+                               ``execute_write`` call is wrapped with
+                               ``unit_of_work(timeout=neo4j_lock_timeout)``
+                               so a blocked flush raises ``Neo4jError``
+                               instead of parking forever.  ``None`` disables
+                               the timeout (default: no per-transaction limit).
+                               When the store builds its own driver (``driver``
+                               not provided), this also sets
+                               ``connection_acquisition_timeout`` on it to the
+                               same value so pool-exhaustion failures surface
+                               quickly.
+            driver:            A pre-built async driver to reuse instead of
+                               constructing a new one. When provided, this store
+                               does not own the driver's lifecycle: ``close()``
+                               flushes and no-ops on the driver itself, leaving
+                               it open for other stores sharing it.
+        """
+        if driver is not None:
+            self._driver = driver
+            self._owns_driver = False
+        else:
+            # Explicit auto-retry budget for transient errors (e.g. deadlocks) so
+            # the managed-transaction retry window is deliberate and reviewable
+            # rather than relying on the driver default implicitly.
+            driver_kwargs: dict[str, Any] = {"max_transaction_retry_time": 30.0}
+            if neo4j_lock_timeout is not None and neo4j_lock_timeout > 0:
+                driver_kwargs["connection_acquisition_timeout"] = neo4j_lock_timeout
+            self._driver = AsyncGraphDatabase.driver(uri, auth=auth, **driver_kwargs)
+            self._owns_driver = True
+        self._database = database
+        self._workspace = workspace
+        self._created_by: str | None = None
+        self._node_buffer: dict[str, dict[str, Any]] = {}
+        self._edge_buffer: dict[tuple, dict[str, Any]] = {}
+        self._label_patches: list[dict[str, Any]] = []
+        self._schema_initialized: bool = False
+        self._closed: bool = False
+        self._flush_lock: asyncio.Lock = asyncio.Lock()
+        self._flush_chunk_rows: int = max(1, flush_chunk_rows)
+        self._flush_chunk_bytes: int = max(1, flush_chunk_bytes)
+        self._neo4j_lock_timeout: float | None = (
+            neo4j_lock_timeout
+            if neo4j_lock_timeout and neo4j_lock_timeout > 0
+            else None
+        )
+
+    # ------------------------------------------------------------------
+    # owns_driver property
+    # ------------------------------------------------------------------
+
+    @property
+    def owns_driver(self) -> bool:
+        """True when this store built its own driver; False when injected.
+
+        Governs ``close()``: a store that does not own its driver must never
+        close it, since other stores may still be using it.
+        """
+        return self._owns_driver
+
+    # ------------------------------------------------------------------
+    # workspace property
+    # ------------------------------------------------------------------
+
+    @property
+    def workspace(self) -> str:
+        """Return the current workspace, defaulting to ``'default'`` when unset."""
+        return self._workspace if self._workspace is not None else "default"
+
+    @workspace.setter
+    def workspace(self, value: str | None) -> None:
+        """Set the workspace (``None`` will resolve to ``'default'`` on read)."""
+        self._workspace = value
+
+    # ------------------------------------------------------------------
+    # created_by property (getter + setter)
+    # ------------------------------------------------------------------
+
+    @property
+    def created_by(self) -> str | None:
+        """Authenticated contributor id for write-once provenance (None when unset)."""
+        return self._created_by
+
+    @created_by.setter
+    def created_by(self, value: str | None) -> None:
+        """Set the contributor id (``None`` skips the provenance stamp)."""
+        self._created_by = value
+
+    # ------------------------------------------------------------------
+    # supported_dialects property
+    # ------------------------------------------------------------------
+
+    @property
+    def supported_dialects(self) -> frozenset[str]:
+        """Return the set of supported query dialects."""
+        return frozenset({"cypher"})
+
+    # ------------------------------------------------------------------
+    # Buffer operations
+    # ------------------------------------------------------------------
+
+    async def upsert_node(self, node_id: str, data: dict[str, Any]) -> None:
+        """Buffer a node upsert (no I/O).
+
+        If the node already exists in the buffer:
+        - ``labels`` lists are *unioned* (no duplicates, original order preserved).
+        - All other properties are merged with ``dict.update`` semantics
+          (later call wins on conflict).
+
+        If the node does not exist, it is stored as a shallow copy of *data*.
+        """
+        if node_id not in self._node_buffer:
+            self._node_buffer[node_id] = {}
+
+        existing = self._node_buffer[node_id]
+
+        # Union labels, preserving insertion order and avoiding duplicates
+        if "labels" in data:
+            existing_labels: list = list(existing.get("labels", []))
+            for label in data["labels"]:
+                if label not in existing_labels:
+                    existing_labels.append(label)
+            existing["labels"] = existing_labels
+
+        # Update all other properties (labels handled above, skip to avoid overwrite)
+        for key, value in data.items():
+            if key != "labels":
+                existing[key] = value
+
+    async def upsert_edge(self, src_id: str, dst_id: str, data: dict[str, Any]) -> None:
+        """Buffer an edge upsert (no I/O).
+
+        If the edge already exists in the buffer, properties are merged via
+        ``dict.update`` semantics.  Otherwise the edge is stored as a new entry.
+        """
+        key = (src_id, dst_id)
+        if key not in self._edge_buffer:
+            self._edge_buffer[key] = {}
+        self._edge_buffer[key].update(data)
+
+    async def get_node(self, node_id: str) -> dict[str, Any] | None:
+        """Return node data, checking the in-memory buffer first.
+
+        If the node is found in the buffer, a *shallow copy* is returned so
+        that callers cannot accidentally mutate the buffered state.
+
+        If not found in the buffer, falls back to a Neo4j query.  Returns
+        ``None`` if the node is absent from both.
+        """
+        if node_id in self._node_buffer:
+            return dict(self._node_buffer[node_id])
+
+        # Neo4j fallback
+        try:
+            result = await self._driver.execute_query(
+                cast(LiteralString, _NODE_GET_BY_ID_CYPHER),
+                {"node_id": node_id, "workspace": self.workspace},
+                database_=self._database,
+            )
+            records = result.records
+            if records:
+                node = {
+                    k: _normalize_temporal(v)
+                    for k, v in dict(records[0]["props"]).items()
+                }
+                # Merge true node labels so handlers see current_type across a
+                # flush boundary, matching the in-buffer get_node shape.
+                node["labels"] = list(records[0]["lbls"])
+                return node
+        except Neo4jError:
+            pass
+
+        return None
+
+    async def find_delegation_by_sub_session(
+        self, sub_session_id: str, workspace: str
+    ) -> dict[str, Any] | None:
+        """Return the Delegation node whose sub_session_id property matches, or None.
+
+        Finds the Delegation ``D`` where ``D.sub_session_id == sub_session_id``
+        -- i.e. the Delegation that *spawned* the session named by
+        *sub_session_id*. This is the parent-Delegation lookup the
+        self-delegation resolver needs: the correct source of the real agent
+        behind an ``agent == "self"`` delegation is the parent Delegation
+        node, never the parent Session node (which structurally never carries
+        an ``agent`` property).
+
+        Checks the in-memory node buffer first (buffer-first read, consistent
+        with ``get_node``/``get_edge``), then falls back to a Neo4j query
+        scoped to *workspace*. Returns ``None`` if no matching Delegation node
+        is found in either the buffer or the backing store.
+        """
+        for data in self._node_buffer.values():
+            if (
+                "Delegation" in data.get("labels", [])
+                and data.get("sub_session_id") == sub_session_id
+            ):
+                return dict(data)
+
+        # Neo4j fallback
+        try:
+            result = await self._driver.execute_query(
+                cast(LiteralString, _DELEGATION_BY_SUB_SESSION_CYPHER),
+                {"sid": sub_session_id, "workspace": workspace},
+                database_=self._database,
+            )
+            records = result.records
+            if records:
+                return {
+                    k: _normalize_temporal(v)
+                    for k, v in dict(records[0]["props"]).items()
+                }
+        except Neo4jError:
+            pass
+
+        return None
+
+    async def _discover_session_workspace(self, session_id: str) -> str | None:
+        """Find the one workspace *session_id* lives in, with no workspace given.
+
+        Looks up every ``:Session`` node with this node_id -- across every
+        workspace, not just this store's own -- via
+        ``_ENTRY_SESSION_WORKSPACE_CYPHER``, and returns the single workspace
+        value found on those nodes.
+
+        Returns ``None`` if *session_id* does not match any known ``:Session``
+        node anywhere.
+
+        Raises:
+            AmbiguousSessionError: If *session_id* matches ``:Session`` nodes
+                in more than one distinct workspace. This should not happen
+                in practice (session ids are unique), but if it ever does,
+                this refuses to guess rather than silently picking one
+                workspace and resolving (or deleting) the wrong graph.
+        """
+        try:
+            lookup_result = await self._driver.execute_query(
+                _ENTRY_SESSION_WORKSPACE_CYPHER,
+                {"session_id": session_id},
+                database_=self._database,
+            )
+        except Neo4jError:
+            return None
+
+        workspaces = {row["workspace"] for row in lookup_result.records}
+        if not workspaces:
+            return None
+        if len(workspaces) > 1:
+            raise AmbiguousSessionError(session_id, sorted(workspaces))
+        return next(iter(workspaces))
+
+    async def _collect_graph_node_ids(
+        self, session_ids: list[str], workspace: str
+    ) -> tuple[list[str], list[str], int]:
+        """Frontier BFS over the owned graph, stopping AT (not through) concepts.
+
+        Returns ``(owned_element_ids, concept_element_ids, edge_count)``. Seeds
+        are the session nodes; each hop expands only FROM non-concept nodes, so
+        a :SST_CONCEPT node is included when first reached but never expanded
+        through. Every node is visited once and every edge traversed once, so a
+        dense parallel-group tournament costs its edge count, not 2^k paths.
+        """
+        seed_result = await self._driver.execute_query(
+            _GRAPH_SEED_ELEMENT_IDS_CYPHER,
+            {"session_ids": session_ids, "workspace": workspace},
+            database_=self._database,
+        )
+        owned: set[str] = {row["eid"] for row in seed_result.records}
+        if not owned:
+            return [], [], 0
+
+        concept: set[str] = set()
+        edges: set[str] = set()
+        frontier: list[str] = list(owned)
+        while frontier:
+            hop_result = await self._driver.execute_query(
+                _GRAPH_EXPAND_HOP_CYPHER,
+                {"frontier": frontier, "workspace": workspace},
+                database_=self._database,
+            )
+            next_frontier: list[str] = []
+            for row in hop_result.records:
+                edges.add(row["rid"])
+                bid: str = row["bid"]
+                if bid in owned or bid in concept:
+                    continue
+                if row["is_concept"]:
+                    concept.add(bid)  # boundary: keep it, never expand through it
+                else:
+                    owned.add(bid)
+                    next_frontier.append(bid)
+            frontier = next_frontier
+
+        return list(owned), list(concept), len(edges)
+
+    async def resolve_session_graph(self, session_id: str) -> SessionGraph | None:
+        """Resolve the whole session graph for *session_id* against Neo4j.
+
+        *session_id* is the only input -- there is no workspace argument.
+        The workspace is looked up from *session_id* itself (see
+        ``_discover_session_workspace``), then that discovered workspace
+        scopes the rest of the resolution, so the resolved graph still comes
+        from exactly one workspace.
+
+        See ``_GRAPH_RESOLVE_CYPHER`` and ``_collect_graph_node_ids`` for
+        the exact traversal. Reads only the flushed/persisted graph (no
+        buffer-first fallback) -- summary/delete operate on already-ingested
+        sessions.
+
+        Returns ``None`` if *session_id* does not resolve to any known
+        ``:Session`` node in any workspace.
+
+        Raises:
+            AmbiguousSessionError: If *session_id* is found in more than one
+                workspace. See ``_discover_session_workspace``.
+        """
+        workspace = await self._discover_session_workspace(session_id)
+        if workspace is None:
+            return None
+        try:
+            resolve_result = await self._driver.execute_query(
+                _GRAPH_RESOLVE_CYPHER,
+                {"session_id": session_id, "workspace": workspace},
+                database_=self._database,
+            )
+        except Neo4jError:
+            return None
+
+        rows = resolve_result.records
+        if not rows:
+            return None
+
+        root_id: str = rows[0]["root_id"]
+        session_ids: set[str] = set()
+        member_props: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            sid: str = row["session_id"]
+            session_ids.add(sid)
+            member_props[sid] = {
+                k: _normalize_temporal(v) for k, v in dict(row["props"]).items()
+            }
+
+        node_count = 0
+        edge_count = 0
+        try:
+            owned_ids, concept_ids, edge_count = await self._collect_graph_node_ids(
+                sorted(session_ids), workspace
+            )
+            node_count = len(owned_ids) + len(concept_ids)
+        except Neo4jError:
+            node_count = 0
+            edge_count = 0
+
+        root_props = member_props.get(root_id, {})
+        created_by = root_props.get("created_by")
+        started_at = root_props.get("started_at")
+        working_dir = root_props.get("working_dir")
+
+        last_change: datetime | None = None
+        for props in member_props.values():
+            candidate = (
+                props.get("last_updated")
+                or props.get("ended_at")
+                or props.get("started_at")
+            )
+            if isinstance(candidate, datetime) and (
+                last_change is None or candidate > last_change
+            ):
+                last_change = candidate
+
+        return SessionGraph(
+            root_id=root_id,
+            session_ids=frozenset(session_ids),
+            node_count=node_count,
+            edge_count=edge_count,
+            created_by=created_by if isinstance(created_by, str) else None,
+            started_at=started_at if isinstance(started_at, datetime) else None,
+            last_change=last_change,
+            subsession_count=len(session_ids) - 1,
+            workspace=workspace,
+            working_dir=working_dir if isinstance(working_dir, str) else None,
+        )
+
+    async def delete_session_graph(
+        self, session_id: str, *, graph: SessionGraph | None = None
+    ) -> GraphDeleteResult | None:
+        """DETACH DELETE the whole OWNED session graph for *session_id* in Neo4j.
+
+        *graph*, when supplied, is an already-resolved ``SessionGraph`` for
+        *session_id* (e.g. the one the caller previewed) -- passing it skips the
+        internal ``resolve_session_graph`` round-trip. It must have been resolved
+        for this same *session_id*; when omitted the graph is resolved here.
+
+        *session_id* is the only input -- there is no workspace argument.
+        Reuses ``resolve_session_graph`` to find the graph (same seeds, same
+        boundary rule, same discovered-workspace lookup -- see that method's
+        docstring), then:
+
+        1. Partitions the graph's reachable nodes into OWNED (deleted) vs
+           boundary ``:SST_CONCEPT`` (kept) via ``_collect_graph_node_ids``,
+           scoped by the workspace ``resolve_session_graph`` already
+           discovered (``graph.workspace``) -- never this store's own bound
+           workspace, which the delete no longer depends on.
+        2. Counts the relationships the delete will remove (incident to any
+           owned node, either direction) BEFORE deleting -- they no longer
+           exist to count afterwards.
+        3. ``DETACH DELETE``s the owned nodes by elementId, in batches
+           (``_DELETE_BATCH_ROWS`` per query) -- the proven 2-phase pattern
+           from ``ci_session_purge``, which scales to large families.
+        4. Verifies the gate this feature promises: every owned node is
+           actually gone, and every boundary concept node actually survives.
+           A violation raises ``RuntimeError`` rather than returning a result
+           that misrepresents what happened.
+
+        Returns ``None`` if *session_id* does not resolve to any known
+        ``:Session`` node -- no writes occur in that case. Once a graph is
+        resolved, failures during the delete/verify steps are NOT swallowed
+        (unlike the lenient read-path queries above): a destructive operation
+        that cannot prove its own result must fail loud, not report zero.
+
+        Raises:
+            AmbiguousSessionError: If *session_id* is found in more than one
+                workspace (raised by ``resolve_session_graph`` before any
+                write is attempted -- nothing is deleted in that case).
+        """
+        if graph is None:
+            graph = await self.resolve_session_graph(session_id)
+        if graph is None:
+            return None
+
+        workspace = graph.workspace
+        owned_ids, concept_ids, _ = await self._collect_graph_node_ids(
+            sorted(graph.session_ids), workspace
+        )
+
+        if not owned_ids:
+            # Every graph session node is itself owned, so this should be
+            # unreachable in practice -- defensive, not a real code path.
+            return GraphDeleteResult(
+                root_id=graph.root_id, nodes_deleted=0, relationships_deleted=0
+            )
+
+        rel_result = await self._driver.execute_query(
+            _GRAPH_REL_COUNT_CYPHER,
+            {"element_ids": owned_ids},
+            database_=self._database,
+        )
+        relationships_deleted = (
+            rel_result.records[0]["rel_count"] if rel_result.records else 0
+        )
+
+        for batch in _chunk_list(owned_ids, _DELETE_BATCH_ROWS, _DELETE_BATCH_BYTES):
+            await self._driver.execute_query(
+                _GRAPH_DELETE_BATCH_CYPHER,
+                {"element_ids": batch},
+                database_=self._database,
+            )
+
+        # Gate: every owned node must actually be gone.
+        survivor_result = await self._driver.execute_query(
+            _COUNT_NODES_BY_ELEMENT_ID_CYPHER,
+            {"element_ids": owned_ids},
+            database_=self._database,
+        )
+        survivor_count = survivor_result.records[0]["c"] if survivor_result.records else 0
+        if survivor_count:
+            raise RuntimeError(
+                f"delete_session_graph: {survivor_count} owned node(s) survived "
+                f"DETACH DELETE for graph root {graph.root_id!r}"
+            )
+
+        # Gate: every boundary concept node must still exist.
+        if concept_ids:
+            concept_result = await self._driver.execute_query(
+                _COUNT_NODES_BY_ELEMENT_ID_CYPHER,
+                {"element_ids": concept_ids},
+                database_=self._database,
+            )
+            concept_count = concept_result.records[0]["c"] if concept_result.records else 0
+            if concept_count != len(concept_ids):
+                raise RuntimeError(
+                    f"delete_session_graph: expected {len(concept_ids)} shared "
+                    f"concept node(s) to survive for graph root "
+                    f"{graph.root_id!r}, found {concept_count}"
+                )
+
+        return GraphDeleteResult(
+            root_id=graph.root_id,
+            nodes_deleted=len(owned_ids),
+            relationships_deleted=relationships_deleted,
+        )
+
+    async def get_edge(self, src_id: str, dst_id: str) -> dict[str, Any] | None:
+        """Return edge data, checking the in-memory buffer first.
+
+        If the edge is found in the buffer, a *shallow copy* is returned.
+
+        If not found in the buffer, falls back to a Neo4j query.  Returns
+        ``None`` if the edge is absent from both.
+        """
+        key = (src_id, dst_id)
+        if key in self._edge_buffer:
+            return dict(self._edge_buffer[key])
+
+        # Neo4j fallback
+        try:
+            result = await self._driver.execute_query(
+                cast(LiteralString, _EDGE_GET_BY_ENDPOINTS_CYPHER),
+                {"src_id": src_id, "dst_id": dst_id, "workspace": self.workspace},
+                database_=self._database,
+            )
+            records = result.records
+            if records:
+                return {
+                    k: _normalize_temporal(v)
+                    for k, v in dict(records[0]["props"]).items()
+                }
+        except Neo4jError:
+            pass
+
+        return None
+
+    def remove_edge(self, src_id: str, dst_id: str) -> None:
+        """Remove a buffered edge from the edge buffer.
+
+        No-op if the edge does not exist in the buffer.
+        Note: edges already flushed to Neo4j are handled separately by the
+        ownership integrity checker via explicit Cypher DELETE queries.
+        """
+        self._edge_buffer.pop((src_id, dst_id), None)
+
+    async def set_labels(
+        self, node_id: str, remove_labels: list[str], add_labels: list[str]
+    ) -> None:
+        """Buffer a label patch and immediately update _node_buffer.
+
+        Two-phase effect:
+        1. _node_buffer updated immediately — so get_node() reflects the change
+           within the same flush cycle. Essential for fork guard and state machine
+           logic that reads labels between handler calls.
+        2. Patch queued in _label_patches — applied to Neo4j at flush time via
+           explicit REMOVE/SET Cypher statements AFTER node writes.
+
+        Each label in remove_labels is removed via REMOVE n:Label Cypher.
+        Each label in add_labels is set via SET n:Label Cypher.
+        """
+        # Phase 1: update in-memory buffer immediately (same as GraphState.set_labels)
+        if node_id not in self._node_buffer:
+            self._node_buffer[node_id] = {}
+        existing = self._node_buffer[node_id]
+        current = set(existing.get("labels", []))
+        existing["labels"] = sorted((current - set(remove_labels)) | set(add_labels))
+
+        # Phase 2: queue patch for Neo4j flush
+        self._label_patches.append(
+            {
+                "node_id": node_id,
+                "remove": list(remove_labels),
+                "add": list(add_labels),
+            }
+        )
+
+    # ------------------------------------------------------------------
+    # Persistence methods
+    # ------------------------------------------------------------------
+
+    async def flush(self) -> None:
+        """Persist all buffered writes to Neo4j using UNWIND-based batch Cypher.
+
+        Serializes callers via ``_flush_lock`` so that at most one Neo4j
+        transaction is open at any time for this store.  Without the lock a
+        concurrent caller could open a second transaction on the same nodes,
+        which Neo4j resolves as a deadlock.
+
+        Optimistically snapshots and clears buffers before writing.  On any
+        failure the transaction is rolled back and the buffers are restored
+        (merging any writes that arrived during the flush attempt).
+
+        All nodes are merged by (node_id, workspace) identity — label is never
+        part of the MERGE key.  This prevents duplicate nodes when the same
+        session is written with different type labels across flush cycles
+        (e.g. bare Session created by a child worker, then RootSession written
+        by the parent worker's session:end flush).
+        """
+        async with self._flush_lock:
+            await self._flush_body()
+
+    async def _flush_body(self) -> None:
+        """Inner flush implementation — must only be called while _flush_lock is held.
+
+        Phased, dual-bounded, per-chunk-committed coordinator.  Splits each buffer
+        into row/byte-bounded chunks and commits each chunk in its own
+        execute_write (independent Neo4j transaction), eliminating the memory-cap
+        OOM caused by sending the entire buffer in a single transaction.
+
+        Phase order: nodes → label patches → edges.  This ordering preserves the
+        invariant that label patches can only reference nodes already committed to
+        Neo4j, and edges can only reference nodes already committed.
+
+        On any chunk failure the full snapshot is merged back into the live buffers
+        (restoring the entire un-flushed batch for the next attempt) and the
+        exception is re-raised so the caller's offset never advances on a partial
+        flush.
+        """
+        if not self._node_buffer and not self._edge_buffer and not self._label_patches:
+            return  # early exit — nothing to write
+
+        # Snapshot and clear buffers optimistically
+        node_snapshot = self._node_buffer
+        edge_snapshot = self._edge_buffer
+        self._node_buffer = {}
+        self._edge_buffer = {}
+        patch_snapshot = self._label_patches
+        self._label_patches = []
+
+        rows = self._flush_chunk_rows
+        byts = self._flush_chunk_bytes
+
+        # Layer A — global lock-acquisition order.
+        # Sort both snapshots by key BEFORE chunking so every concurrent flush
+        # visits node_ids and (src_id, dst_id) pairs in the same monotonically
+        # increasing order.  A single consistent order rules out circular
+        # wait-for cycles across transactions: if every flush processes key X
+        # before key Y, no flush can ever hold Y while waiting for X.
+        # (Cost: O(N log N) on snapshot keys, always negligible next to I/O.)
+        node_snapshot_sorted = dict(sorted(node_snapshot.items()))
+        edge_snapshot_sorted = dict(sorted(edge_snapshot.items()))
+
+        # Layer B — fail loud via finite transaction timeout.
+        # Wrap _write_batch with unit_of_work(timeout=) so the Neo4j server
+        # aborts a transaction that cannot acquire locks within the configured
+        # window.  Without this, db.lock.acquisition.timeout=0 (server default)
+        # parks the coroutine forever, exhausting write_semaphore permits and
+        # stalling the entire drain pipeline.
+        if self._neo4j_lock_timeout is not None:
+            _bounded_write = _unit_of_work(timeout=self._neo4j_lock_timeout)(
+                _write_batch
+            )
+        else:
+            _bounded_write = _write_batch
+
+        success = False
+        try:
+            await self._ensure_schema()
+
+            # Phase 1: nodes — each chunk is its own execute_write (independent commit).
+            # Do NOT wrap multiple chunks in one explicit transaction — that would
+            # re-collapse the memory bound and defeat the chunking.
+            for chunk in _chunk_dict(node_snapshot_sorted, rows, byts):
+                async with self._driver.session(database=self._database) as db_session:
+                    await db_session.execute_write(
+                        _bounded_write, chunk, {}, [], self.workspace, self.created_by
+                    )
+
+            # Phase 2: label patches — each chunk is its own execute_write.
+            for chunk in _chunk_list(patch_snapshot, rows, byts):
+                async with self._driver.session(database=self._database) as db_session:
+                    await db_session.execute_write(
+                        _bounded_write, {}, {}, chunk, self.workspace, self.created_by
+                    )
+
+            # Phase 3: edges — each chunk is its own execute_write.
+            for chunk in _chunk_dict(edge_snapshot_sorted, rows, byts):
+                async with self._driver.session(database=self._database) as db_session:
+                    await db_session.execute_write(
+                        _bounded_write, {}, chunk, [], self.workspace, self.created_by
+                    )
+
+            success = True
+        except Exception:
+            _LOG.error(
+                "flush_chunk_failed workspace=%s nodes=%d edges=%d patches=%d;"
+                " restoring full snapshot and re-raising",
+                self.workspace,
+                len(node_snapshot),
+                len(edge_snapshot),
+                len(patch_snapshot),
+            )
+            raise
+        finally:
+            if not success:
+                # Restore buffers: snapshot base + any new writes since flush started
+                merged_nodes = dict(node_snapshot)
+                merged_nodes.update(self._node_buffer)
+                self._node_buffer = merged_nodes
+                merged_edges = dict(edge_snapshot)
+                merged_edges.update(self._edge_buffer)
+                self._edge_buffer = merged_edges
+                self._label_patches = patch_snapshot + self._label_patches
+
+    def discard_buffer(self) -> None:
+        """Drop all buffered writes without persisting them (no driver I/O).
+
+        Clears ``_node_buffer``, ``_edge_buffer`` and ``_label_patches`` in
+        memory.  Unlike ``flush``, this performs no Neo4j transaction and never
+        restores buffers.  It is the dead-letter primitive used to isolate a
+        poison line: a failed write's nodes/edges/label-patches stay resident in
+        the buffers (``_flush_body`` restores them on failure), so without a
+        discard primitive a dead-lettered line would remain resident and the
+        next good line's flush would re-include it — cascading dead-letters of
+        otherwise-good events.
+
+        Safety note (LOW severity): this method is intentionally NOT guarded by
+        ``_flush_lock``.  That is safe ONLY because the drainer is the sole flush
+        trigger (Task 6); if another concurrent flush path is ever reintroduced,
+        this method must take ``_flush_lock`` to avoid racing buffer mutation.
+        """
+        self._node_buffer = {}
+        self._edge_buffer = {}
+        self._label_patches = []
+
+    async def _ensure_schema(self) -> None:
+        """Create Neo4j indexes and constraints idempotently (latches once fully established).
+
+        Safety-net for contexts where the FastAPI lifespan is not active (e.g. tests,
+        CLI tools, or direct store use).  The primary schema-initialization path is
+        ``ensure_neo4j_schema()`` called from the lifespan handler *before* the server
+        starts accepting requests, which guarantees the uniqueness constraint is active
+        before any concurrent ``flush()`` transactions execute ``MERGE``.
+
+        The ``_schema_initialized`` flag latches True ONLY when the schema is fully
+        established.  If ``ensure_neo4j_schema`` could not create every index/constraint
+        (e.g. Neo4j was unreachable at init and the connectivity error was swallowed to
+        avoid dead-lettering real events), the flag stays False so the NEXT flush retries
+        schema init — self-healing once Neo4j is reachable and the dedup pass has cleared
+        any duplicates.  This closes the "constraint created once, never retried"
+        data-integrity gap, where a missing uniqueness constraint would otherwise let
+        concurrent MERGE accrue duplicate Session/Event nodes until process restart.
+
+        Two latches, checked in order, both O(1):
+
+        - ``self._schema_initialized`` -- THIS store already established it.
+        - ``schema_ready()`` -- ANY caller in this PROCESS already established
+          it, including the FastAPI lifespan's own fail-closed cold-start pass.
+          In the server that is the branch which always fires: cold start
+          already ran ``ensure_neo4j_schema(..., fail_on_data_conflict=True)``
+          and refused to boot otherwise, so a per-flush pass here can only
+          re-confirm what is already true -- at a cost of ~11 catalog
+          statements per flush, per session. See the ``_SCHEMA_READY`` block
+          above for why that mattered so much under pool starvation.
+
+        When neither latch is set, the attempt is additionally rate-limited by
+        ``_schema_retry_allowed()``: a pass that could not complete (e.g. Neo4j
+        unreachable, connectivity errors swallowed so real events are not
+        dead-lettered) no longer retries on the very NEXT flush. Skipping a
+        retry is safe precisely because the pass is a no-op in the healthy case
+        and a storm in the degraded one -- the writes that follow it have never
+        depended on it having run on this particular flush.
+        """
+        if self._schema_initialized or schema_ready():
+            return
+
+        if not _schema_retry_allowed():
+            return
+
+        fully_established = await ensure_neo4j_schema(self._driver, self._database)
+        if fully_established:
+            self._schema_initialized = True
+            # "Fully established" is a PROCESS-wide fact, not a per-store one --
+            # latch it so sibling stores (one per session) never repeat the pass.
+            mark_schema_ready()
+        # else: leave both flags False so a LATER flush retries schema init, subject
+        # to the backoff above (self-heals once Neo4j is reachable / duplicates are
+        # cleared by the dedup pass).
+
+    async def close(self) -> None:
+        """Flush pending writes and close the driver, if this store owns it.
+
+        Handles event-loop mismatch gracefully when closing the driver from a
+        different loop context.  Sets ``_closed`` on completion.
+
+        When the driver was injected (``owns_driver`` is False), the driver is
+        left open: it is shared with other stores/callers and closing it here
+        would break them out from under their own in-flight work. The shared
+        driver's owner is responsible for closing it exactly once.
+        """
+        # Final flush to persist remaining buffer contents
+        try:
+            await self.flush()
+        except Exception:
+            _LOG.exception(
+                "Final flush failed during close; buffered writes may be lost"
+            )
+
+        if self._owns_driver:
+            # Close the driver, ignoring event-loop mismatch errors
+            try:
+                await self._driver.close()
+            except RuntimeError:
+                pass
+
+        self._closed = True
+
+    async def execute_query(
+        self,
+        query: str,
+        params: dict[str, Any] | None = None,
+        dialect: str = "cypher",
+        workspace: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Execute a Cypher query against Neo4j.
+
+        Args:
+            query:     Cypher query string.
+            params:    Optional query parameters.
+            dialect:   Must be ``"cypher"``; raises ``ValueError`` otherwise.
+            workspace: Scope results to this workspace.  ``None`` uses the
+                       store's own workspace.  ``"*"`` disables workspace
+                       filtering.
+
+        Returns:
+            List of result row dicts.
+
+        Raises:
+            ValueError: If *dialect* is not in ``supported_dialects``.
+        """
+        if dialect not in self.supported_dialects:
+            raise ValueError(
+                f"Unsupported dialect: {dialect!r}. Supported: {self.supported_dialects}"
+            )
+
+        effective_workspace = workspace if workspace is not None else self.workspace
+        query_params: dict[str, Any] = dict(params) if params else {}
+
+        if effective_workspace != "*":
+            query_params["workspace"] = effective_workspace
+
+        async with self._driver.session(database=self._database) as session:
+            result = await session.run(query, query_params)  # type: ignore[arg-type]
+            data = await result.data()
+            # Normalizes only top-level record values; nested temporal values (rare)
+            # must be normalized by callers.
+            return [
+                {k: _normalize_temporal(v) for k, v in dict(record).items()}
+                for record in data
+            ]
+
+    # ------------------------------------------------------------------
+    # Static helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _sanitize_properties(props: dict[str, Any]) -> dict[str, Any]:
+        """Convert a properties dict to Neo4j-compatible types.
+
+        Rules:
+        - ``None`` values are *skipped* (not included in output).
+        - ``str``, ``int``, ``float``, ``bool``, ``datetime`` are kept as-is.
+        - ``list`` whose items are all primitives (str/int/float/bool) is kept.
+        - ``list`` containing non-primitive items is JSON-serialised to a string.
+        - ``dict`` values are JSON-serialised to a string.
+        - Everything else is converted via ``str()``.
+        """
+        result: dict[str, Any] = {}
+        for key, value in props.items():
+            if value is None:
+                continue
+            if isinstance(value, (str, int, float, bool, datetime)):
+                # Never write empty-string timestamps — SET n += row.props would
+                # overwrite a previously valid started_at on the existing node.
+                if isinstance(value, str) and value == "" and key.endswith("_at"):
+                    continue
+                result[key] = value
+            elif isinstance(value, list):
+                if all(isinstance(item, (str, int, float, bool)) for item in value):
+                    result[key] = value
+                else:
+                    result[key] = json.dumps(value)
+            elif isinstance(value, dict):
+                result[key] = json.dumps(value)
+            else:
+                result[key] = str(value)
+        return result

@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+[[ $EUID -eq 0 ]] || { echo 'Run this updater from the macai root console.' >&2; exit 1; }
+release=$(cd -- "$(dirname -- "$0")" && pwd)
+stack=/opt/matrix-stack
+agents=/opt/matrix-agents
+chief=$agents/chief-of-staff
+target=$agents/catalog-release
+registry=$agents/agent-placement.json
+set -a
+. "$stack/.env"
+. "$agents/.env"
+set +a
+export COMPOSE_IGNORE_ORPHANS=true COMPOSE_REMOVE_ORPHANS=false
+agent_compose=(docker compose --project-directory "$agents" --profile '*')
+chief_compose=(docker compose -f "$chief/direct/compose.yaml")
+dashboard=$MATRIX_DATA/dashboard
+override=$agents/compose.override.yaml
+exec 9>/run/lock/matrix-agent-catalog.lock
+flock -n 9
+
+catalog_status() {
+  python3 -B - "$dashboard/agents.json" "$1" <<'PY'
+import json, sys, time
+try:
+    value = json.load(open(sys.argv[1], encoding='utf8'))
+    usable = value['dynamicHandoffs'] is (sys.argv[2] == 'true') and time.time() - value['time'] < 90
+except (OSError, ValueError, KeyError):
+    usable = False
+raise SystemExit(0 if usable else 1)
+PY
+}
+
+wait_for_catalog() {
+  for attempt in $(seq 1 85); do
+    if catalog_status "$1"; then return 0; fi
+    sleep 1
+  done
+  echo 'The resource collector did not publish the expected agent catalog.' >&2
+  return 1
+}
+
+if [[ ${1:-} == activate || ${1:-} == pause ]]; then
+  [[ -f "$target/staged" ]]
+  if [[ $1 == activate ]]; then mode=enable; expected=true; else mode=disable; expected=false; fi
+  python3 -B "$stack/agent_catalog.py" "$mode"
+  wait_for_catalog "$expected"
+  echo "Dynamic agent handoffs enabled: $expected."
+  exit
+fi
+[[ ${1:-} == stage && $# == 1 ]] || { echo 'Usage: install-macai stage | activate | pause' >&2; exit 2; }
+[[ ! -e "$target" ]] || { echo 'A catalog deployment already exists. Check its stage or rollback status.' >&2; exit 1; }
+[[ -f "$registry" && -s "$dashboard/metrics.json" && -f "$chief/direct/compose.yaml" ]]
+[[ -n $("${chief_compose[@]}" ps --status running --quiet chief-of-staff) ]]
+python3 -c 'import yaml'
+
+staging=$(mktemp -d "$agents/.catalog-release.XXXXXXXX")
+rollback=$(mktemp -d "$agents/catalog-rollback.XXXXXXXX")
+workers=()
+mapfile -t active < <("${agent_compose[@]}" ps --status running --services)
+
+candidate() {
+  local key=$1 input=$2 output=$3
+  python3 -B "$release/patch-source.py" "$key" "$input" "$output" "$release/patches/$key.patch" || {
+    echo "Installed $key differs from the release baseline. The preflight stopped before modifying the running services." >&2
+    return 1
+  }
+}
+
+for service in "${active[@]}"; do
+  [[ $service =~ ^[a-z][a-z0-9_-]*$ ]] || continue
+  container=$("${agent_compose[@]}" ps --status running --quiet "$service")
+  if [[ $service == dot ]]; then
+    modules=(dot-bridge.mjs matrix-routing.mjs managed-task.mjs)
+  elif docker exec "$container" test -f /app/connector.mjs; then
+    modules=(connector.mjs matrix-routing.mjs managed-task.mjs store.mjs)
+  else
+    continue
+  fi
+  workers+=("$service")
+  install -d -m 0755 "$staging/$service"
+  for file in "${modules[@]}"; do
+    docker cp "$container:/app/$file" "$staging/$service/.current"
+    candidate "agent-$file" "$staging/$service/.current" "$staging/$service/$file"
+    docker exec -i "$container" node --input-type=module --check < "$staging/$service/$file"
+  done
+  rm -- "$staging/$service/.current"
+  install -m 0644 "$release/common/"{agent-catalog.mjs,capability-dispatch.mjs} "$staging/$service/"
+  chmod 0644 "$staging/$service/"*.mjs
+done
+(( ${#workers[@]} > 0 ))
+canonical=(connector.mjs matrix-routing.mjs managed-task.mjs store.mjs dot-bridge.mjs)
+install -d -m 0755 "$staging/template"
+for file in "${canonical[@]}"; do
+  candidate "agent-$file" "$agents/connector/$file" "$staging/template/$file"
+done
+candidate monitor "$stack/monitor.py" "$staging/monitor.py"
+candidate chief-bridge "$chief/direct/bridge.mjs" "$staging/bridge.mjs"
+for file in persona brief.mjs compile-persona.py; do
+  previous=$chief/persona/$file
+  if [[ -f $previous ]]; then
+    candidate "persona-$file" "$previous" "$staging/$file"
+  fi
+done
+for file in install-agent install-analyst; do
+  previous=$agents/$file
+  if [[ -f $previous ]]; then
+    candidate "agent-$file" "$previous" "$staging/$file"
+  fi
+done
+python3 -B - "$staging" "$target" "${workers[@]}" <<'PY' > "$staging/worker-bindings.json"
+import json, sys
+from pathlib import Path
+source, target = map(Path, sys.argv[1:3])
+print(json.dumps({name: {'/app/' + path.name: str(target / name / path.name)
+                        for path in (source / name).glob('*.mjs')} for name in sys.argv[3:]}))
+PY
+printf '{"chief-of-staff":{"/app/agent-catalog.mjs":"%s/agent-catalog.mjs"}}\n' "$target" > "$staging/chief-bindings.json"
+python3 -B "$release/patch-compose.py" "$override" "$staging/agents.yaml" "$dashboard" "$staging/worker-bindings.json"
+python3 -B "$release/patch-compose.py" "$chief/direct/compose.yaml" "$staging/chief.yaml" "$dashboard" "$staging/chief-bindings.json"
+
+files=("$registry" "$stack/monitor.py" "$stack/agent_catalog.py" "$stack/agent-profiles.json" "$dashboard/index.html"
+       "$dashboard/agent-catalog.js" "$dashboard/agents.json" "$override" "$chief/direct/compose.yaml" "$chief/direct/bridge.mjs"
+       "$chief/direct/capability-review.mjs" "$chief/persona/persona" "$chief/persona/brief.mjs" "$chief/persona/compile-persona.py"
+       "$agents/install-agent" "$agents/install-analyst" "$agents/connector/agent-catalog.mjs" "$agents/connector/capability-dispatch.mjs")
+for file in "${canonical[@]}"; do files+=("$agents/connector/$file"); done
+for file in "${files[@]}"; do
+  if [[ -f $file ]]; then cp -p --parents -- "$file" "$rollback"; fi
+done
+restore() {
+  code=$?
+  trap - ERR
+  set +e
+  for file in "${files[@]}"; do
+    if [[ -f $rollback$file ]]; then cp -p -- "$rollback$file" "$file"; else rm -f -- "$file"; fi
+  done
+  systemctl restart matrix-monitor.service
+  "${agent_compose[@]}" up -d --no-deps --no-build --force-recreate "${workers[@]}"
+  "${chief_compose[@]}" up -d --no-deps --no-build --force-recreate chief-of-staff
+  if [[ -d $target ]]; then mv -- "$target" "$rollback/failed-release"; fi
+  echo "Catalog deployment failed. The prior files were restored from $rollback." >&2
+  exit "$code"
+}
+trap restore ERR
+
+chmod 0755 "$staging"
+mv -- "$staging" "$target"
+install -m 0644 "$release/common/agent-catalog.mjs" "$target/agent-catalog.mjs"
+install -m 0644 "$release/stack/"{agent_catalog.py,agent-profiles.json} "$stack/"
+install -m 0644 "$target/monitor.py" "$stack/monitor.py"
+install -m 0644 "$release/stack/agent-catalog.js" "$dashboard/"
+if ! grep -Fq './agent-catalog.js' "$dashboard/index.html"; then
+  printf '\n<script defer src="./agent-catalog.js"></script>\n' >> "$dashboard/index.html"
+fi
+python3 -B "$stack/agent_catalog.py" seed "$stack/agent-profiles.json"
+python3 -B "$stack/agent_catalog.py" disable
+systemctl restart matrix-monitor.service
+wait_for_catalog false
+
+install -m 0644 "$target/agents.yaml" "$override"
+install -m 0644 "$target/chief.yaml" "$chief/direct/compose.yaml"
+install -m 0644 "$target/template/"*.mjs "$release/common/"{agent-catalog.mjs,capability-dispatch.mjs} "$agents/connector/"
+install -m 0644 "$target/bridge.mjs" "$release/chief/capability-review.mjs" "$chief/direct/"
+for file in persona brief.mjs compile-persona.py; do
+  previous=$chief/persona/$file
+  if [[ -f $target/$file ]]; then
+    install -m "$(stat -c %a "$previous")" "$target/$file" "$previous"
+  fi
+done
+for file in install-agent install-analyst; do
+  previous=$agents/$file
+  if [[ -f $target/$file ]]; then
+    install -m 0755 "$target/$file" "$previous"
+  fi
+done
+"${agent_compose[@]}" config --quiet
+"${chief_compose[@]}" config --quiet
+"${agent_compose[@]}" up -d --no-deps --no-build --force-recreate --wait --wait-timeout 90 "${workers[@]}"
+"${chief_compose[@]}" up -d --no-deps --no-build --force-recreate --wait --wait-timeout 90 chief-of-staff
+touch "$target/staged"
+trap - ERR
+printf 'Agent catalog staged on macai. Dynamic handoffs are paused. Previous files: %s\n' "$rollback"

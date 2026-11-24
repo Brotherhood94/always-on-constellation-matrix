@@ -1,0 +1,27 @@
+--- installed
++++ updated
+@@ -35,2 +35,3 @@
+     if (!columns.includes('managed')) this.db.exec('ALTER TABLE inbox ADD COLUMN managed TEXT');
++    if (!columns.includes('outgoing')) this.db.exec('ALTER TABLE inbox ADD COLUMN outgoing TEXT');
+     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS inbox_request_number ON inbox(request, number)');
+@@ -52,3 +53,3 @@
+     const row = this.db.prepare(`SELECT id, thread, body, reply, COALESCE(request, id) AS request, number,
+-                                        delegator, reply_to AS replyTo, attachment_refs AS attachmentRefs, managed
++                                        delegator, reply_to AS replyTo, attachment_refs AS attachmentRefs, managed, outgoing
+                                  FROM inbox WHERE sent IS NULL ORDER BY rowid LIMIT 1`).get();
+@@ -57,2 +58,3 @@
+       row.managed = row.managed ? JSON.parse(row.managed) : null;
++      row.outgoing = row.outgoing ? JSON.parse(row.outgoing) : null;
+     }
+@@ -71,2 +73,6 @@
+     this.db.prepare("UPDATE inbox SET reply=?, body='', attachment_refs=NULL WHERE id=?").run(reply, event);
++  }
++
++  saveOutgoing(event, outgoing) {
++    this.db.prepare('UPDATE inbox SET outgoing=? WHERE id=?').run(JSON.stringify(outgoing), event);
+   }
+@@ -108,3 +114,3 @@
+     try {
+-      this.db.prepare('UPDATE inbox SET sent=?, reply=NULL WHERE id=?').run(id, event);
++      this.db.prepare('UPDATE inbox SET sent=?, reply=NULL, outgoing=NULL WHERE id=?').run(id, event);
+       this.db.prepare('DELETE FROM outgoing_attachments WHERE assignment=?').run(event);

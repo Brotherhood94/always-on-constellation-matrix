@@ -1,0 +1,92 @@
+--- installed
++++ updated
+@@ -6,2 +6,4 @@
+ import { acceptedMessage, requestedAttachments, returnDelegatedReview, taskOutcomeKey, team, threadRelation, threadReply } from './matrix-routing.mjs';
++import { createCatalog } from './agent-catalog.mjs';
++import { decideDispatch, dynamicTurn, gapNotice, guidanceFor, routingFor } from './capability-dispatch.mjs';
+ import { attachmentLimit, importAttachments, uploadAttachment } from './matrix-media.mjs';
+@@ -15,7 +17,8 @@
+ const userId = `@${AGENT_USERNAME}:${MATRIX_SERVER_NAME}`;
+-const members = team(MATRIX_SERVER_NAME);
+-if (members[userId] !== AGENT_NAME) throw new Error('Unknown Matrix agent identity');
+-const peers = Object.entries(members).filter(([id]) => id !== userId).map(([id, name]) => ({ id, name }));
++const catalog = createCatalog(MATRIX_SERVER_NAME, process.env.MATRIX_CATALOG_PATH);
++const legacy = team(MATRIX_SERVER_NAME);
++const routing = () => routingFor(catalog, legacy, MATRIX_OWNER, MATRIX_PLANNER);
++await catalog.refresh();
++if (routing().names[userId] !== AGENT_NAME) throw new Error('Unknown Matrix agent identity');
+ const workspace = await realpath(AGENT_WORKSPACE);
+-const mediaSenders = new Set([MATRIX_OWNER, MATRIX_PLANNER, ...Object.keys(members)]);
+ const outcomeRecipients = [
+@@ -25,4 +28,4 @@
+ const roles = {
+-  manager: 'Coordinate the explicitly assigned request in its Matrix thread. Set the deliverable and acceptance criteria. Use qualified agents for implementation and review where needed. Verify the evidence before closing. Delegate Epyc100 only for explicitly authorized work in its environment.',
+-  analyst: 'Analyze the request and make a practical plan. Delegate coding work to Coder when implementation is requested. When review is requested, ask Reviewer and incorporate the feedback in your final result.',
++  manager: 'Coordinate the explicitly assigned request in its Matrix thread. Set the deliverable and acceptance criteria. Use qualified agents for implementation and review where needed. Verify the evidence before closing.',
++  analyst: 'Analyze the request and make a practical plan. Seek implementation or review based on the capabilities needed and incorporate the feedback in your final result.',
+   reviewer: 'Review the material shared in the thread and explain your findings. The connector returns delegated reviews to the requesting agent in the same thread.',
+@@ -45,4 +48,3 @@
+     'Answer status and information questions from the user yourself unless they ask for collaboration. ' +
+-    `You can hand work to ${peers.map(peer => peer.name).join(' or ')}. Include the original task, relevant findings, and what the recipient should do. ` +
+-    `End the reply with a line in the form HANDOFF: ${peers[0].name}, using exactly one chosen recipient name. The connector will create the Matrix mention. ` +
++    'Include the original task, relevant findings, and what the recipient should do. Follow the per-turn routing instructions to use a handoff. ' +
+     'Use that line only when the other agent should act. Omit it when your reply completes the request. ' +
+@@ -61,7 +63,8 @@
+   const limit = attachmentLimit(configuration['m.upload.size']);
+-  media = { client, roomId, serverName: MATRIX_SERVER_NAME, workspace, senders: mediaSenders, limit };
++  media = { client, roomId, serverName: MATRIX_SERVER_NAME, workspace, limit };
+   process.env.MATRIX_MEDIA_LIMIT = String(limit);
+   client.on('room.message', (incomingRoom, event) => {
++    const { names, policy } = routing();
+     const accepted = acceptedMessage({ ...event, room_id: incomingRoom }, {
+-      roomId, owner: MATRIX_OWNER, userId, agents: Object.keys(members), displayNames: members, activatedAt, planner: MATRIX_PLANNER,
++      roomId, owner: MATRIX_OWNER, userId, agents: Object.keys(names), displayNames: names, activatedAt, planner: MATRIX_PLANNER, routingPolicy: policy,
+     });
+@@ -153,2 +156,4 @@
+ async function deliver(client, event) {
++  const { names: members } = routing();
++  const peers = Object.entries(members).filter(([id]) => id !== userId).map(([id, name]) => ({ id, name }));
+   let requesterName;
+@@ -170,3 +175,4 @@
+     }
+-    const { paths, issues } = await importAttachments(media, event);
++    const senders = new Set([MATRIX_OWNER, MATRIX_PLANNER, ...Object.keys(members)]);
++    const { paths, issues } = await importAttachments({ ...media, senders }, event);
+     if (issues.length) {
+@@ -182,5 +188,8 @@
+     try {
+-      const guidance = managedGuidance(event, AGENT_NAME, members);
++      const managed = managedGuidance(event, AGENT_NAME, members, userId);
++      const legacyHandoff = !event.replyTo && !event.managed && !dynamicTurn(catalog, event) &&
++        `For a handoff use HANDOFF: followed by exactly one of these display names: ${peers.map(peer => peer.name).join(', ')}.`;
++      const guidance = guidanceFor(catalog, event, userId, managed || legacyHandoff);
+       if (reply === null) reply = await runTurn({ runtimeHome, workspace, event: { ...context, files: paths }, store, engine, codexConfig, onStarted, guidance });
+-      if (!issues.length && AGENT_USERNAME === 'reviewer' && !event.replyTo && !event.managed) {
++      if (!issues.length && AGENT_USERNAME === 'reviewer' && !event.replyTo && !event.managed && !dynamicTurn(catalog, event)) {
+         const delegator = peers.find(peer => event.delegator ? peer.id === event.delegator : peer.name === 'Analyst');
+@@ -205,4 +214,12 @@
+   await publishActivity(client, event.id);
+-  const delivery = await deliverAttachments(client, event, reply);
+-  const content = threadReply(event, reply, peers, requesterName, outcomeRecipients, delivery);
++  let outgoing = event.outgoing;
++  if (!outgoing) {
++    const delivery = await deliverAttachments(client, event, reply);
++    const decision = await decideDispatch(catalog, event, reply, userId, client, roomId);
++    const content = threadReply(event, reply, peers, requesterName, outcomeRecipients, delivery, decision);
++    const notice = gapNotice(event, decision, threadRelation(event));
++    outgoing = { content, notice };
++    store.saveOutgoing(event.id, outgoing);
++  }
++  const { content, notice } = outgoing;
+   const txnId = createHash('sha256').update(event.id).digest('hex');
+@@ -210,3 +227,5 @@
+   const outcomeKey = { completed: '✅', blocked: '❌' }[status];
+-  store.sent(event.id, await sendEncrypted(client, roomId, txnId, content), outcomeKey);
++  const sent = await sendEncrypted(client, roomId, txnId, content);
++  if (notice) await sendEncrypted(client, roomId, reactionTransaction('capability-gap', event.id), notice);
++  store.sent(event.id, sent, outcomeKey);
+   console.log('Encrypted agent reply delivered.');
+@@ -233,2 +252,3 @@
+   try {
++    await catalog.refresh();
+     client ??= await connect();

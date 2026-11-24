@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+release=$(cd -- "$(dirname -- "$0")" && pwd)
+home_dir=$HOME/.local/share/epyc100-agent
+connector=$home_dir/connector
+node=$home_dir/node/bin/node
+[[ -r $home_dir/matrix-catalog.json ]] || {
+  echo 'Create the external worker matrix-catalog.json as documented in the runbook.' >&2
+  exit 1
+}
+systemctl --user is-active --quiet epyc100-matrix.service
+exec 9>"$home_dir/.catalog-update.lock"
+flock -n 9
+
+rollback=$(mktemp -d "$home_dir/catalog-rollback.XXXXXXXX")
+files=(epyc100.mjs matrix-routing.mjs managed-task.mjs store.mjs agent-catalog.mjs capability-dispatch.mjs)
+cp -p -- "$home_dir/service.py" "$rollback/"
+for file in "${files[@]}"; do
+  if [[ -f $connector/$file ]]; then cp -p -- "$connector/$file" "$rollback/"; fi
+done
+for file in "$release/epyc100/epyc100.mjs" "$release/common/"*.mjs; do "$node" --check "$file"; done
+python3 -B - "$release/epyc100/service.py" <<'PY'
+import ast, sys
+from pathlib import Path
+ast.parse(Path(sys.argv[1]).read_text())
+PY
+
+restore() {
+  code=$?
+  trap - ERR
+  set +e
+  cp -p -- "$rollback/service.py" "$home_dir/service.py"
+  for file in "${files[@]}"; do
+    if [[ -f $rollback/$file ]]; then cp -p -- "$rollback/$file" "$connector/$file"; else rm -f -- "$connector/$file"; fi
+  done
+  systemctl --user restart epyc100-matrix.service
+  echo "Epyc100 update failed. Restored previous files from $rollback." >&2
+  exit "$code"
+}
+trap restore ERR
+install -m 0644 "$release/epyc100/service.py" "$home_dir/service.py"
+install -m 0644 "$release/epyc100/epyc100.mjs" "$release/common/"*.mjs "$connector/"
+python3 -B "$home_dir/service.py" --input-type=module -e '
+  const response = await fetch("https://" + process.env.EPYC_MATRIX_SERVER_NAME + ":8443/agents.json", { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) process.exit(1);
+  const catalog = await response.json();
+  if (catalog.version !== 1 || Date.now() - catalog.time * 1000 > 180000 ||
+        !catalog.agents.some(agent => agent.key === "epyc100")) process.exit(1);
+'
+systemctl --user restart epyc100-matrix.service
+invocation=$(systemctl --user show epyc100-matrix.service -p InvocationID --value)
+for attempt in $(seq 1 40); do
+  if journalctl --user --no-pager -o cat "_SYSTEMD_INVOCATION_ID=$invocation" | grep -Fq 'Epyc100 is listening for explicit Matrix mentions'; then
+    trap - ERR
+    echo "Epyc100 catalog access and Matrix listener verified. Previous files: $rollback"
+    exit 0
+  fi
+  sleep 1
+done
+false
