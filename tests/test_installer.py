@@ -1,16 +1,18 @@
 """Installer and topology checks using deployment-independent fixtures."""
 from contextlib import redirect_stderr, redirect_stdout
+import curses
 from io import StringIO
 import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
-from installer import load, main, normalized, prepare_storage, register_entry, PRESETS, save
+from agent_picker import checklist, select_agents
+from installer import interactive, load, main, normalized, prepare_storage, register_entry, PRESETS, save
 from compose import definition
 from remote import compose_remote
 
@@ -26,6 +28,49 @@ class InstallerTest(unittest.TestCase):
         self.registry = {'agents': {}, 'dynamic_handoffs': True, 'local_server': 'fixture.test'}
         for key in self.settings['agents']:
             register_entry(self.settings, self.registry, key, self.presets[key])
+
+    def test_agent_checklist_shows_profiles_and_toggles_agents(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        screen.getch.side_effect = [
+            curses.KEY_DOWN, ord(' '), curses.KEY_DOWN, ord(' '),
+            curses.KEY_UP, ord(' '), curses.KEY_DOWN, curses.KEY_DOWN, ord(' '), ord('\n'),
+        ]
+        self.assertEqual(checklist(screen, self.presets), ['reviewer', 'manager'])
+        rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
+        self.assertIn('[x] Coder', rendered)
+        self.assertIn('Implement and test code changes.', rendered)
+        self.assertIn('Role: coordinator', rendered)
+        self.assertIn('Model: gpt-6.2-astra  |  Reasoning: high', rendered)
+
+    def test_agent_checklist_scrolls_and_can_confirm_an_empty_roster(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (20, 65)
+        screen.getch.side_effect = [curses.KEY_DOWN] * 5 + [ord(' '), ord(' '), curses.KEY_ENTER]
+        self.assertEqual(checklist(screen, self.presets), [])
+        rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
+        self.assertIn('[x] Remote Worker', rendered)
+        self.assertIn('Runs: remote', rendered)
+
+    def test_agent_selection_can_use_line_input_without_a_terminal(self):
+        output = StringIO()
+        with patch('sys.stdin.isatty', return_value=False), patch('agent_picker.curses.wrapper') as picker, \
+             patch('builtins.input', return_value=' coder, reviewer '), redirect_stdout(output):
+            self.assertEqual(select_agents(self.presets), ['coder', 'reviewer'])
+        picker.assert_not_called()
+        self.assertIn('Analyze requirements, evidence and options', output.getvalue())
+
+    def test_interactive_installer_only_asks_overrides_for_selected_agents(self):
+        answers = ['Work', 'Personal', '', 'n', 'fixture.test', 'operator', 'n', 'n']
+        with patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
+             patch('builtins.input', side_effect=answers) as answer:
+            settings = normalized(interactive(self.presets), self.presets)
+        picker.assert_called_once_with(self.presets)
+        self.assertEqual(settings['agents'], ['coder', 'reviewer'])
+        self.assertEqual(settings['subscriptions'], {'default': 'Work', 'overrides': {'coder': 'Personal'}})
+        prompts = [call.args[0] for call in answer.call_args_list if 'subscription override' in call.args[0]]
+        self.assertEqual(prompts, ['coder subscription override (blank uses Work): ',
+                                   'reviewer subscription override (blank uses Work): '])
 
     def test_repeat_setup_retains_active_agents_and_provider_choice(self):
         self.registry['agents']['coder']['active'] = True

@@ -18,6 +18,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
+from agent_picker import placement as agent_placement, select_agents
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
@@ -267,7 +268,7 @@ def register_entry(settings, registry, key, definition):
         raise ValueError('Agent requires a printable name and a valid provider model')
     if effort not in {'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}:
         raise ValueError('Invalid reasoning effort')
-    placement = definition.get('placement', 'remote' if key == 'remote-worker' else 'local')
+    placement = agent_placement(key, definition)
     if placement not in {'local', 'remote'} or (key in {'chief-of-staff', 'root'} and placement != 'local'):
         raise ValueError('Invalid agent placement')
     validated = profile(definition['profile'])
@@ -456,8 +457,7 @@ def operator_lock(data):
 
 
 def interactive(presets):
-    print('Available agents: ' + ', '.join(presets))
-    chosen = [value.strip() for value in input('Agents to install (comma separated): ').split(',') if value.strip()]
+    chosen = select_agents(presets)
     subscription = input('Default Amplifier subscription label: ').strip()
     overrides = {}
     for key in chosen:

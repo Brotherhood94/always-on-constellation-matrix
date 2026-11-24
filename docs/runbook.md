@@ -11,7 +11,9 @@ sudo ./constellation_matrix agent sign-in coder
 ./constellation_matrix status
 ```
 
-The wizard asks for the exact roster. An empty selection provisions the workspace so you can add agents later. State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, keep the owner password file outside the checkout with mode `0600`. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
+Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, model, capabilities, and limits. Press Space to toggle an agent and Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later. Terminals without checklist support accept comma-separated agent IDs.
+
+State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, keep the owner password file outside the checkout with mode `0600`. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
 
 `./constellation_matrix status` reads dashboard snapshots as a regular user. Run `sudo ./constellation_matrix status --refresh` to publish current Docker inventory.
 

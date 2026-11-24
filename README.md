@@ -121,7 +121,7 @@ sudo ./constellation_matrix agent sign-in manager
 ./constellation_matrix status
 ```
 
-1. Select the agents to install. Choose Manager, Coder, and Reviewer to try the flow above. Set a default Amplifier subscription label and override it for individual agents as needed.
+1. Browse the agent checklist with the arrow keys to read each profile. Press Space to select and Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above. Set a default Amplifier subscription label and override it for individual agents as needed.
 2. Run `sudo ./constellation_matrix agent sign-in <agent>` for each selected local agent and complete its provider sign-in.
 3. Sign in to Element, open **Agents → Office**, and use the mention picker. Try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.”
 
