@@ -21,6 +21,6 @@ In Element, sign in with your new Matrix account and open **Agents → Office**.
 - **Extend the team.** Add agents with `sudo ./constellation agent add --profile /path/to/agent.json`. Each general Office worker has a private workspace and read/write access to the [shared desktop](desktop/README.md). [Profile and remote-worker setup](docs/runbook.md)
 - **Review work and maintenance.** Use the Chief of Staff DM for team reviews and proposed hires or profile edits. Root Operations approvals go to its own private chat. [Chief of Staff](docs/chief-of-staff.md) · [Root Operations](integrations/root/README.md)
 - **Connect integrations.** Dot can publish Office tasks and fetch their outcomes through the private tunnel. Telegram Control can prepare a draft or report updates from an approved portal. [Dot and tunnel setup](docs/dot.md) · [Telegram](docs/telegram.md)
-- **Verify and recover.** Use `sudo ./constellation status`, `backup`, and `restore-check`. Read the [acceptance checks](docs/acceptance.md) and the [communication policies](policy/README.md) before replacing an existing deployment.
+- **Verify and recover.** Run `./constellation status` for the latest dashboard snapshot. Use sudo for `status --refresh`, `backup`, and `restore-check`. Read the [acceptance checks](docs/acceptance.md) and the [communication policies](policy/README.md) before replacing an existing deployment.
 
 [Architecture](docs/architecture.md) · [Microsoft Constellation](https://github.com/microsoft/amplifier-constellation) · [Amplifier](https://github.com/microsoft/amplifier)

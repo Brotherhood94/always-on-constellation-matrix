@@ -1,13 +1,16 @@
 """Installer and topology checks using deployment-independent fixtures."""
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
-from installer import load, normalized, register_entry, PRESETS, save
+from installer import load, main, normalized, register_entry, PRESETS, save
 from compose import definition
 from remote import compose_remote
 
@@ -77,6 +80,37 @@ class InstallerTest(unittest.TestCase):
             normalized({**self.raw, 'context_url': 'https://fixture.test/?key=private'}, self.presets)
         with self.assertRaises(ValueError):
             normalized({**self.raw, 'context_url': 'https://fixture.test/?connectURL=bolt%2Bs%3A%2F%2Fother.test%3A17687'}, self.presets)
+
+    def test_status_without_sudo_uses_only_dashboard_snapshots(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            dashboard = data / 'dashboard'
+            dashboard.mkdir()
+            save(dashboard / 'agents.json', {'time': 100, 'agents': [{'name': 'Coder', 'status': 'Available'}]})
+            save(dashboard / 'integrations.json', {'time': 290, 'services': {'Matrix': 'running'}})
+            command = ['constellation', '--data-dir', work, 'status']
+            output = StringIO()
+            with patch('sys.argv', command), patch('installer.os.geteuid', return_value=1000), \
+                 patch('installer.time.time', return_value=300), patch('installer.open_existing') as open_existing, \
+                 patch('installer.compose') as compose, redirect_stdout(output):
+                main()
+            open_existing.assert_not_called()
+            compose.assert_not_called()
+            self.assertIn('Agents (stale, last updated', output.getvalue())
+            self.assertIn('Coder  Available', output.getvalue())
+            self.assertIn('Integrations (updated', output.getvalue())
+            self.assertIn('Matrix  running', output.getvalue())
+
+    def test_live_status_requires_sudo_before_accessing_docker(self):
+        command = ['constellation', 'status', '--refresh']
+        error = StringIO()
+        with patch('sys.argv', command), patch('installer.os.geteuid', return_value=1000), \
+             patch('installer.open_existing') as open_existing, redirect_stderr(error):
+            with self.assertRaises(SystemExit) as exit:
+                main()
+        open_existing.assert_not_called()
+        self.assertEqual(exit.exception.code, 2)
+        self.assertIn('status --refresh as a VPS administrator (sudo)', error.getvalue())
 
 
 if __name__ == '__main__':

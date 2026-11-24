@@ -8,10 +8,12 @@ Install Docker Engine with Compose V2, Python 3, curl, Restic, and Tailscale on 
 sudo ./constellation install
 sudo ./constellation agent sign-in manager
 sudo ./constellation agent sign-in coder
-sudo ./constellation status
+./constellation status
 ```
 
 The wizard asks for the exact roster. An empty selection provisions the workspace so you can add agents later. The installer stores all generated state under `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to scope a second installation. The config-file mode accepts an owner password file with mode `0600`. Use `./constellation validate --config /path/to/install.json` to check the configuration without installing.
+
+`./constellation status` reads the existing dashboard snapshots and displays their timestamps and freshness. Use `sudo ./constellation status --refresh` to query Docker and publish updated inventory. Installation, service management, provisioning and recovery use the VPS administrator account. Office, the Chief of Staff DM and the dashboard use their usual account access.
 
 Sign in to Element with your Matrix operator account. The Agents Space links Office, VPS Alerts, and the private agent chats you selected. In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view. The monitor publishes its shortcuts once it sees the operator in VPS Alerts. Sign in to Neo4j Browser as `neo4j` using the deployment’s local `context/neo4j-password` file.
 

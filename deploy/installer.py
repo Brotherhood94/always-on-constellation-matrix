@@ -2,6 +2,7 @@
 """Install and operate a private Matrix Constellation deployment."""
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import fcntl
 from getpass import getpass
 from hashlib import sha256
@@ -15,6 +16,7 @@ import stat
 import subprocess
 import sys
 from tempfile import NamedTemporaryFile, TemporaryDirectory
+import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
@@ -389,7 +391,6 @@ def prepare_storage(settings, data):
 
 def publish_inventory(settings, data, registry):
     from agent_catalog import document
-    import time
     observed = []
     result = compose(data, '--profile', 'agents', 'ps', '-a', '--format', 'json', stdout=subprocess.PIPE, text=True)
     raw = result.stdout.strip()
@@ -412,6 +413,25 @@ def publish_inventory(settings, data, registry):
     now = int(time.time())
     save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now), mode=0o644)
     save(data / 'dashboard/integrations.json', {'time': now, 'services': integrations}, mode=0o644)
+
+
+def show_status(data):
+    dashboard = data / 'dashboard'
+    for label, name, entries in (
+        ('Agents', 'agents.json', lambda snapshot: ((agent['name'], agent['status']) for agent in snapshot['agents'])),
+        ('Integrations', 'integrations.json', lambda snapshot: snapshot['services'].items()),
+    ):
+        try:
+            snapshot = load(dashboard / name)
+        except FileNotFoundError:
+            print(f'{label} (no status snapshot available)')
+            continue
+        timestamp = snapshot['time']
+        updated = datetime.fromtimestamp(timestamp, timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+        age = 'stale, last updated' if time.time() - timestamp > 180 else 'updated'
+        print(f'{label} ({age} {updated})')
+        for entry, state in entries(snapshot):
+            print(f'  {entry}  {state}')
 
 
 def open_existing(data):
@@ -654,7 +674,8 @@ def main():
     confirm = remote.add_parser('confirm')
     confirm.add_argument('key')
     confirm.add_argument('--receipt', type=Path, required=True)
-    commands.add_parser('status')
+    status = commands.add_parser('status', help='Read the dashboard snapshots')
+    status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services (sudo)')
     commands.add_parser('backup')
     commands.add_parser('restore-check')
     commands.add_parser('telegram').add_argument('arguments', nargs=argparse.REMAINDER)
@@ -675,8 +696,12 @@ def main():
         print('Deployment configuration is valid.')
         return
     data = args.data_dir.absolute()
+    if args.command == 'status' and not args.refresh:
+        show_status(data)
+        return
     if os.geteuid() != 0:
-        parser.error('Run the installer or operator command with sudo')
+        command = 'status --refresh' if args.command == 'status' else args.command
+        parser.error(f'Run {command} as a VPS administrator (sudo)')
     if data == Path('/') or data.is_symlink():
         parser.error('Use a dedicated deployment directory')
     if args.command == 'install':
