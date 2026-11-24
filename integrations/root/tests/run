@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+src="$(dirname "$here")"
+patch="$src/updates/proposal-validation"
+broker="$src/updates/reviewed-scripts"
+connector_image="${TELEGRAM_CONNECTOR_TEST_IMAGE:-matrix-telegram-connector:0.2.1}"
+network="root-review-check-$$"
+container="$network-synapse"
+volume="$network-data"
+syn=ghcr.io/element-hq/synapse:v1.165.0
+cleanup() {
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker volume rm "$volume" >/dev/null 2>&1 || true
+  docker network rm "$network" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker network create --internal "$network" >/dev/null
+docker volume create "$volume" >/dev/null
+docker run --rm -i --pull never --network none -v "$volume:/data" --entrypoint python "$syn" - <<'PY'
+from pathlib import Path
+import subprocess
+import yaml
+p=Path('/data/homeserver.yaml')
+subprocess.run(['python','-m','synapse.app.homeserver','--server-name','fixture.test',
+ '--config-path',str(p),'--generate-config','--report-stats=no','--data-directory','/data'],check=True)
+config=yaml.safe_load(p.read_text())
+config.update(listeners=[{'type':'http','port':8008,'tls':False,'resources':[{'names':['client']}]}],
+ enable_registration=True, enable_registration_without_verification=True,
+ rc_registration={'per_second':10,'burst_count':10}, rc_message={'per_second':20,'burst_count':50},
+ database={'name':'sqlite3','args':{'database':'/data/homeserver.db'}})
+p.write_text(yaml.safe_dump(config))
+PY
+docker run -d --pull never --name "$container" --network "$network" --network-alias synapse \
+  -v "$volume:/data" --entrypoint python "$syn" -m synapse.app.homeserver -c /data/homeserver.yaml >/dev/null
+for attempt in $(seq 1 40); do
+  if docker exec "$container" curl -fsS http://localhost:8008/_matrix/client/versions >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+docker exec "$container" curl -fsS http://localhost:8008/_matrix/client/versions >/dev/null
+docker run --rm --pull never --network "$network" --network-alias context --user 0:0 --cap-drop ALL --tmpfs /state --tmpfs /run \
+  -v "$patch/agent.mjs:/app/root/agent.mjs:ro" -v "$patch/protocol.mjs:/app/root/protocol.mjs:ro" \
+  -v "$src/matrix-session.mjs:/app/root/matrix-session.mjs:ro" -v "$here/acp-stub.mjs:/app/root/acp.mjs:ro" \
+  -v "$src/operations.json:/operations.json:ro" -v "$here/fixture.mjs:/app/root/fixture.mjs:ro" \
+  --entrypoint node "$connector_image" /app/root/fixture.mjs
+docker run --rm --pull never --network none --cap-drop ALL --read-only --tmpfs /tmp \
+  -v "$broker/broker.py:/fixture/broker.py:ro" -v "$here/broker_check.py:/fixture/broker_check.py:ro" \
+  --user 0:0 --entrypoint python "$syn" -B /fixture/broker_check.py

@@ -1,0 +1,72 @@
+name: matrix-root-operations
+x-worker: &worker
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  tmpfs: [/tmp]
+  cgroup_parent: matrix-workload.slice
+  logging:
+    driver: json-file
+    options: {max-size: '5m', max-file: '2'}
+services:
+  engine:
+    <<: *worker
+    image: matrix-telegram-engine:0.1.2
+    pull_policy: never
+    user: '991:991'
+    entrypoint: [/bin/sh, /root-engine/engine-start]
+    environment:
+      AGENT_INSTANCE_CERTIFICATE_NAMES: '["engine"]'
+    volumes:
+      - ./app:/root-engine:ro
+      - ./instance:/instance
+      - ./exchange:/exchange
+    networks: [engine, provider]
+    mem_limit: 1g
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --cacert, /exchange/ca.pem, 'https://engine:19443/']
+      interval: 5s
+      timeout: 4s
+      retries: 15
+  gateway:
+    <<: *worker
+    image: matrix-telegram-connector:0.2.1
+    pull_policy: never
+    user: '${ROOT_GATEWAY_UID:?}:${ROOT_GATEWAY_GID:?}'
+    entrypoint: [node, /app/root/agent.mjs]
+    profiles: [active]
+    environment:
+      AGENT_USERNAME: root
+      AGENT_NAME: Root
+      AGENT_MODEL: gpt-6.2-sol
+      AGENT_REASONING: xhigh
+    labels:
+      net.matrix_agents.dashboard: 'true'
+    healthcheck:
+      test: [CMD, node, -e, "process.exit(Date.now() - require('fs').statSync('/state/synced').mtimeMs < 45000 ? 0 : 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 20s
+    volumes:
+      - ./app:/app/root:ro
+      - ./operations.json:/operations.json:ro
+      - ./gateway-credentials:/credentials:ro
+      - ./gateway:/state
+      - ./config.json:/config.json:ro
+      - ./context-token:/context-token:ro
+      - /run/matrix-root-operations.sock:/run/executor.sock:ro
+    networks: [matrix, memory, engine]
+    mem_limit: 384m
+networks:
+  matrix:
+    external: true
+    name: matrix-stack_clients
+  memory:
+    external: true
+    name: matrix-context_memory
+  engine:
+    internal: true
+  provider:

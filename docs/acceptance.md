@@ -12,6 +12,8 @@ Record the deployment date, source revision, applicable version pins, result, an
 | Managed tasks | Five- and six-reply paths, a blocked worker, direct status, and terminal reactions passed on local Synapse. The live Dot → Manager → external worker → Manager test returned the external hostname, closed the original thread, and exposed the completed outcome to Dot. |
 | Optional GitHub integration | A live read-only `GET /user` confirmed Coder's intended GitHub login. Repository creation, PR merge, and the repository deletion guard were exercised in simulation. |
 | Chief of Staff | The direct Matrix reader recorded a live encrypted thread opened in Element. A subsequent review read interactions from Neo4j, published an encrypted proposal in the dedicated room, and archived it in the graph. |
+| Root Operations | An approved inventory ran on the reference VPS and returned exit code zero in the originating thread with a Matrix mention of Manager. Isolated Synapse and broker fixtures cover owner-only vote handling, rejection, script integrity, and replay. [Root checks](../integrations/root/README.md#audit-and-verify) |
+| Execution timelines | Disposable Context Intelligence and Neo4j fixtures check `NEXT_EVENT` and `NEXT_TASK`, contributor identity, late arrivals, and replay. [Timeline checks](../integrations/context-execution/README.md) |
 | Persona Workshop | Docker testing verified compilation, both export formats, and draft persistence across container recreation. The reference VPS created and exported a draft for Coder from an archived observation. On-host review of the draft and reuse check remain open. |
 | Collaboration scenarios | Four scenarios are prepared for live execution and review. |
 
@@ -52,3 +54,5 @@ After the runs, compare the eight source threads with captured interaction event
 | TG-18 to TG-20, operations | Compose resource limits and health, backup quarantine, and existing-stack separation are implemented. | Live dependency outages, inventory/reporting, tagged Restic recovery, and existing Agents/Dot regressions. |
 
 Only the operator can activate external delivery for a verified binding. Record live results against the matching release and sanitized receipts. [Telegram guide](telegram.md)
+
+The Dot Control smoke test uses isolated Synapse, PostgreSQL, and an ACP fixture. It verifies one encrypted draft per retried Dot request, rejection of a Dot approval attempt, and an operator's threaded update with both Matrix mentions and a source link to the selected portal. The VPS deployment and plugin refresh are separate live acceptance steps.

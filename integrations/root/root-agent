@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+[[ $EUID == 0 ]] || { echo 'Run this command from the macai root console.' >&2; exit 1; }
+release=$(cd -- "$(dirname -- "$0")" && pwd)
+target=/opt/matrix-root-operations
+stack=/opt/matrix-stack
+agents=/opt/matrix-agents
+export COS_MEMORY_STATE=/srv/agents/chief-of-staff/memory
+export COMPOSE_IGNORE_ORPHANS=true COMPOSE_REMOVE_ORPHANS=false
+compose=(docker compose --project-directory "$target" --profile active)
+memory=(docker compose -f "$agents/chief-of-staff/memory/compose.yaml")
+broker=matrix-root-operations-broker
+exec 9>/run/lock/matrix-root-operations.lock
+flock -n 9 || { echo 'Another Root operator command is running.' >&2; exit 1; }
+
+update_catalog() {
+  python3 -B "$release/catalog.py" "$@" "$release"
+}
+
+provision() {
+  (
+    set -a
+    . "$stack/.env"
+    . "$agents/.env"
+    . "$target/.env"
+    set +a
+    python3 -B "$target/app/provision.py" "$@"
+  )
+}
+
+configure_context() {
+  local previous identity restore
+  [[ -f "$COS_MEMORY_STATE/server.json" && ! -L "$COS_MEMORY_STATE/server.json" ]]
+  previous=$(mktemp "$target/context-before.XXXXXXXX")
+  cp -p -- "$COS_MEMORY_STATE/server.json" "$previous"
+  identity=$(python3 -B "$target/app/context.py" configure "$COS_MEMORY_STATE/server.json" \
+    "$target/context-token" "$ROOT_GATEWAY_GID")
+  if "${memory[@]}" stop context &&
+     "${memory[@]}" run --rm --no-deps -T --volume "$target/app/context.py:/root-context.py:ro" \
+       --entrypoint /app/.venv/bin/python context -B /root-context.py seed "$identity" &&
+     "${memory[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 120 context &&
+     "${compose[@]}" run --rm --no-deps -T gateway context-probe; then
+    touch "$target/context-ready"
+  else
+    restore=$(mktemp "$COS_MEMORY_STATE/.root-context-restore.XXXXXXXX")
+    cp -p -- "$previous" "$restore"
+    mv -fT -- "$restore" "$COS_MEMORY_STATE/server.json"
+    "${memory[@]}" up -d --force-recreate --no-deps --wait --wait-timeout 120 context || true
+    echo "Context Intelligence failed its Root writer probe. Previous setup restored from $previous." >&2
+    return 1
+  fi
+}
+
+install_root() {
+  [[ -f "$stack/.env" && -f "$agents/.env" && -f "$COS_MEMORY_STATE/server.json" ]]
+  [[ ! -e "$target" || ( -d "$target" && ! -L "$target" && $(stat -c '%u:%a' "$target") == '0:700' ) ]]
+  if [[ -e "$target/install-complete" ]]; then
+    echo 'Root is installed. Use sign-in, activate, or status.'
+    return
+  fi
+  if systemctl is-active --quiet matrix-root-broker.socket || systemctl is-active --quiet matrix-root-broker.service ||
+     [[ -n $(docker ps -q --filter label=com.docker.compose.project=matrix-root) ]]; then
+    echo 'The retired Root service is running. Stop it before preparing the new instance.' >&2
+    return 1
+  fi
+  docker image inspect matrix-telegram-engine:0.1.2 matrix-telegram-connector:0.2.1 >/dev/null
+  docker network inspect matrix-stack_clients matrix-context_memory >/dev/null
+  getent group matrix-root-operations >/dev/null || groupadd --system matrix-root-operations
+  id -u matrix-root-operations >/dev/null 2>&1 ||
+    useradd --system --gid matrix-root-operations --no-create-home --shell /usr/sbin/nologin matrix-root-operations
+  export ROOT_GATEWAY_UID=$(id -u matrix-root-operations)
+  export ROOT_GATEWAY_GID=$(id -g matrix-root-operations)
+  [[ $ROOT_GATEWAY_UID -gt 0 && $ROOT_GATEWAY_UID -ne 991 && $ROOT_GATEWAY_GID -gt 0 ]]
+  install -d -m 0700 "$target" "$target/execution"
+  install -d -m 0755 "$target/app"
+  install -d -m 0750 -o root -g "$ROOT_GATEWAY_GID" "$target/gateway-credentials"
+  install -d -m 0700 -o "$ROOT_GATEWAY_UID" -g "$ROOT_GATEWAY_GID" "$target/gateway"
+  install -d -m 0700 -o 991 -g 991 "$target/instance" "$target/exchange"
+  printf 'ROOT_GATEWAY_UID=%s\nROOT_GATEWAY_GID=%s\n' "$ROOT_GATEWAY_UID" "$ROOT_GATEWAY_GID" > "$target/.env"
+  install -m 0644 "$release/compose.yaml" "$release/operations.json" "$target/"
+  install -m 0755 "$release/root-agent" "$target/root-agent"
+  install -m 0644 "$release/"{epyc100.json,root-profile.json,catalog.py} "$target/"
+  install -m 0644 "$release/"{agent.mjs,protocol.mjs,matrix-session.mjs,acp.mjs,broker.py,engine.py,engine-start,provision.py,context.py} "$target/app/"
+  install -m 0644 "$stack/provision.py" "$target/app/provision_stack.py"
+  install -m 0644 "$release/$broker.socket" "$release/$broker.service" /etc/systemd/system/
+  systemd-analyze verify "/etc/systemd/system/$broker.service" "/etc/systemd/system/$broker.socket"
+  "${compose[@]}" config --quiet
+  provision
+  systemctl daemon-reload
+  systemctl enable --now "$broker.socket"
+  if [[ ! -f "$target/context-ready" ]]; then configure_context; fi
+  "${compose[@]}" up -d --wait --wait-timeout 120 engine
+  update_catalog epyc100
+  touch "$target/install-complete"
+  echo 'Root Constellation is installed. Accept Root Operations in Element, then complete sign-in and activate.'
+}
+
+case ${1:-} in
+  install) [[ $# == 1 ]]; install_root ;;
+  catalog) [[ $# == 1 ]]; update_catalog epyc100 ;;
+  sign-in)
+    [[ $# == 1 && -f "$target/install-complete" && -t 0 && -t 1 ]] ||
+      { echo 'Install Root and use an interactive VPS console.' >&2; exit 1; }
+    "${compose[@]}" exec engine /opt/amplifier-acp/.venv/bin/python -B /root-engine/engine.py sign-in
+    ;;
+  activate)
+    [[ $# == 1 && -f "$target/install-complete" ]]
+    provision ready
+    "${compose[@]}" exec -T engine test -s /instance/backend/codex-oauth.json ||
+      { echo 'Complete the dedicated Codex sign-in first.' >&2; exit 1; }
+    . "$target/.env"
+    credential_dir="$target/gateway-credentials"
+    auth=$(mktemp "$credential_dir/.acp.XXXXXXXX")
+    ca=$(mktemp "$credential_dir/.ca.XXXXXXXX")
+    trap 'rm -f -- "$auth" "$ca"' EXIT
+    "${compose[@]}" exec -T engine cat /exchange/credential.json |
+      python3 -c 'import json,sys; token=json.load(sys.stdin)["token"]; assert token and not any(c.isspace() for c in token); print(token)' > "$auth"
+    "${compose[@]}" exec -T engine cat /exchange/ca.pem > "$ca"
+    openssl x509 -in "$ca" -noout >/dev/null
+    chown "0:$ROOT_GATEWAY_GID" "$auth" "$ca"
+    chmod 0440 "$auth" "$ca"
+    mv -f -- "$auth" "$credential_dir/engine-token"
+    mv -f -- "$ca" "$credential_dir/engine-ca.pem"
+    "${compose[@]}" run --rm --no-deps -T gateway probe
+    "${compose[@]}" up -d --no-deps --wait --wait-timeout 100 gateway
+    update_catalog root
+    echo 'Root is running and registered in the Matrix agent inventory.'
+    ;;
+  status)
+    [[ $# == 1 ]]
+    "${compose[@]}" ps
+    systemctl is-active "$broker.socket"
+    ;;
+  *)
+    echo 'Usage: root-agent install | catalog | sign-in | activate | status' >&2
+    exit 2
+    ;;
+esac

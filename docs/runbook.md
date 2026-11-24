@@ -26,8 +26,8 @@
 
 1. From the matching `matrix-agents` source directory, provision Analyst, Reviewer, Coder, and Manager in order using `bash ./install-analyst`, `bash ./install-reviewer`, `bash ./install-agent coder`, and `bash ./install-agent manager`.
 2. After provisioning each identity, invite its full Matrix ID to `Agents` in Element and run `/opt/matrix-agents/connect-codex <agent>` as root. Complete the dedicated device sign-in and confirm the configured model and effort pass the probe. Use the model configuration from the matching Compose revision.
-3. Check that each worker is available in the dashboard. Confirm its separate workspace and persistent private state under `/srv/agents/<agent>`. Run the applicable checks in [Acceptance](acceptance.md#checks-for-each-deployment).
-4. For a separate external worker, install its host-specific Constellation Agent Instance and Matrix connector under a dedicated Linux user. Enable the applicable user services for startup. Register the agent identity in the shared router and dashboard inventory, join `Agents`, and verify an encrypted round trip and a managed handoff. Use the external deployment source and preserve per-host workspace, credentials, and backup scope.
+3. Include dashboard registration in every agent installer. The shared `matrix-agents` project discovers agents from their provisioned room ID and container metadata. For a separate Compose project, set the `net.matrix_agents.dashboard: "true"` service label and `AGENT_USERNAME`, `AGENT_NAME`, `AGENT_MODEL`, and `AGENT_REASONING`, or register its local project and service with `/opt/matrix-stack/dashboard_inventory.py`. Pass `--bundle` for an Amplifier bundle whose model and effort the collector should read. Include the worker's hostname, model, effort, and expected availability in the deployment check. Confirm its separate workspace and persistent state under `/srv/agents/<agent>`. Run the applicable checks in [Acceptance](acceptance.md#checks-for-each-deployment).
+4. For a separate external worker, install its host-specific Constellation Agent Instance and Matrix connector under a dedicated Linux user. Enable the applicable user services for startup. Include `register-external-agent` in provisioning to add the identity to the shared router and dashboard, then join `Agents` and verify an encrypted round trip and a managed handoff. Use the external deployment source and preserve per-host workspace, credentials, and backup scope.
 
 ## 3. Connect Dot and optional GitHub access
 
@@ -53,6 +53,34 @@ Thresholds measure the project's share of VPS resources. The collector tracks th
 
 Follow the [Chief of Staff guide](chief-of-staff.md) to enable direct observation, review the graph, and draft a persona. The direct reader, memory, and Workshop have separate health and acceptance checks. The optional [memory backup integration](chief-of-staff.md#recovery) extends the stack snapshot to Context Intelligence and Neo4j.
 
+### Agent capability catalog
+
+The VPS publishes a read-only `agents.json` alongside the resource dashboard. It contains the operator-verified role, capability codes, resource scopes, limitations, and current inventory state of each agent. External registration indicates that the agent is configured. The dashboard identifies unverified availability separately.
+
+During onboarding, register the local agent through its installer, or run the existing external registration followed by `python3 /opt/matrix-stack/agent_catalog.py register AGENT PROFILE.json`. Supply `--name NAME --host HOST` when creating a new registry entry directly. Use the same command to update its profile, and `remove AGENT` during decommissioning. New local Compose workers read `/agent-catalog/agents.json` via `MATRIX_CATALOG_PATH` and mount the dashboard directory at `/agent-catalog:ro`. Each profile contains `role`, `limits`, and `capabilities`, where each capability has `code`, `description`, and `resources`. Use exact scopes such as `host:epyc100` or an authorized resource category such as `repo:*`. Existing credentials and runtime restrictions govern resource access. Keep each profile free of credentials.
+
+Stage the updated workers, Dot, resource collector, and Chief of Staff on the VPS with `install-macai stage`. Verify the read-only catalog from the external host, then run `install-epyc100` there. Run `install-macai activate` on the VPS after both hosts are ready. `install-macai pause` switches new requests back to the legacy flow while versioned managed threads already in progress retain their routing rules. The stage command prints the backup location for rollback. Refresh the Dot plugin once to discover `list_agents` and the updated `publish_plan` input.
+
+Run those commands from the [capability catalog release directory](../integrations/capability-catalog/). For the optional Epyc100 connector, first create `~/.local/share/epyc100-agent/matrix-catalog.json` as the external account. Use the operator's full local Matrix ID and that account's userspace Tailscale socket. Keep the file at mode `0600` and replace the example values.
+
+```json
+{
+  "matrix_server_name": "matrix.example.ts.net",
+  "matrix_owner": "@operator:matrix.example.ts.net",
+  "tailscale_socket": "/home/worker/.local/state/tailscale/tailscaled.sock",
+  "tailscale_binary": "/home/worker/.local/bin/tailscale"
+}
+```
+
+To verify the rollout, register a fixture profile with a unique capability, route a synthetic task to it, and remove it from the registry after testing. Confirm that an out-of-scope target is rejected and an explicitly requested direct response stays in the original thread. Simulate a fresh capability gap and check the private Chief of Staff room. An unavailable worker is an operational blocker.
+
 ## 6. Pilot the optional Telegram integration
 
 Use the matching source archive and follow the [Telegram operator guide](telegram.md). The first activation starts the bridge with an empty allowlist and the model connector stopped. Complete live acceptance on the verified DM before onboarding the group. Keep the Telegram application credentials in a private file and complete Codex device sign-in from a VPS terminal. Use the [implementation handoff](handoffs/telegram-constellation-amplifier.md) for deployment gates and recovery boundaries.
+
+## 7. Apply the optional integration updates
+
+1. On the matching base deployment, apply [Telegram Control for Dot](telegram.md#dot-and-chat-updates) before staging the capability catalog when using both integrations. The catalog installer carries forward the existing Dot Control mount. Both installers check their expected connector layout.
+2. Stage and activate [capability routing](#agent-capability-catalog). Once the catalog is active, apply [delegated failure reporting](../integrations/delegated-failure/README.md) to Coder and Manager.
+3. If the direct Chief of Staff and Context Intelligence are enabled, follow the [execution timeline guide](../integrations/context-execution/README.md). Back up the current memory before the cutover and verify both the new graph and the existing backups.
+4. If Root is enabled, follow the [Root Operations guide](../integrations/root/README.md) to install the base, activate its Matrix and model sessions, then install its two ordered updates. Verify the approval and execution receipts in a disposable scenario before use.

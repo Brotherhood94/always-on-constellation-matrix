@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+umask 077
+if [ ! -s /instance/config.json ]; then
+    agent-instance --home /instance init --name Root --bind 0.0.0.0 --port 19443 >/dev/null
+fi
+python3 -B /root-engine/engine.py configure
+agent-instance --home /instance config validate >/dev/null
+if [ ! -s /exchange/credential.json ]; then
+    agent-instance --home /instance token create --name 'Root Matrix Gateway' --scopes acp --expires-in 25920000 --local >/exchange/credential.pending
+    mv /exchange/credential.pending /exchange/credential.json
+fi
+cp /instance/tls/root-ca.crt /exchange/ca.pem
+exec agent-instance --home /instance serve

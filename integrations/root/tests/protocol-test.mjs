@@ -1,0 +1,47 @@
+import assert from 'node:assert/strict';
+import * as protocol from '../updates/proposal-validation/protocol.mjs';
+
+const candidate = {
+  operation: 'reviewed-script',
+  summary: 'Inspect the fixture',
+  impact: 'Read a synthetic source.',
+  verification: 'Exit zero if available.',
+  script: 'printf "%s\\n" "<fixture>"\nexit 0\n  \n',
+};
+const json = JSON.stringify(candidate);
+const fence = '```';
+const wrapped = fence + 'json\n' + json + '\n' + fence;
+assert.equal(protocol.proposal(json, {}).command, candidate.script);
+for (const response of [wrapped, 'My proposal follows.\n' + wrapped, 'My proposal follows.\n' + json]) {
+  assert.equal(protocol.proposal(response, {}).command, candidate.script);
+}
+assert.throws(() => protocol.proposal(json + '\n' + json, {}), /one JSON proposal/);
+assert.throws(() => protocol.proposal(wrapped + '\n' + wrapped, {}), /one JSON proposal/);
+assert.throws(() => protocol.proposal(JSON.stringify({...candidate, verification: ''}), {}), /verification/);
+assert.throws(() => protocol.proposal(JSON.stringify({...candidate, script: '# é\n'}), {}), /ASCII/);
+const root = '@root:fixture.test';
+const submitted = 'ROOT_REVIEW: ' + json;
+const event = {type: 'm.room.message', content: {msgtype: 'm.text',
+  body: 'Root Fixture title\n\n' + submitted, 'm.mentions': {user_ids: [root]}}};
+const parsed = protocol.submittedProposal(protocol.requestText(event, root));
+assert.equal(parsed.command, candidate.script);
+assert.equal(parsed.hash, protocol.digest(candidate.script));
+assert.equal(protocol.submittedProposal('Ordinary request'), null);
+assert.throws(() => protocol.submittedProposal('ROOT_REVIEW: ' + JSON.stringify({operation: null})), /reviewed-script/);
+assert.throws(() => protocol.submittedProposal('ROOT_REVIEW: malformed private input'), /one JSON proposal/);
+assert.equal(protocol.submittedProposal('Quoted transcript\n> ' + submitted), null);
+const manager = '@manager:fixture.test';
+const config = { root, owner: '@operator:fixture.test' };
+const managed = { request: '$assignment', number: 1, managed: { version: 2, target: root, manager } };
+const handoff = protocol.sourceTurn({
+  'm.relates_to': { rel_type: 'm.thread', event_id: managed.request },
+  [protocol.agentTurnKey]: managed,
+}, config, { sender: manager, event_id: '$delegation' });
+for (const [action, outcome] of [['approve', 'completed'], ['approve', 'failed'], ['reject', 'denied']]) {
+  const status = protocol.resultHandoff(config, { sender: manager, action, outcome }, handoff);
+  assert.equal(status.recipient, manager);
+  assert.equal(status.turn.request, '$assignment');
+  assert.equal(status.turn.managed.dispatch, '$delegation');
+  assert.equal(status.turn.managed.target, manager);
+}
+console.log('Planner formatting, exact script bytes, safe format errors and Manager receipts passed.');

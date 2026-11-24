@@ -1,0 +1,25 @@
+{
+  "matrix-stack-status": {
+    "purpose": "Check whether the Matrix stack service is active on macai.",
+    "impact": "Reads the systemd state of matrix-stack.service.",
+    "verification": "Exit 0 confirms that the stack unit is active.",
+    "argv": ["/usr/bin/systemctl", "is-active", "--quiet", "matrix-stack.service"],
+    "failure_reasons": {"3": "The Matrix stack service is inactive.", "4": "The Matrix stack service was not found."}
+  },
+  "matrix-monitor-restart": {
+    "purpose": "Restart the Matrix resource collector on macai.",
+    "impact": "Restarts matrix-monitor.service. Sampling pauses while it starts.",
+    "verification": "Exit 0 confirms systemd completed the restart job.",
+    "recovery": "Check the service status and journal from the VPS console if the collector fails to start.",
+    "argv": ["/usr/bin/systemctl", "restart", "matrix-monitor.service"],
+    "failure_reasons": {"1": "Systemd did not complete the collector restart. Check matrix-monitor.service on the VPS."}
+  },
+  "matrix-backup-timer-restart": {
+    "purpose": "Restart the Matrix backup timer on macai.",
+    "impact": "Rearms matrix-backup.timer. Its persistent schedule may trigger a missed backup.",
+    "verification": "Exit 0 confirms systemd started the timer.",
+    "recovery": "Check the next scheduled run with systemctl list-timers from the VPS console.",
+    "argv": ["/usr/bin/systemctl", "restart", "matrix-backup.timer"],
+    "failure_reasons": {"1": "Systemd did not complete the timer restart. Check matrix-backup.timer on the VPS."}
+  }
+}
