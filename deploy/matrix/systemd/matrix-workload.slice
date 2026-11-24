@@ -1,0 +1,5 @@
+[Unit]
+Description=Matrix project resource accounting
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes

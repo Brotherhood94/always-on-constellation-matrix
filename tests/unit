@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+cd -- "$(dirname -- "$0")/.."
+python3 -B -m unittest discover -s tests -p 'test_*.py'
+PYTHONPATH=deploy/matrix python3 -B -m unittest discover -s deploy/matrix/tests
+export AGENT_USERNAME=coder
+node --test tests/*.test.mjs agents/tests/{capability-routing,manager,pilot,workspace-mcp,instance-acp}.mjs \
+  integrations/root/tests/protocol-test.mjs integrations/telegram/policy.test.mjs \
+  integrations/chief-of-staff/direct/*.test.mjs

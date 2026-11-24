@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+umask 077
+if [ ! -f /data/config.json ]; then
+    persona-workshop --home /data init --owner chief-of-staff --bind 127.0.0.1 --port 18091
+fi
+exec persona-workshop --home /data serve

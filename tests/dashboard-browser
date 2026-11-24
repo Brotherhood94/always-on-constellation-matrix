@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+src=$(cd -- "$(dirname -- "$0")/.." && pwd)
+browser=${CHROME_BIN:-}
+if [[ -z $browser ]]; then
+  browser=$(command -v google-chrome || command -v chromium || true)
+fi
+if [[ -z $browser && -x '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' ]]; then
+  browser='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+fi
+[[ -x $browser ]] || { echo 'Set CHROME_BIN to a Chromium executable.' >&2; exit 1; }
+work=$(mktemp -d /tmp/constellation-dashboard.XXXXXXXX)
+server=''
+cleanup() {
+  if [[ -n $server ]]; then kill "$server" 2>/dev/null || true; wait "$server" 2>/dev/null || true; fi
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
+cp "$src"/dashboard/{index.html,dashboard.mjs,dashboard.css} "$work/"
+python3 - "$work" <<'PY'
+import json
+from pathlib import Path
+import sys
+import time
+
+root = Path(sys.argv[1])
+now = int(time.time())
+rows = {key: [[now - 90, 12], [now - 20, 23.4]] for key in ('CPU', 'RAM', 'Disk')}
+for name, content in {
+    'metrics': {'time': now, 'history': rows},
+    'links': {'context': 'https://fixture.test:8444/browser/?connectURL=bolt%2Bs%3A%2F%2Ffixture.test%3A17687'},
+    'agents': {'time': now - 600, 'agents': [{'name': 'Fixture Analyst', 'status': 'Available', 'server': 'fixture.test', 'model': 'fixture-model'}]},
+    'integrations': {'time': now, 'services': {'Context Intelligence': 'healthy'}},
+}.items():
+    (root / (name + '.json')).write_text(json.dumps(content))
+PY
+python3 -u - "$work" >"$work/http.log" 2>&1 <<'PY' &
+from functools import partial
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import sys
+server = HTTPServer(('127.0.0.1', 0), partial(SimpleHTTPRequestHandler, directory=sys.argv[1]))
+print(server.server_port)
+server.serve_forever()
+PY
+server=$!
+for attempt in {1..30}; do
+  if [[ -s "$work/http.log" ]]; then break; fi
+  sleep .1
+done
+port=$(head -n 1 "$work/http.log")
+for width in 375 1280; do
+  "$browser" --headless --no-sandbox --disable-gpu --disable-background-networking \
+    --no-first-run --user-data-dir="$work/browser-$width" --window-size="$width,900" \
+    --virtual-time-budget=3500 --dump-dom "http://127.0.0.1:$port/" \
+    >"$work/page-$width.html" 2>"$work/browser-$width.log"
+  page="$work/page-$width.html"
+  grep -q 'href="https://fixture.test:8444/browser/?connectURL=' "$page"
+  grep -q 'CPU usage over' "$page"
+  grep -q 'Fixture Analyst' "$page"
+  grep -q 'Stale since' "$page"
+  grep -q 'healthy' "$page"
+done
+printf '%s\n' 'Desktop and mobile dashboard rendered samples, roster state and the Context Intelligence link.'

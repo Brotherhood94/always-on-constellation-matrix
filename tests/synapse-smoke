@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+src=$(cd -- "$(dirname -- "$0")/.." && pwd)
+name="constellation-layout-$$"
+image=ghcr.io/element-hq/synapse:v1.165.0
+cleanup() {
+  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker volume rm "$name" >/dev/null 2>&1 || true
+  docker network rm "$name" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+docker volume create "$name" >/dev/null
+docker network create --internal "$name" >/dev/null
+docker run --rm -i --network none -v "$name:/data" --entrypoint python "$image" - <<'PY'
+from pathlib import Path
+import json
+import subprocess
+import yaml
+
+path = Path('/data/homeserver.yaml')
+subprocess.run(['python', '-m', 'synapse.app.homeserver', '--server-name', 'fixture.test', '--config-path',
+                str(path), '--generate-config', '--report-stats=no', '--data-directory', '/data'], check=True, capture_output=True)
+config = yaml.safe_load(path.read_text())
+config.update(listeners=[{'type': 'http', 'port': 8008, 'tls': False, 'resources': [{'names': ['client']}]}],
+              registration_shared_secret='synthetic-test-registration-secret',
+              rc_message={'per_second': 25, 'burst_count': 100},
+              rc_login={'address': {'per_second': 50, 'burst_count': 50}, 'account': {'per_second': 50, 'burst_count': 50}})
+path.write_text(json.dumps(config))
+PY
+docker run -d --name "$name" --network "$name" --network-alias synapse -v "$name:/data" -v "$src/deploy/matrix:/provision:ro" \
+  -v "$src/tests/layout_check.py:/test.py:ro" --entrypoint python "$image" \
+  -m synapse.app.homeserver -c /data/homeserver.yaml >/dev/null
+for attempt in {1..30}; do
+  if docker exec "$name" curl -fsS http://127.0.0.1:8008/_matrix/client/versions >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
+  -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/provision \
+  "$name" python -B /test.py
+if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
+  docker run --rm --network "$name" --user 0:0 --entrypoint node \
+    -v "$src/deploy/matrix/bot:/app/ops:ro" -v "$src/tests/operations-fixture.mjs:/app/operations.mjs:ro" \
+    constellation-office-connector:0.22.17 /app/operations.mjs
+fi

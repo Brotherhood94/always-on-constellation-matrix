@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+src=$(cd -- "$(dirname -- "$0")/.." && pwd)
+work=$(mktemp -d /tmp/constellation-sftp.XXXXXXXX)
+fixture="constellation-sftp-$$"
+cleanup() {
+  docker rm -f "$fixture" >/dev/null 2>&1 || true
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
+mkdir "$work/config" "$work/desktop"
+chmod 0755 "$work/config" "$work/desktop"
+ssh-keygen -q -t ed25519 -N '' -f "$work/client"
+ssh-keygen -q -t ed25519 -N '' -f "$work/config/host-key"
+cp "$src/deploy/sftp/sshd_config" "$work/config/"
+printf 'restrict %s\n' "$(cat "$work/client.pub")" > "$work/config/authorized-keys"
+chmod 0644 "$work/config/authorized-keys"
+docker build --quiet -t constellation-desktop-sftp:fixture "$src/deploy/sftp" >/dev/null
+docker run --rm --entrypoint chown -v "$work/desktop:/desktop" constellation-desktop-sftp:fixture 991:991 /desktop
+docker run -d --name "$fixture" -p 127.0.0.1::2222 \
+  -v "$work/config:/config:ro" -v "$work/desktop:/chroot/desktop" constellation-desktop-sftp:fixture >/dev/null
+port=$(docker port "$fixture" 2222/tcp)
+port=${port##*:}
+printf '[127.0.0.1]:%s %s\n' "$port" "$(cut -d ' ' -f1-2 "$work/config/host-key.pub")" > "$work/known-hosts"
+options=(-o "UserKnownHostsFile=$work/known-hosts" -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -o ConnectTimeout=5 -i "$work/client")
+printf 'shared fixture file\n' > "$work/input"
+printf 'put %s /desktop/remote.txt\nget /desktop/remote.txt %s\n' "$work/input" "$work/output" > "$work/batch"
+if ! sftp -b "$work/batch" -P "$port" "${options[@]}" desktop-share@127.0.0.1; then
+  docker logs "$fixture"
+  exit 1
+fi
+cmp "$work/input" "$work/output"
+cmp "$work/input" "$work/desktop/remote.txt"
+if ssh -n -q -p "$port" "${options[@]}" desktop-share@127.0.0.1 'echo unexpected shell' >/dev/null; then
+  echo 'The desktop account unexpectedly accepted a shell command.' >&2
+  exit 1
+fi
+echo 'The desktop account shared bytes over SFTP and denied shell access.'

@@ -32,9 +32,12 @@ services:
     image: matrix-telegram-connector:0.2.1
     build: .
     mem_limit: 384m
+    networks: [matrix, database, engine, memory]
+    environment:
+      TELEGRAM_CONTEXT_ENABLED: ${TELEGRAM_CONTEXT_ENABLED:-false}
     volumes:
       - ${TELEGRAM_DATA:?}/connector:/state
-    networks: [matrix, database, engine]
+      - ${TELEGRAM_CONTEXT_TOKEN:-/dev/null}:/context-token:ro
   telegram-engine:
     <<: *worker
     profiles: [agent]
@@ -63,3 +66,6 @@ networks:
   outbound:
   engine:
     internal: true
+  memory:
+    name: ${TELEGRAM_MEMORY_NETWORK:-matrix-telegram-context}
+    external: ${TELEGRAM_CONTEXT_ENABLED:-false}

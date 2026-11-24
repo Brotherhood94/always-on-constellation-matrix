@@ -13,7 +13,8 @@ cleanup() {
 }
 trap cleanup EXIT
 if [[ -z ${CONTEXT_EXECUTION_TEST_IMAGE:-} ]]; then
-  docker build --platform linux/amd64 -t "$image" "$here"
+  root=$(cd "$here/../.." && pwd)
+  docker build --platform linux/amd64 -f "$root/deploy/context.Dockerfile" -t "$image" "$root"
 fi
 python3 -B "$here/smoke.py" config > "$fixture/server.json"
 chmod 0755 "$fixture"

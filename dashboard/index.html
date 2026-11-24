@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Constellation Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <script type="module" src="dashboard.mjs"></script>
+</head>
+<body>
+  <main>
+    <header>
+      <div><h1>Constellation Dashboard</h1><p id="freshness" aria-live="polite">Loading VPS metrics…</p></div>
+      <a id="context-link" class="action" hidden>Open Context Intelligence <span aria-hidden="true">↗</span></a>
+    </header>
+    <section aria-labelledby="resources-heading">
+      <div class="section-heading">
+        <h2 id="resources-heading">VPS resources</h2>
+        <label>History <select id="range"><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
+      </div>
+      <div class="cards" id="resources"></div>
+    </section>
+    <section aria-labelledby="agents-heading">
+      <h2 id="agents-heading">Agents</h2>
+      <p id="agent-freshness"></p>
+      <div class="table-frame" tabindex="0" role="region" aria-label="Agent inventory">
+        <table><thead><tr><th scope="col">Name</th><th scope="col">Health</th><th scope="col">Host</th><th scope="col">Model</th></tr></thead><tbody id="agents"></tbody></table>
+      </div>
+    </section>
+    <section aria-labelledby="integrations-heading">
+      <h2 id="integrations-heading">Integrations</h2>
+      <dl id="integrations"></dl>
+    </section>
+  </main>
+</body>
+</html>

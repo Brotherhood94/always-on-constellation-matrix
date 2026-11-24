@@ -4,22 +4,20 @@ This optional integration adds a Telegram Space, private portals, and an encrypt
 
 ## Install the bridge
 
-Use a verified source archive from a recorded Git commit. Copy the contents of `integrations/telegram` into `/opt/matrix-telegram` on the VPS. The installer expects the existing Compose projects under `/opt/matrix-stack`, a JSON-compatible Synapse configuration, the stack's local account registration helper, and the existing PostgreSQL and Matrix networks. It adds a dedicated PostgreSQL database and roles and an AppService registration. Synapse configuration is backed up before activation.
-
-The installer reads the operator's Matrix ID from the existing stack or agent configuration. On a deployment without that setting, pass `MATRIX_OWNER='@<OWNER_HANDLE>:<SERVER_NAME>'` to both `prepare` and `prepare-agent`.
+Select Telegram in the Constellation installer. Use `sudo ./constellation telegram` for each operator command in this guide.
 
 Create a private local file with mode `600` containing the operator's Telegram `api_id` (integer) and `api_hash` (string). These are application credentials from Telegram. The owner logs into Telegram separately through the bridge bot in Element. Keep credentials, codes, and passwords in the private setup flow. [Telegram authentication](https://docs.mau.fi/bridges/go/telegram/authentication.html)
 
 ```bash
-/opt/matrix-telegram/telegram prepare /root/telegram-api.json
-/opt/matrix-telegram/telegram activate
-/opt/matrix-telegram/telegram status
+sudo ./constellation telegram prepare /root/telegram-api.json
+sudo ./constellation telegram activate
+sudo ./constellation telegram status
 ```
 
 `activate` briefly restarts Synapse. It starts mautrix with an empty portal allowlist and the model connector stopped. In Element, open a private conversation with `@telegrambot:<SERVER_NAME>` and use `!tg login`. `!tg list-logins` shows the login ID. `!tg resolve-identifier` can verify a known Telegram identifier without opening a portal. Confirm the peer, login, and conversation type before adding an entry:
 
 ```bash
-/opt/matrix-telegram/telegram allow '<peer-type>:<peer-id>' '<login-id>'
+sudo ./constellation telegram allow '<peer-type>:<peer-id>' '<login-id>'
 ```
 
 Use `user` for a DM, `chat` for a basic group, and `channel` for a verified supergroup. Use positive Telegram IDs. The bridge splits portals by receiving account. Wait for an eligible message or use the documented owner-only portal management flow for that verified peer. Test the manual Telegram → Element → Telegram round trip first. Check the linked room's privacy and its outbound sender on Telegram. Space membership only controls navigation. [Bridge configuration](https://docs.mau.fi/configs/mautrix-telegram/v26.11.html) · [Go bridge setup](https://docs.mau.fi/bridges/go/setup.html)
@@ -29,10 +27,10 @@ Use `user` for a DM, `chat` for a basic group, and `channel` for a verified supe
 The dedicated Constellation Instance runs Amplifier ACP with the Amplifier ChatGPT provider in `chatgpt_codex` mode. It uses the Codex subscription through device sign-in. The default model is `gpt-6.2-sol` with low reasoning effort for drafting. On first provisioning, set `TELEGRAM_MODEL` if the subscription needs a different supported model. [Amplifier ChatGPT provider](https://github.com/microsoft/amplifier-module-provider-openai-chatgpt)
 
 ```bash
-/opt/matrix-telegram/telegram prepare-agent
-/opt/matrix-telegram/telegram sign-in
-/opt/matrix-telegram/telegram probe
-/opt/matrix-telegram/telegram start-agent
+sudo ./constellation telegram prepare-agent
+sudo ./constellation telegram sign-in
+sudo ./constellation telegram probe
+sudo ./constellation telegram start-agent
 ```
 
 Run `sign-in` from an interactive VPS terminal. Open the verification page printed there and enter the one-time code using the Codex account. The Instance saves its OAuth credentials in its own private persistent directory. The connector uses its own scoped ACP token. `probe` runs two synthetic turns and checks that the second turn resumes the Amplifier session before the connector can start.
@@ -41,7 +39,7 @@ If an earlier setup stopped with `HTTP 400 M_UNKNOWN` while creating a Matrix v1
 
 The release pins mautrix Telegram `v26.11`, Constellation Instance `0.22.17`, Amplifier ACP `0.1.7` at `3da5681942d9e9b4c51376e47ec85e69a001623a`, and the Amplifier ChatGPT provider at `cae3eaa32e16b139b8e889b8cc477c3f2d9dee31`.
 
-The Telegram bundle is a standalone Amplifier snapshot without Context Intelligence hooks. Dependencies are prepared when the engine image is built. If an older engine failed to activate `hook-context-intelligence`, rerun `prepare-agent` with the updated release and then rerun `probe`. A completed Codex sign-in is reused.
+The Telegram model uses a standalone Amplifier bundle. The connector records scoped delivery metadata in Context Intelligence. Dependencies are prepared when the engine image is built. If an older engine failed to activate `hook-context-intelligence`, rerun `prepare-agent` with the updated release and then rerun `probe`. A completed Codex sign-in is reused.
 
 Accept the `Telegram` Space and `Telegram Control` invitations in Element. Control is encrypted, invite-only, and non-federated. Its members are the operator, the connector, and the optional configured Dot account. Invite `@telegram-agent:<SERVER_NAME>` to the verified portal and explicitly enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins only a portal explicitly selected by the operator during binding. Check the agent attribution at the Telegram destination. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
@@ -60,7 +58,7 @@ Keep a private binding file for each selected chat. Use `mode: draft` and `trigg
 ```
 
 ```bash
-/opt/matrix-telegram/telegram bind /root/pilot-dm.json
+sudo ./constellation telegram bind /root/pilot-dm.json
 ```
 
 Keep the connector running while binding. It completes a Matrix sync after joining a portal before the binding activates. A later sync gap or loss of membership pauses that binding. Use `report` to see the reason for a pause recorded by the connector.
@@ -76,7 +74,7 @@ The operator may add a verified portal to the Space if that navigation step need
 
 ### Dot and chat updates
 
-On a VPS running the existing Telegram and Dot connectors, run `bash ./install-control` from the Telegram release directory as root. The installer updates the two connector services, adds the existing Dot Matrix device to Control, and keeps the original service files for rollback. Refresh the existing private **Dot Matrix Agents** plugin in ChatGPT so it shows `prepare_telegram_message` and `request_telegram_update`.
+When Dot is enabled, run `sudo ./constellation telegram dot-control enable` and accept the invitation with the Dot device as directed by provisioning. Refresh the private Dot MCP app to load `prepare_telegram_message` and `request_telegram_update`.
 
 - In Dot, ask for a draft to one connected Telegram chat. Specify private chat or group and its name. For example, “Prepare a private message to Sam Example asking whether tomorrow at 15:00 works.” The exact text and verified destination appear in Control. A draft that identifies a received Matrix event in the same chat can be published as a reply.
 - Only the configured operator can approve or reject an outbound message. Dot can submit a draft and see the link to its request. The plugin uses the existing private tunnel and has no send or approval tool.

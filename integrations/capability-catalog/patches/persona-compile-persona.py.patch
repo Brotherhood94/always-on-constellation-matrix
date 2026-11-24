@@ -1,7 +1,0 @@
---- installed
-+++ updated
-@@ -82,3 +82,3 @@
-         project = api(container, "POST", root, {
--            "alias": title, "purpose": f"Reviewable guidance for the existing {role} agent.",
-+            "alias": title, "purpose": f"Reviewable guidance for the {role} role.",
-             "subject_type": "fictional", "aliases": [],

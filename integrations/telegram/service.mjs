@@ -333,6 +333,22 @@ async function run() {
     if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true }))) return;
     await matrix.put(settings.controlRoom, `control-${digest(request.event)}`, encrypted);
     store.controlDelivered(request.event);
+    if (process.env.TELEGRAM_CONTEXT_ENABLED === 'true') {
+      try {
+        const credential = (await readFile('/context-token', 'utf8')).trim();
+        const response = await fetch('http://context:8000/events', {
+          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+          headers: { authorization: 'Bearer ' + credential, 'content-type': 'application/json' },
+          body: JSON.stringify({ event: 'telegram:control_result', workspace: 'telegram',
+            idempotency_key: 'telegram-control-' + digest(request.event),
+            data: { session_id: 'telegram-' + digest(request.thread_root ?? request.event),
+              timestamp: new Date().toISOString(), action: 'update delivered' } }),
+        });
+        if (!response.ok) throw new Error('Context Intelligence write failed');
+      } catch (error) {
+        console.warn('Telegram metadata write failed:', error.name);
+      }
+    }
   }
 
   async function notify(draft) {

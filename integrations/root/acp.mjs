@@ -37,6 +37,7 @@ export async function runTurn(engine, previous, prompt, onSession) {
   try {
     await once(socket, 'open', { signal: AbortSignal.timeout(11_000) });
     let answer = '';
+    let answerTooLong = false;
     let active;
     let observedTool = false;
     const run = acp.client({ name: 'matrix-root-gateway' })
@@ -46,7 +47,10 @@ export async function runTurn(engine, previous, prompt, onSession) {
         const update = params.update;
         if (['tool_call', 'tool_call_update'].includes(update.sessionUpdate)) observedTool = true;
         if (update.sessionUpdate === 'agent_message_chunk' && update.content.type === 'text') {
-          answer = (answer + update.content.text).slice(0, 4500);
+          if (!answerTooLong) {
+            answer += update.content.text;
+            answerTooLong = Buffer.byteLength(answer) > 12000;
+          }
         }
       }).connectWith(acp.ndJsonStream(Writable.toWeb(output), Readable.toWeb(input)), async (connection) => {
         const methods = acp.methods.agent;
@@ -66,7 +70,9 @@ export async function runTurn(engine, previous, prompt, onSession) {
         const result = await connection.request(methods.session.prompt, { sessionId: active, prompt: [
           { type: 'text', text: prompt },
         ] });
-        if (observedTool || result.stopReason !== 'end_turn') throw new Error('ACP did not finish a tool-free turn.');
+        if (observedTool || answerTooLong || result.stopReason !== 'end_turn') {
+          throw new Error('ACP did not finish a bounded, tool-free turn.');
+        }
         return answer.trim();
       });
     return await Promise.race([run, delay(engine.turnTimeoutMs ?? 120_000, null, { signal: controller.signal }).then(() => {

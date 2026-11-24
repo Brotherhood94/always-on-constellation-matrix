@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+umask 077
+if [ ! -s /instance/config.json ]; then
+    agent-instance --home /instance init --name "$AGENT_NAME" --bind 0.0.0.0 --port 19443 >/dev/null
+fi
+python3 -B /opt/office/initialize.py
+agent-instance --home /instance config validate >/dev/null
+if [ ! -s /exchange/credential-token ]; then
+    agent-instance --home /instance token create --name 'Matrix Connector' --scopes acp --expires-in 25920000 --local >/exchange/credential.pending
+    python3 -c 'import json; print(json.load(open("/exchange/credential.pending"))["token"])' >/exchange/token.pending
+    mv /exchange/token.pending /exchange/credential-token
+    rm /exchange/credential.pending
+fi
+cp /instance/tls/root-ca.crt /exchange/ca.pem
+exec agent-instance --home /instance serve

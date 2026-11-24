@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+src=$(cd -- "$(dirname -- "$0")/.." && pwd)
+work=$(mktemp -d /tmp/constellation-compose.XXXXXXXX)
+trap 'rm -rf -- "$work"' EXIT
+PYTHONPATH="$src/deploy" python3 -B - "$work" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+
+from installer import load, normalized, register_entry, PRESETS
+from compose import definition
+
+data = Path(sys.argv[1])
+settings = normalized({
+    'server_name': 'fixture.test', 'owner': 'operator',
+    'agents': ['manager', 'coder', 'root', 'chief-of-staff', 'remote-worker'],
+    'subscriptions': {'default': 'Fixture'}, 'dot': True, 'telegram': True, 'systemd': False, 'tailscale': False,
+}, load(PRESETS))
+registry = {'local_server': 'fixture.test', 'dynamic_handoffs': True, 'agents': {}}
+for key in settings['agents']:
+    register_entry(settings, registry, key, load(PRESETS)[key])
+definition = definition(settings, data, registry, {'POSTGRES_PASSWORD': 'fixture'})
+(data / 'context').mkdir()
+(data / 'context/neo4j.env').write_text('NEO4J_AUTH=neo4j/fixture\n')
+(data / 'compose.yaml').write_text(json.dumps(definition))
+PYTHON
+docker compose -f "$work/compose.yaml" --profile agents config --quiet
+TELEGRAM_DATA="$work/telegram" TELEGRAM_CONTEXT_ENABLED=true docker compose \
+  -f "$src/integrations/telegram/compose.yaml" --profile agent config --quiet
+printf '%s\n' 'Rendered coordinator and Telegram Compose profiles are valid.'

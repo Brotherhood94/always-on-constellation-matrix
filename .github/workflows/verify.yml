@@ -1,0 +1,29 @@
+name: Verify Constellation
+on:
+  push:
+  pull_request:
+
+jobs:
+  verification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.3'
+          cache: npm
+          cache-dependency-path: agents/connector/package-lock.json
+      - run: npm --prefix agents/connector ci --no-audit --no-fund
+      - run: tests/unit
+      - run: tests/dashboard-browser
+      - run: tests/compose-smoke
+      - run: tests/desktop-sftp
+      - run: docker build -t constellation-office-connector:0.22.17 agents/connector
+      - run: MATRIX_OPERATIONS_SMOKE=1 tests/synapse-smoke
+      - run: bash integrations/root/tests/run
+      - run: bash integrations/context-execution/tests/isolated
+      - run: docker build -t matrix-telegram-connector:0.2.1 integrations/telegram
+      - run: bash integrations/telegram/tests/bridge-smoke
+      - run: sudo apt-get update && sudo apt-get install -y restic
+      - run: sudo env VERIFY_RESTIC=1 bash tests/install-smoke

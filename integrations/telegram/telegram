@@ -11,7 +11,7 @@ set +a
 export TELEGRAM_DATA="$MATRIX_DATA/telegram"
 image=dock.mau.dev/mautrix/telegram:v26.11@sha256:fe78dbce96dca82f077371f429776ab1fee3b65ddc83924a257279b142160945
 stack=(docker compose --project-directory "$stack_dir")
-compose=(docker compose -f "$dir/compose.yaml")
+compose=(docker compose -p "${TELEGRAM_PROJECT:-matrix-telegram}" -f "$dir/compose.yaml")
 config=(python3 -B "$dir/bridge_config.py")
 install -d -m 0711 "$TELEGRAM_DATA"
 exec 9>"$TELEGRAM_DATA/operator.lock"
@@ -88,9 +88,9 @@ case ${1:-} in
     rm -f -- "$TELEGRAM_DATA/connector/backend-verified"
     install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/instance" "$TELEGRAM_DATA/exchange"
     "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/audit.sql"
-    PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" bootstrap "$TELEGRAM_DATA"
+    PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" bootstrap "$TELEGRAM_DATA"
     "${compose[@]}" --profile agent up -d --wait --wait-timeout 120 telegram-engine
-    PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" channel "$TELEGRAM_DATA"
+    PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" channel "$TELEGRAM_DATA"
     echo 'Dedicated Constellation Instance is ready. Run telegram sign-in.'
     ;;
   sign-in)
@@ -110,7 +110,7 @@ case ${1:-} in
     ;;
   dot-control)
     [[ $# == 2 ]]
-    PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" dot-control "$TELEGRAM_DATA" /srv/agents/dot/state "$2"
+    PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" dot-control "$TELEGRAM_DATA" "${TELEGRAM_DOT_STATE:-/srv/agents/dot/state}" "$2"
     ;;
   bind|rotate)
     [[ $# == 2 && -f "$2" ]] || { echo 'Use telegram bind|rotate PRIVATE_BINDING_JSON' >&2; exit 2; }
@@ -128,7 +128,7 @@ PYTHON
     install -m 0600 -o 991 -g 991 "$2" "$TELEGRAM_DATA/connector/$binding"
     "${compose[@]}" --profile agent run --rm --no-deps connector "$1" "$binding"
     if [[ $1 == bind ]]; then
-      PYTHONPATH="$stack_dir:$dir" python3 -B "$dir/telegram_provision.py" add-to-space "$TELEGRAM_DATA" "$binding"
+      PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" add-to-space "$TELEGRAM_DATA" "$binding"
     fi
     ;;
   arm-resume)

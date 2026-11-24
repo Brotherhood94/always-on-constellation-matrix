@@ -1,7 +1,0 @@
---- installed
-+++ updated
-@@ -37,3 +37,3 @@
- fi
--[[ ${1:-} == draft && $# == 3 && $2 =~ ^(analyst|coder|reviewer|manager|epyc100)$ && $3 =~ ^cos-(direct-)?[0-9a-f]{64}$ ]] ||
-+[[ ${1:-} == draft && $# == 3 && $2 =~ ^[a-z0-9][a-z0-9_-]{0,63}$ && $3 =~ ^cos-(direct-|gap-)?[0-9a-f]{64}$ ]] ||
-     { echo 'Use persona draft AGENT ARCHIVED_OBSERVATION_ID.' >&2; exit 2; }

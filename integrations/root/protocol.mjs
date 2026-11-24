@@ -1,3 +1,4 @@
+import { replyLimit } from '../../agents/connector/office-policy.mjs';
 import { createHash } from 'node:crypto';
 
 export const digest = text => createHash('sha256').update(text).digest('hex');
@@ -9,7 +10,11 @@ export const pollStart = 'org.matrix.msc3381.poll.start';
 export const pollEnd = 'org.matrix.msc3381.poll.end';
 export const pollText = 'org.matrix.msc1767.text';
 export const agentTurnKey = 'net.matrix_agents.turn';
-const replyLimit = 6;
+export const reviewedScriptOperation = 'reviewed-script';
+export const maximumScriptBytes = 4000;
+const reviewPrefix = 'ROOT_REVIEW:';
+const maximumReviewRequestBytes = 12000;
+
 const pollResponse = 'org.matrix.msc3381.poll.response';
 export const pollChoice = (task, action) => digest(JSON.stringify([task.id, task.hash, task.proposal_event, action]));
 
@@ -23,7 +28,8 @@ export function requestText(event, root, maximumBytes = 1800) {
   if (relation && (relation.rel_type !== 'm.thread' || !eventId.test(relation.event_id))) return null;
   const text = content.body.replace(/^(?:>[^\n]*\n)+\n/u, '')
     .replace(/^\s*@?root(?::[a-z0-9.-]+)?[,:\s]+/iu, '').trim();
-  return text && Buffer.byteLength(text) <= maximumBytes ? text : null;
+  const limit = reviewLine(text) === null ? maximumBytes : maximumReviewRequestBytes;
+  return text && Buffer.byteLength(text) <= limit ? text : null;
 }
 
 export function pollVote(event) {
@@ -51,13 +57,84 @@ function reviewText(value, limit) {
   return line.length <= limit && !/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/u.test(line) ? line : '';
 }
 
-export function proposal(text, operations) {
-  const answer = JSON.parse(text);
-  if (!answer || typeof answer !== 'object' || Array.isArray(answer)) throw new Error('Invalid selection.');
+function exitReasons(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter(([code]) => /^[1-9]\d{0,2}$/u.test(code) && Number(code) <= 125)
+    .map(([code, reason]) => [code, reviewText(reason, 160)]).filter(([, reason]) => reason).slice(0, 8));
+}
+
+export class ProposalError extends Error {}
+
+function readProposal(text, allowFormatting) {
+  let json = text.trim();
+  if (allowFormatting && !json.startsWith('{')) {
+    const fenceLines = json.match(/^[ \t]*```[^\r\n]*$/gmu) ?? [];
+    if (fenceLines.length === 2) {
+      const fenced = /(?:^|\n)[ \t]*```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*```$/iu.exec(json);
+      if (fenced) json = fenced[1];
+    } else if (!fenceLines.length) {
+      const afterIntro = /(?:^|\n)([ \t]*\{[\s\S]*\})$/u.exec(json);
+      if (afterIntro) json = afterIntro[1];
+    }
+  }
+  let value;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    throw new ProposalError('Expected one JSON proposal. The response could not be parsed.');
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new ProposalError('Expected one JSON proposal object.');
+  }
+  return value;
+}
+
+function reviewLine(text) {
+  const lastLine = text.slice(text.lastIndexOf('\n') + 1);
+  return lastLine.startsWith(reviewPrefix) ? lastLine.slice(reviewPrefix.length) : null;
+}
+
+function reviewedProposal(answer) {
+  const command = answer.script;
+  if (typeof command !== 'string' || !command.trim()) {
+    throw new ProposalError('The proposal is missing the exact Bash script.');
+  }
+  if (Buffer.byteLength(command) > maximumScriptBytes) {
+    throw new ProposalError('The Bash script exceeds the 4000 byte review limit.');
+  }
+  if (/[^\x09\x0a\x20-\x7e]/u.test(command)) {
+    throw new ProposalError('The Bash script must contain only visible ASCII, newlines and tabs.');
+  }
   const summary = reviewText(answer.summary, 220);
-  if (answer.operation === null) return { summary: summary || 'The request needs a registered operation.' };
+  const impact = reviewText(answer.impact, 220);
+  const verification = reviewText(answer.verification, 220);
+  for (const [name, value] of Object.entries({ summary, impact, verification })) {
+    if (!value) throw new ProposalError('The proposal needs a valid ' + name + ' field (up to 220 characters).');
+  }
+  const recovery = reviewText(answer.recovery, 220);
+  return {
+    operation: reviewedScriptOperation, summary, command, hash: digest(command),
+    details: { impact, verification, ...(recovery && { recovery }), failure_reasons: exitReasons(answer.failure_reasons) },
+  };
+}
+
+export function submittedProposal(text) {
+  const line = reviewLine(text);
+  if (line === null) return null;
+  const answer = readProposal(line, false);
+  if (answer.operation !== reviewedScriptOperation) {
+    throw new ProposalError('An exact-script submission must use operation reviewed-script.');
+  }
+  return reviewedProposal(answer);
+}
+
+export function proposal(text, operations) {
+  const answer = readProposal(text, true);
+  const summary = reviewText(answer.summary, 220);
+  if (answer.operation === null) return { summary: summary || 'Root could not prepare an exact script for review.' };
+  if (answer.operation === reviewedScriptOperation) return reviewedProposal(answer);
   if (typeof answer.operation !== 'string' || !Object.hasOwn(operations, answer.operation)) {
-    throw new Error('Unknown registered operation.');
+    throw new ProposalError('The proposal names an operation Root does not recognize.');
   }
   const definition = operations[answer.operation];
   const command = definition.argv.join(' ');
@@ -121,7 +198,7 @@ export function auditRecord(config, entry, stage, time, sequence) {
       timestamp: new Date(time).toISOString(),
       execution: { trace_id: entry.source_thread, task_id: entry.event, sequence },
       operation: {
-        id: entry.id, type: entry.operation, executed_on: 'macai', action: entry.action,
+        id: entry.id, type: entry.operation, executed_on: process.env.ROOT_HOST ?? 'deployment-host', action: entry.action,
         outcome: entry.outcome, command_sha256: entry.hash, requested_by: entry.sender,
         decided_by: entry.approver, request_event_id: entry.event, decision_event_id: entry.decision,
         source_room_id: entry.room, review_room_id: config.audit,

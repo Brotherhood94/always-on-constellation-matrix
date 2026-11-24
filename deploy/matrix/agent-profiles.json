@@ -1,0 +1,147 @@
+{
+  "analyst": {
+    "name": "Analyst",
+    "profile": {
+      "role": "worker",
+      "limits": "Works in its own workspace and with evidence shared in Office.",
+      "capabilities": [
+        {
+          "code": "analysis",
+          "description": "Analyze requirements, evidence and options and write an actionable plan.",
+          "resources": [
+            "task:*",
+            "thread:*",
+            "workspace:analyst"
+          ]
+        }
+      ]
+    },
+    "model": "gpt-6.2-sol",
+    "effort": "medium"
+  },
+  "coder": {
+    "name": "Coder",
+    "profile": {
+      "role": "worker",
+      "limits": "Writes to its own workspace. GitHub operations require the connected account and the operator's request. No repository deletion or host administration.",
+      "capabilities": [
+        {
+          "code": "implement-code",
+          "description": "Implement and test code changes.",
+          "resources": [
+            "task:*",
+            "workspace:coder",
+            "repo:*"
+          ]
+        },
+        {
+          "code": "github-operations",
+          "description": "Read and update repositories accessible to the connected GitHub account, including publishing changes and opening pull requests when requested.",
+          "resources": [
+            "repo:*"
+          ]
+        }
+      ]
+    },
+    "model": "gpt-6.2-sol",
+    "effort": "medium"
+  },
+  "reviewer": {
+    "name": "Reviewer",
+    "profile": {
+      "role": "worker",
+      "limits": "Reviews evidence shared in Office and uses its own workspace.",
+      "capabilities": [
+        {
+          "code": "independent-review",
+          "description": "Review proposed work and identify defects or missing verification.",
+          "resources": [
+            "task:*",
+            "thread:*",
+            "workspace:reviewer",
+            "repo:*"
+          ]
+        }
+      ]
+    },
+    "model": "gpt-6.2-sol",
+    "effort": "medium"
+  },
+  "manager": {
+    "name": "Manager",
+    "profile": {
+      "role": "coordinator",
+      "limits": "Coordinates Agents threads and closes tasks using evidence. No host administration.",
+      "capabilities": [
+        {
+          "code": "coordination",
+          "description": "Coordinate work and verify the final deliverable.",
+          "resources": [
+            "task:*",
+            "thread:*"
+          ]
+        }
+      ]
+    },
+    "model": "gpt-6.2-astra",
+    "effort": "high"
+  },
+  "chief-of-staff": {
+    "name": "Chief of Staff",
+    "profile": {
+      "role": "observer",
+      "limits": "Observes authorized Agents threads and proposes changes privately. The operator decides on team changes.",
+      "capabilities": [
+        {
+          "code": "team-capability-review",
+          "description": "Review capability gaps and propose changes with thread evidence.",
+          "resources": [
+            "thread:*"
+          ]
+        }
+      ]
+    },
+    "model": "gpt-6.2-sol",
+    "effort": "medium"
+  },
+  "remote-worker": {
+    "name": "Remote Worker",
+    "model": "gpt-6.2-sol",
+    "effort": "medium",
+    "profile": {
+      "role": "worker",
+      "limits": "Works on an authorized remote host within its granted workspace.",
+      "capabilities": [
+        {
+          "code": "external-work",
+          "description": "Work with files or tasks assigned to the remote worker.",
+          "resources": [
+            "task:*",
+            "workspace:remote-worker"
+          ]
+        }
+      ]
+    }
+  },
+  "root": {
+    "name": "Root",
+    "model": "gpt-6.2-sol",
+    "effort": "xhigh",
+    "profile": {
+      "role": "worker",
+      "limits": "Proposes maintenance. The operator must approve the exact operation in Root Operations.",
+      "capabilities": [
+        {
+          "code": "host-administration",
+          "description": "Propose reviewed maintenance for the deployment host.",
+          "resources": [
+            "host:local",
+            "service:matrix-stack",
+            "service:matrix-monitor",
+            "service:matrix-backup"
+          ]
+        }
+      ]
+    }
+  }
+}

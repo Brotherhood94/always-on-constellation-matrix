@@ -1,0 +1,10 @@
+{
+  "server_name": "matrix.example",
+  "owner": "operator",
+  "owner_password_file": "/run/private/matrix-owner-password",
+  "agents": ["manager", "analyst", "coder", "reviewer"],
+  "subscriptions": {"default": "Work", "overrides": {"reviewer": "Personal"}},
+  "dot": true,
+  "telegram": false,
+  "tailscale": true
+}

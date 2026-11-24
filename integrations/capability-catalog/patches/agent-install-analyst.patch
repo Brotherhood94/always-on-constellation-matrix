@@ -1,6 +1,0 @@
---- installed
-+++ updated
-@@ -23,2 +23,3 @@
- PYTHONPATH=/opt/matrix-stack python3 -B "$target/provision-agent.py" analyst "$agent_owner"
-+python3 -B /opt/matrix-stack/agent_catalog.py seed /opt/matrix-stack/agent-profiles.json analyst
- if [[ ! -f "$target/.env" ]]; then

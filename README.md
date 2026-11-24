@@ -1,87 +1,26 @@
-# Always-on Constellation via Matrix Protocol
+# Always-on Constellation via Matrix
 
-**Build and run a private workspace for always-on AI agents.**
+Run a team of persistent Amplifier agents on a private Linux VPS. Assign work in Element or through Dot, follow the handoffs in one encrypted Office thread, and see the verified outcome on the original request.
 
-This repository shows how to deploy a team of specialized agents on a Linux VPS. Give them work from Element or through Dot in ChatGPT, follow their handoffs in one encrypted Matrix thread, and receive the verified result in that same thread.
+## Install
 
-**[Deploy the stack →](docs/runbook.md#prerequisites)** · [Explore the architecture](docs/architecture.md) · [Verify your deployment](docs/acceptance.md)
+Use an Ubuntu 24.04 VPS with Docker Engine, Docker Compose, Python 3, curl, Restic, and a connected Tailscale node with HTTPS enabled. Tailscale Serve gives authorized devices private HTTPS access to Element, the dashboard, and Neo4j Browser. Dot uses an outbound OpenAI Secure MCP Tunnel to reach its private MCP bridge. [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) · [OpenAI Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
 
-![A compact server connected by illuminated traces to four separate agent modules](assets/constellation-vps-hero.jpg)
-
-## What's new
-
-- **Root Operations** takes reviewed maintenance requests through an operator-only **Accept / Reject** poll in Element. It binds each vote to the exact script and returns the outcome to Manager in the original thread. [Install and verify Root](integrations/root/README.md)
-- **Telegram Control** accepts drafts from Dot, reads an authorized chat on request, and keeps follow-up drafts and their approvals in the original Matrix thread. [Telegram operator guide](docs/telegram.md#dot-and-chat-updates)
-- **Capability-based routing** lets agents delegate by resource scope and availability. Coder returns runtime failures and useful partial work to Manager for recovery. [Deployment and verification](docs/runbook.md#agent-capability-catalog)
-- **Execution timelines** link steps within a task and tasks within a thread, with contributor attribution in Context Intelligence and Neo4j. [Timeline guide](integrations/context-execution/README.md)
-
-## Follow an assignment
-
-Ask Manager to coordinate a change. Manager defines what needs to be checked, Coder implements it, and Reviewer independently checks the evidence. Manager brings their findings together in Element.
-
-```mermaid
----
-config:
-  flowchart:
-    rankSpacing: 22
-    padding: 10
-  themeVariables:
-    lineColor: "#717C87"
----
-flowchart LR
-    start["Element<br/>or Dot"] --> plan["Manager"]
-    plan --> work["Coder<br/>and Reviewer"]
-    work --> result["Verified<br/>result"]
-    classDef entry fill:#E4F5F4,stroke:#2C817C,color:#132E36
-    classDef coordination fill:#E8EBF8,stroke:#7778AC,color:#292B47
-    classDef evidence fill:#E9F3DB,stroke:#648747,color:#243919
-    class start entry
-    class plan,work coordination
-    class result evidence
+```sh
+sudo ./constellation install
+sudo ./constellation agent sign-in manager
 ```
 
-The thread holds the request, evidence, and outcome. A status question can go directly to the agent that has the answer. [See how mentions, handoffs, and outcomes work](docs/architecture.md#shared-matrix-policies).
+Select the agents you want. Manager coordinates assignments, Analyst investigates, Coder works on files, and Reviewer checks results. Choose a default Amplifier subscription label and override it for individual agents as needed. Run `agent sign-in` for each local agent you selected. Authorize each Instance in the provider’s device sign-in flow. For repeatable setup, copy [the example config](deploy/config.example.json), update the values, and pass it with `--config`.
 
-## Meet the team
+In Element, sign in with your new Matrix account and open **Agents → Office**. Use Element’s mention picker to tag one agent in a new message. A good first request is “Ask Reviewer to check a short deployment checklist and summarize the result.” The agent adds 👀 on its assignment. Manager posts the verified result in the original thread and marks the initial request with ✅.
 
-| Agent | What it does |
-| --- | --- |
-| **Manager** | Plans one assignment, delegates work, and verifies the result before closing the thread. |
-| **Analyst** | Investigates questions and gives the team the context it needs to act. |
-| **Coder** | Implements changes in a dedicated workspace and can publish authorized GitHub changes. |
-| **Reviewer** | Checks the shared evidence independently and sends findings back to the delegating agent. |
-| **External Worker** | Handles tasks that need access to a separate Linux host. Optional. |
-| **Chief of Staff** | Observes authorized threads, records team interactions in Context Intelligence, and proposes improvements in its own room. Optional. |
-| **Root** | Presents a maintenance proposal in `Root Operations` and reports the result in the requesting thread after the operator's decision. Optional. |
+## Operate the workspace
 
-**Dot** can open an assignment from ChatGPT through a private connector. **Monitor** sends resource alerts and recovery notices to `VPS Alerts`. [See agent runtimes and operating roles](docs/architecture.md#agent-roles).
+- **Dashboard.** Open **Agents → VPS Alerts → Pinned messages → Open dashboard**. The dashboard shows VPS resource history, agent health, and integration status. **Open Context Intelligence** opens the authenticated Neo4j Browser. You can also find that link in the VPS Alerts pins.
+- **Extend the team.** Add agents with `sudo ./constellation agent add --profile /path/to/agent.json`. Each general Office worker has a private workspace and read/write access to the [shared desktop](desktop/README.md). [Profile and remote-worker setup](docs/runbook.md)
+- **Review work and maintenance.** Chief of Staff observations and Root Operations approvals go to private one-to-one chats. [Chief of Staff](docs/chief-of-staff.md) · [Root Operations](integrations/root/README.md)
+- **Connect integrations.** Dot can publish Office tasks and fetch their outcomes through the private tunnel. Telegram Control can prepare a draft or report updates from an approved portal. [Dot and tunnel setup](docs/dot.md) · [Telegram](docs/telegram.md)
+- **Verify and recover.** Use `sudo ./constellation status`, `backup`, and `restore-check`. Read the [acceptance checks](docs/acceptance.md) and the [communication policies](policy/README.md) before replacing an existing deployment.
 
-## What you deploy
-
-| Layer | What it provides |
-| --- | --- |
-| **Private access** | Synapse and PostgreSQL in Docker Compose, with Element access over Tailscale and invite-only encrypted rooms. |
-| **Always-on workers** | Server-side listeners stay available with the Mac off. A real mention in `Agents` starts a model turn. Matrix identities, workspaces, and sessions are separate. Rich text and encrypted attachments keep evidence in the thread. |
-| **Operations** | A private dashboard for VPS resources and agent inventory, encrypted local backups, and service recovery after a restart. |
-| **Team improvement** | The Chief of Staff reviews how work flows across threads. Context Intelligence stores the evidence in Neo4j, and Microsoft Persona Workshop saves reviewable persona drafts. [See how it works](docs/chief-of-staff.md). |
-| **Telegram pilot** | Optional private Element portals with a dedicated Constellation and Amplifier drafting agent. [Setup and acceptance](docs/telegram.md). |
-
-> [!NOTE]
-> Start with the matching `matrix-stack` and `matrix-agents` installer sources. The [runbook](docs/runbook.md) covers installation order, Element onboarding, optional integrations, and recovery. The [acceptance checks](docs/acceptance.md) record what to verify on your deployment.
-
-## Roadmap
-
-- Run the [four collaboration scenarios](docs/acceptance.md#chief-of-staff-collaboration-scenarios) and evaluate the Chief of Staff's proposals against their evidence.
-- Add an operator-initiated draft request from the `Chief of Staff` room.
-- Automate new-agent provisioning so registration, shared policies, dashboard inventory, and backups are configured together.
-
-### Amplifier Constellation adoption
-
-Matrix remains the conversation layer. The External Worker already runs Constellation Instance with an Amplifier ACP backend, making it the first pilot for lifecycle, profiles, and diagnostics. Manager, Analyst, Coder, and Reviewer use Codex ACP. [Upstream component map](https://github.com/microsoft/amplifier-constellation) · [Evaluation and acceptance criteria](docs/constellation-evaluation.md)
-
-- [ ] Use ACP Lab's fixture and scenario approach for repeatable engine checks. Establish the Matrix baseline with the four scenarios, including interruption and retry, before changing the agent or connector.
-- [ ] Audit the External Worker's Instance and selected ACP engine. Verify stable identity, session loading, model access, and rollback on an isolated copy before an upgrade.
-- [ ] Compare one Chief of Staff persona draft against the unprofiled baseline, then test import and rollback on the External Worker after operator review.
-- [ ] Pilot Observatory for one Instance with observation-only access. Add live health and the last real task check to the current inventory if the data improves operations.
-- [ ] Evaluate a timer for the existing Chief of Staff review after scenario acceptance. A native scheduler pilot must prove authorization, restart recovery, and explicit Matrix delivery. Consider Instance context grants for a concrete, scoped use case.
-- [ ] Evaluate Conversations or Huddles in isolation if a use case needs a separate collaboration surface or Companion voice. Preserve Matrix audience, thread identity, and delivery rules in any adapter.
+[Architecture](docs/architecture.md) · [Microsoft Constellation](https://github.com/microsoft/amplifier-constellation) · [Amplifier](https://github.com/microsoft/amplifier)

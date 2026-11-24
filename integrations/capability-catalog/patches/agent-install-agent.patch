@@ -1,8 +1,0 @@
---- installed
-+++ updated
-@@ -28,2 +28,5 @@
- PYTHONPATH=/opt/matrix-stack python3 -B "$source_dir/provision-agent.py" "$agent" "${owner#@}"
-+if [[ $agent != dot ]]; then
-+  python3 -B /opt/matrix-stack/agent_catalog.py seed /opt/matrix-stack/agent-profiles.json "$agent"
-+fi
- 

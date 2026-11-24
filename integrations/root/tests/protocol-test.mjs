@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import * as protocol from '../updates/proposal-validation/protocol.mjs';
+import * as protocol from '../protocol.mjs';
 
 const candidate = {
   operation: 'reviewed-script',

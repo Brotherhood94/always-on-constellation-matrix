@@ -1,0 +1,18 @@
+Port 2222
+ListenAddress 0.0.0.0
+HostKey /config/host-key
+AuthorizedKeysFile /config/authorized-keys
+PidFile /tmp/sshd.pid
+PermitRootLogin no
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+AuthenticationMethods publickey
+UsePAM no
+AllowUsers desktop-share
+PermitTTY no
+DisableForwarding yes
+ChrootDirectory /chroot
+ForceCommand internal-sftp -d /desktop -u 0007
+
+Subsystem sftp internal-sftp

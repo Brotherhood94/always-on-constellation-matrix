@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+src=$(cd -- "$(dirname -- "$0")/.." && pwd)
+[[ $EUID == 0 ]] || { echo 'Run the isolated installation smoke test as root.' >&2; exit 1; }
+umask 077
+work=$(mktemp -d "${CONSTELLATION_TEST_TMP:-/tmp}/constellation-install.XXXXXXXX")
+data="$work/data"
+cleanup() {
+  if [[ -f "$data/compose.yaml" ]]; then
+    docker compose --project-directory "$data" --profile agents down --volumes >/dev/null 2>&1 || true
+  fi
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
+printf '%s\n' 'synthetic-matrix-password-88' > "$work/password"
+python3 - "$work" <<'PYTHON'
+import json
+from pathlib import Path
+from secrets import token_hex
+import socket
+import sys
+
+work = Path(sys.argv[1])
+keys = ['matrix_port', 'dashboard_https_port', 'neo4j_port', 'neo4j_https_port', 'bolt_port', 'bolt_https_port',
+        'context_port', 'context_https_port']
+listeners = [socket.socket() for _ in keys]
+for sock in listeners:
+    sock.bind(('127.0.0.1', 0))
+ports = dict(zip(keys, [sock.getsockname()[1] for sock in listeners]))
+project = 'constellation-fixture-' + token_hex(6)
+config = {
+    'server_name': 'fixture.test', 'owner': 'operator', 'agents': [],
+    'owner_password_file': str(work / 'password'), 'subscriptions': {'default': 'Fixture'},
+    'project': project, 'systemd': False, 'tailscale': False, **ports,
+}
+(work / 'install.json').write_text(json.dumps(config))
+PYTHON
+"$src/constellation" --data-dir "$data" install --config "$work/install.json"
+cp "$data/rooms.json" "$work/initial-rooms.json"
+"$src/constellation" --data-dir "$data" install --config "$work/install.json"
+cmp "$work/initial-rooms.json" "$data/rooms.json"
+graph=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["neo4j_port"])' "$data/settings.json")
+python3 - "$graph" <<'PYTHON'
+from time import sleep
+import sys
+from urllib.request import urlopen
+
+for attempt in range(12):
+    try:
+        with urlopen(f'http://127.0.0.1:{sys.argv[1]}/browser/', timeout=5) as response:
+            assert response.status == 200 and response.headers.get_content_type() == 'text/html'
+        break
+    except OSError:
+        if attempt == 11:
+            raise
+        sleep(1)
+PYTHON
+printf '%s\n' 'Clean coordinator install, rerun and graph browser proxy verified.'
+if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
+  "$src/constellation" --data-dir "$data" backup
+  "$src/constellation" --data-dir "$data" restore-check
+fi

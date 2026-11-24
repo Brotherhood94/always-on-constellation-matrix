@@ -1,58 +1,23 @@
-# Acceptance and evidence
+# Acceptance checks
 
-Record the deployment date, source revision, applicable version pins, result, and a sanitized evidence summary. Use `Pass`, `Fail`, or `Open` for the deployment under test.
+Record the source revision, component pins, and result for each target independently.
 
-## Reference deployment evidence
-
-| Check | Observed result |
-| --- | --- |
-| Private Matrix, encrypted alert, backup restore, and reboot | Phase 1 checks passed, and encrypted alerts and access recovered after the Phase 1 reboot. |
-| Analyst and Reviewer | A live Matrix thread completed an Analyst → Reviewer → Analyst handoff. The earlier worker backup and isolated restore also passed. |
-| Direct replies, rich text, and attachments | Direct status replies and outcome mentions were exercised. Rich text and encrypted attachment handoffs were verified on local Synapse. The live homeserver advertised a 60,000,000-byte upload limit. |
-| Managed tasks | Five- and six-reply paths, a blocked worker, direct status, and terminal reactions passed on local Synapse. The live Dot → Manager → external worker → Manager test returned the external hostname, closed the original thread, and exposed the completed outcome to Dot. |
-| Optional GitHub integration | A live read-only `GET /user` confirmed Coder's intended GitHub login. Repository creation, PR merge, and the repository deletion guard were exercised in simulation. |
-| Chief of Staff | The direct Matrix reader recorded a live encrypted thread opened in Element. A subsequent review read interactions from Neo4j, published an encrypted proposal in the dedicated room, and archived it in the graph. |
-| Root Operations | An approved inventory ran on the reference VPS and returned exit code zero in the originating thread with a Matrix mention of Manager. Isolated Synapse and broker fixtures cover owner-only vote handling, rejection, script integrity, and replay. [Root checks](../integrations/root/README.md#audit-and-verify) |
-| Execution timelines | Disposable Context Intelligence and Neo4j fixtures check `NEXT_EVENT` and `NEXT_TASK`, contributor identity, late arrivals, and replay. [Timeline checks](../integrations/context-execution/README.md) |
-| Persona Workshop | Docker testing verified compilation, both export formats, and draft persistence across container recreation. The reference VPS created and exported a draft for Coder from an archived observation. On-host review of the draft and reuse check remain open. |
-| Collaboration scenarios | Four scenarios are prepared for live execution and review. |
-
-## Checks for each deployment
-
-1. Verify tailnet-only access to HTTPS ports 443 and 8443, the Synapse client endpoint, private registration and federation configuration, and both invite-only encrypted rooms. Exchange an encrypted message and attachment between verified Element Desktop and Element X devices.
-2. Verify the agent inventory, isolated workspaces, runtime identity, distinct ACP sessions per thread, and persistent workspace across threads. Where an external worker is enabled, verify its user units and run a read-only host check through Manager.
-3. Check dispatch with a real mention, quote-only mention, multiple targets, unauthorized sender, and unrelated room. Ask a direct status question and verify a requester mention in the same thread. Exercise delegated review and a six-reply Manager chain. Check that only Manager emits the whole-task outcome on a managed route.
-4. Observe 👀 after confirmed runtime start and its removal on delivery. Verify exactly one final notification to Dot and the owner and ✅ or ❌ on the original assignment. Confirm ordinary waiting emits no terminal reaction. Exercise an encrypted attachment through a handoff and verify the configured limit and user-visible rejection.
-5. Publish a test plan through Dot with a synthetic task ID. Test scoped lookup, retry with the same ID, and confirm one Matrix publication. Exercise a blocked or completed managed task and check the returned status.
-6. Verify collector cadence, a resource alert and recovery, and queue delivery after a controlled interruption. Confirm snapshot retention and exercise isolated restore and a controlled reboot, including the complete worker set and Dot where enabled.
-7. Where GitHub is enabled, check the connected account via Coder and record the login in private operator evidence. Use a disposable repository when testing writes and repository-policy enforcement.
-8. Where the Chief of Staff is enabled, compare one encrypted source thread, its graph events, the review in `Chief of Staff`, and the archived observation. Verify the contributor and the initial mentions and handoffs. Where Persona Workshop is enabled, verify both exports and their provenance. Repeat the same draft request and check that it reuses the existing export. Verify backup and restore coverage for each enabled component.
-
-Full-stack restore and reboot with the current set of workers and Dot, and locked-screen Element X alert delivery with the desktop offline, remain deployment acceptance checks. [Runbook](runbook.md#4-monitor-and-recover)
-
-## Chief of Staff collaboration scenarios
-
-Use fictional inputs and two new `Agents` threads per scenario. Each pair exercises Dot, Manager, Analyst, Coder, Reviewer, and the registered External Worker within the six-reply limit per managed task. The Chief of Staff observes the exchanges. Keep any files in the assigned agent's workspace and use real Matrix mentions when starting from Element.
-
-| Scenario | Dot request | Element request | Evidence to compare |
-| --- | --- | --- | --- |
-| Requirements through independent verification | Ask Manager for a parser for `north,3`, `south,2`, and `north,-1`. Route through Analyst, Coder, Reviewer, and back to Coder before Manager closes. | Ask External Worker to total the same records directly. | Both totals should be 2. Check acceptance criteria, independent verification, and who closed the task. |
-| Ambiguous acceptance criteria | Ask Manager for a report that counts each category and includes blank rows in the total. External Worker counts `A, A, blank, B`, Analyst clarifies the rule, and Coder supplies an example. | Ask Reviewer for a direct judgment on `A=2, B=1, total=4` and when a separate blank row would be required. | Check that the revised criterion and assumptions survive the handoffs. |
-| Blocker and recovery | Ask Manager for a validator while deliberately withholding its input schema. Analyst identifies the missing requirement. | Open a new Manager assignment with schema `id,score`, valid rows `a,3` and `b,2`, and a rule that scores are integers. External Worker checks expectations. Coder implements the check, Reviewer verifies that `c,nope` is rejected, and Coder returns the evidence for Manager to close. | The first thread identifies the blocker, who can resolve it, and the next action. The second records verified completion. |
-| Direct answer and coordinated decision | Ask Reviewer to reply directly with the ambiguous word in “Retry soon after a failed check.” | Ask Manager for a two-line runbook. Give a one-minute cadence and an alert after three consecutive failures. External Worker checks that failures at 09:00, 09:01, and 09:02 first alert at 09:02. Analyst defines repeated failure, and Coder drafts the text. | The direct reply should stay in its thread. The managed result should include its verification. |
-
-After the runs, compare the eight source threads with captured interaction events. Check that initial mentions, handoffs, and reported outcomes match Matrix. Run the [Chief of Staff review](chief-of-staff.md#review-team-evidence) and compare any proposal in Element with its archived observation. Check that the references support the proposal, simulated blockers are interpreted in context, and the recommendation has a measurable verification step. Insufficient evidence is a valid outcome. Draft a persona only when the evidence supports a role-specific change and review the draft before any assignment.
-
-## Telegram acceptance
-
-| Check | Verified evidence | Live acceptance still required |
+| Feature | Automated check | Deployment acceptance |
 | --- | --- | --- |
-| TG-01 to TG-03, onboarding and sender identity | Pinned mautrix started against a disposable Synapse and PostgreSQL with an empty allowlist. The operator verified a live Telegram ↔ Element manual round trip for the first approved DM using installer `v0.1.2`. | Group onboarding and manual round trip, excluded chats, relay attribution, and group type. |
-| TG-04 to TG-06, Amplifier and session isolation | A real Instance and Amplifier ACP completed a synthetic provider fixture turn and loaded the same session. SQLite tests verify independent chat bindings. On the VPS, the operator confirmed the `v0.1.5` probe generated a synthetic draft using the Codex subscription and loaded the saved ACP session. | Session continuity across a service restart and live isolation between DM and group bindings. |
-| TG-07 to TG-15, draft and publish | The operator confirmed that two approved DM bindings were enabled simultaneously in draft mode with installer `v0.1.6` and showed a live draft in Control. Policy tests cover exact approval, stale drafts, retries, uncertain delivery, and pause/rotation. An isolated Matrix test verified encrypted review options and that a single approval closed the poll and sent the selected draft into the disposable portal. | Selection from Element Desktop and Element X, live isolation between DMs, the group portal, correlated mautrix status, audience changes, and one approved external message. |
-| TG-16 and TG-17, encryption and authority | Two disposable Matrix accounts exchanged an encrypted connector event. Repeating the exact encrypted request returned the same Synapse event ID. | Element Desktop and Element X key sharing and reboot. Verify the real bridge and relay can decrypt and send. Verify negative authority cases through the full live path. |
-| TG-18 to TG-20, operations | Compose resource limits and health, backup quarantine, and existing-stack separation are implemented. | Live dependency outages, inventory/reporting, tagged Restic recovery, and existing Agents/Dot regressions. |
+| Installation and registry | `tests/unit`, `tests/compose-smoke`, and `tests/synapse-smoke` | Run a clean install twice. Sign in to each selection, add one profile, and confirm routing and inventory after restart. |
+| Element spaces and DMs | `tests/synapse-smoke` | Open Agents and verify two-person encrypted Chief of Staff and Root chats. |
+| Office policies and ACP | `tests/unit` | Start an encrypted managed handoff from Element and Dot. Check transient 👀, the final ✅ or ❌, session recovery, attachments, and one delivery after retry. |
+| Shared desktop | `tests/unit` and `tests/desktop-sftp` | Write a file locally, read and edit it on the remote worker, then confirm the new contents from Office. |
+| Dashboard and links | `tests/unit` and `tests/dashboard-browser` | Open both pins in Element. Confirm that **Open Context Intelligence** in the dashboard reaches the same authenticated Neo4j Browser. |
+| Context Intelligence | `integrations/context-execution/tests/isolated` | Verify one real thread timeline and contributor attribution for at least two agents. |
+| Root and Telegram | `integrations/root/tests/run`, `tests/unit`, and the Telegram smoke scripts | Approve and reject harmless Root proposals. Send one approved Telegram fixture draft, review a chat update, and verify audience isolation. |
+| Dot | `MATRIX_OPERATIONS_SMOKE=1 tests/synapse-smoke` | Use the private app over OpenAI’s tunnel to publish, retry, and read a synthetic task. Verify a different task ID stays out of scope. |
+| Recovery | `tests/unit` and `VERIFY_RESTIC=1 tests/install-smoke` | Restore an isolated checkpoint before cutover, then verify service recovery after a controlled restart. |
 
-Only the operator can activate external delivery for a verified binding. Record live results against the matching release and sanitized receipts. [Telegram guide](telegram.md)
+Use separate projects, ports, and data for VPS staging. Live acceptance requires operator authentication for sudo, Element, the provider subscriptions, Telegram, and Dot. Record the results under the target where they actually ran.
 
-The Dot Control smoke test uses isolated Synapse, PostgreSQL, and an ACP fixture. It verifies one encrypted draft per retried Dot request, rejection of a Dot approval attempt, and an operator's threaded update with both Matrix mentions and a source link to the selected portal. The VPS deployment and plugin refresh are separate live acceptance steps.
+## Refactor verification record
+
+- Local isolated checks covered coordinator install and rerun, the graph browser proxy, encrypted Matrix pins and Dot task isolation, Constellation startup and ACP session restore, Root approvals, Telegram drafts and updates, and Context Intelligence timelines. The Restic checkpoint and restore ran on a native Linux fixture.
+- The VPS staging checkout passed configuration validation and Python tests. The privileged VPS installation, operator sign-ins, private endpoint checks from Element, and live cutover are pending.
+- The repository contains the CI workflow. A hosted CI result is recorded after the workflow has run.
