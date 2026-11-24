@@ -55,7 +55,7 @@ Upload a synthetic `numbers.csv` containing a header `value` followed by `2`, `3
 
 Use the example profile as QA, activate it, and mention it in Office. Ask it to read `desktop/acceptance-01/total.txt` and append `QA checked` on a new line. Ask Coder in a fresh thread to read it back. If a remote worker is enabled, repeat the read and append with that worker and verify the result from the local worker. [Agent registration](runbook.md#add-a-worker) · [Remote worker setup](runbook.md#add-a-remote-worker)
 
-**Pass** when the agent joins Office, appears in the dashboard and Persona Workshop’s Managed Agents, routes work after provider sign-in, and shares the same file with the other worker. Also confirm that each worker’s private workspace stays scoped to that worker.
+**Pass** when the agent joins Office, appears in the dashboard and Persona Workshop’s Managed Agents, routes work after provider sign-in, and shares the same file with the other worker. The deployment’s `workshop-management/targets.json` also records the managed target. Confirm that each worker’s private workspace stays scoped to that worker.
 
 ### 6. Review the evidence and draft a persona change
 
@@ -91,6 +91,6 @@ With no active task in your isolated deployment, run the checkpoint and restore 
 ## Refactor verification record
 
 - Local isolated checks covered coordinator install and rerun, the graph browser proxy, encrypted Matrix pins and Dot task isolation, Constellation startup and ACP session restore, Root approvals, Telegram drafts and updates, and Context Intelligence timelines. The Restic checkpoint and restore ran on a native Linux fixture.
-- A regular account on an isolated Linux rootless Docker daemon passed clean installation with Manager selected, rerun with the same Matrix room IDs, dashboard and graph proxy access, live inventory, and encrypted checkpoint and restore. Provider sign-in remains an operator acceptance check.
+- A regular account on an isolated Linux rootless Docker daemon passed clean installation with Manager selected, rerun with the same Matrix room IDs, agent registration and retry with one stable Workshop target, dashboard and graph proxy access, live inventory, and encrypted checkpoint and restore. Provider sign-in remains an operator acceptance check.
 - The VPS staging checkout passed configuration validation and Python tests. The privileged VPS installation, operator sign-ins, private endpoint checks from Element, and live cutover are pending.
 - Hosted CI on `bb1d1db` passed the unit, dashboard, Compose, SFTP, Synapse, Root and Persona Workshop checks. That run stopped the Context Intelligence smoke at Docker tag validation and the nested rootless smoke at user namespace creation. The workflow now normalizes fixture names and provisions native rootless Docker for the hosted job. [Hosted verification run](https://github.com/Brotherhood94/always-on-constellation-matrix/actions/runs/45452175583)
