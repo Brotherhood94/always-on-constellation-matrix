@@ -19,6 +19,79 @@ def unit(name, contents):
     save(UNITS / name, contents, mode=0o644)
 
 
+def enable_host_dependencies(settings):
+    services = ['docker.service', 'containerd.service']
+    if settings['tailscale']:
+        services.append('tailscaled.service')
+    run('systemctl', 'enable', '--now', *services)
+
+
+def enable_services(settings):
+    project = settings['project']
+    run('systemctl', 'enable', '--now', project + '-stack.service',
+        project + '-monitor.service', project + '-backup.timer')
+
+
+def remove_units(project):
+    descriptions = {
+        '-telegram-backup.timer': 'Schedule Constellation Telegram backup',
+        '-telegram-metrics.timer': 'Schedule Constellation Telegram metrics',
+        '-backup.timer': 'Nightly encrypted Constellation backup',
+        '-telegram-backup.service': 'Constellation Telegram backup',
+        '-telegram-metrics.service': 'Constellation Telegram metrics',
+        '-backup.service': 'Encrypted Constellation checkpoint',
+        '-dot.service': 'OpenAI Secure MCP Tunnel for Dot',
+        '-root.socket': 'Private socket for approved Root operations',
+        '-root.service': 'Execute operator-approved Root operations',
+        '-monitor.service': 'Constellation VPS resource collector',
+        '-stack.service': 'Private Matrix Constellation deployment',
+    }
+    installed = []
+    for suffix, description in descriptions.items():
+        path = UNITS / (project + suffix)
+        if (path.is_file() and not path.is_symlink()
+                and f'Description={description}' in path.read_text().splitlines()):
+            installed.append(path)
+    if installed:
+        run('systemctl', 'disable', '--now', *(path.name for path in installed))
+        for path in installed:
+            path.unlink()
+        run('systemctl', 'daemon-reload')
+
+
+def enable_telegram_units(settings, data):
+    if not settings['systemd']:
+        raise ValueError('Enable host systemd services to schedule Telegram jobs')
+    deployment = safe_path(data)
+    source = safe_path(SOURCE)
+    timers = []
+    for task, schedule in (('backup', 'OnCalendar=*-*-* 04:15:00'),
+                           ('metrics', 'OnBootSec=90s\nOnUnitActiveSec=60s')):
+        name = settings['project'] + '-telegram-' + task
+        backup_ready = (f'ConditionPathExists={deployment}/backups/config\n'
+                        f'ConditionPathExists={deployment}/telegram/bridge/config.yaml\n') if task == 'backup' else ''
+        unit(name + '.service', f'''[Unit]
+Description=Constellation Telegram {task}
+After=docker.service {settings['project']}-stack.service
+Requires=docker.service
+{backup_ready}[Service]
+Type=oneshot
+Environment=TELEGRAM_STACK_DIR={deployment}
+ExecStart=/usr/bin/bash {source}/integrations/telegram/telegram {task}
+''')
+        unit(name + '.timer', f'''[Unit]
+Description=Schedule Constellation Telegram {task}
+[Timer]
+{schedule}
+Persistent=true
+[Install]
+WantedBy=timers.target
+''')
+        timers.append(name + '.timer')
+    run('systemctl', 'daemon-reload')
+    run('systemctl', 'enable', '--now', *timers)
+
+
 def units(settings, data, *, broker=False):
     project = settings['project']
     deployment = safe_path(data)
@@ -35,7 +108,7 @@ def units(settings, data, *, broker=False):
         slice_file.chmod(0o644)
     unit(project + '-monitor.service', f'''[Unit]
 Description=Constellation VPS resource collector
-After=docker.service
+After=docker.service {project}-stack.service
 Requires=docker.service
 [Service]
 Type=simple
@@ -63,7 +136,7 @@ WantedBy=multi-user.target
 ''')
     unit(project + '-backup.service', f'''[Unit]
 Description=Encrypted Constellation checkpoint
-After=docker.service
+After=docker.service {project}-stack.service
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/python3 -B {deployment}/host/recovery.py {deployment} backup

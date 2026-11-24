@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 src=$(cd -- "$(dirname -- "$0")/.." && pwd)
-if [[ $EUID != 0 && ${CONSTELLATION_ROOTLESS_SMOKE:-0} != 1 ]]; then
-  echo 'Run the administrator smoke test as root or select the rootless smoke test.' >&2
-  exit 1
-fi
+[[ $EUID == 0 ]] || { echo 'Run the standard Docker install fixture as root.' >&2; exit 1; }
 umask 077
 work=$(mktemp -d "${CONSTELLATION_TEST_TMP:-/tmp}/constellation-install.XXXXXXXX")
 data="$work/data"
@@ -12,27 +9,19 @@ cleanup() {
   if [[ -f "$data/compose.yaml" ]]; then
     docker compose --project-directory "$data" --profile agents down --volumes >/dev/null 2>&1 || true
   fi
-  if [[ $EUID == 0 ]]; then
-    rm -rf -- "$work"
-  else
-    # The rootless daemon maps service files to subordinate UIDs.
-    docker run --rm --network none --mount "type=bind,source=$work,target=/fixture" \
-      constellation-matrix-operator:28.2.2-1 sh -c 'rm -rf /fixture/data' >/dev/null || true
-    rm -rf -- "$work"
-  fi
+  rm -rf -- "$work"
 }
 trap cleanup EXIT
 printf '%s\n' 'synthetic-matrix-password-88' > "$work/password"
 python3 - "$work" <<'PYTHON'
 import json
-import os
 from pathlib import Path
 from secrets import token_hex
 import socket
 import sys
 
 work = Path(sys.argv[1])
-keys = ['matrix_port', 'dashboard_port', 'dashboard_https_port', 'neo4j_port', 'neo4j_https_port', 'bolt_port', 'bolt_https_port',
+keys = ['matrix_port', 'dashboard_https_port', 'neo4j_port', 'neo4j_https_port', 'bolt_port', 'bolt_https_port',
         'context_port', 'context_https_port']
 listeners = [socket.socket() for _ in keys]
 for sock in listeners:
@@ -41,7 +30,7 @@ ports = dict(zip(keys, [sock.getsockname()[1] for sock in listeners]))
 project = 'constellation-fixture-' + token_hex(6)
 config = {
     'server_name': 'fixture.test', 'owner': 'operator',
-    'agents': ['manager'] if os.geteuid() else [],
+    'agents': ['manager'],
     'owner_password_file': str(work / 'password'), 'subscriptions': {'default': 'Fixture'},
     'project': project, 'systemd': False, 'tailscale': False, **ports,
 }
@@ -68,8 +57,7 @@ for attempt in range(12):
         sleep(1)
 PYTHON
 printf '%s\n' 'Clean coordinator install, rerun and graph browser proxy verified.'
-if [[ $EUID != 0 ]]; then
-  cat > "$work/worker.json" <<'JSON'
+cat > "$work/worker.json" <<'JSON'
 {
   "key": "fixture-worker",
   "name": "Fixture Worker",
@@ -85,13 +73,13 @@ if [[ $EUID != 0 ]]; then
   }
 }
 JSON
-  "$src/constellation_matrix" --data-dir "$data" agent add --profile "$work/worker.json" \
-    --owner-password-file "$work/password"
-  cp "$data/workshop-management/targets.json" "$work/initial-targets.json"
-  "$src/constellation_matrix" --data-dir "$data" agent add --profile "$work/worker.json" \
-    --owner-password-file "$work/password"
-  "$src/constellation_matrix" --data-dir "$data" status --refresh
-  python3 - "$data" "$work" <<'PYTHON'
+"$src/constellation_matrix" --data-dir "$data" agent add --profile "$work/worker.json" \
+  --owner-password-file "$work/password"
+cp "$data/workshop-management/targets.json" "$work/initial-targets.json"
+"$src/constellation_matrix" --data-dir "$data" agent add --profile "$work/worker.json" \
+  --owner-password-file "$work/password"
+"$src/constellation_matrix" --data-dir "$data" status --refresh
+python3 - "$data" "$work" <<'PYTHON'
 import json
 from pathlib import Path
 import sys
@@ -100,7 +88,7 @@ from urllib.request import Request, urlopen
 
 data, work = map(Path, sys.argv[1:])
 settings = json.loads((data / 'settings.json').read_text())
-assert settings['rootless'] and not settings['systemd']
+assert not settings['systemd']
 registry = json.loads((data / 'agents.json').read_text())
 assert registry['agents']['manager']['active'] is False
 worker = registry['agents']['fixture-worker']
@@ -114,27 +102,35 @@ for key in targets:
 
 matrix = f"http://127.0.0.1:{settings['matrix_port']}/_matrix/client/v3/"
 login = json.dumps({'type': 'm.login.password', 'identifier': {'type': 'm.id.user', 'user': 'operator'},
-                    'password': (work / 'password').read_text().strip()}).encode()
+                  'password': (work / 'password').read_text().strip()}).encode()
 with urlopen(Request(matrix + 'login', data=login, headers={'Content-Type': 'application/json'}), timeout=5) as response:
     token = json.load(response)['access_token']
 office = quote(json.loads((data / 'rooms.json').read_text())['office'], safe='')
 with urlopen(Request(matrix + f'rooms/{office}/joined_members',
-                     headers={'Authorization': 'Bearer ' + token}), timeout=5) as response:
+                   headers={'Authorization': 'Bearer ' + token}), timeout=5) as response:
     assert '@fixture-worker:fixture.test' in json.load(response)['joined']
 
-base = f"http://127.0.0.1:{settings['dashboard_port']}/"
-with urlopen(base + 'dashboard.mjs', timeout=5) as response:
-    assert response.headers.get_content_type() == 'application/javascript'
-with urlopen(base + 'links.json', timeout=5) as response:
-    links = json.load(response)
-    assert links['context'] == settings['context_url']
-with urlopen(base + 'agents.json', timeout=5) as response:
-    statuses = {agent['name']: agent['status'] for agent in json.load(response)['agents']}
-    assert statuses == {'Manager': 'Sign-in required', 'Fixture Worker': 'Sign-in required'}
+dashboard = data / 'dashboard'
+assert (dashboard / 'dashboard.mjs').is_file()
+assert json.loads((dashboard / 'links.json').read_text())['context'] == settings['context_url']
+agents = json.loads((dashboard / 'agents.json').read_text())['agents']
+assert {agent['name']: agent['status'] for agent in agents} == {
+    'Manager': 'Sign-in required', 'Fixture Worker': 'Sign-in required',
+}
 print('New agent joined Office once, retained its Workshop target, and appeared pending sign-in on the dashboard.')
 PYTHON
-fi
 if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
   "$src/constellation_matrix" --data-dir "$data" backup
   "$src/constellation_matrix" --data-dir "$data" restore-check
 fi
+
+project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' "$data/settings.json")
+"$src/constellation_matrix" --data-dir "$data" uninstall
+"$src/constellation_matrix" --data-dir "$data" uninstall
+[[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$project") ]]
+[[ -z $(docker network ls -q --filter "label=com.docker.compose.project=$project") ]]
+cmp "$work/initial-rooms.json" "$data/rooms.json"
+if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
+  test -f "$data/backups/config"
+fi
+printf '%s\n' 'Uninstall removed the Compose project and retained rooms, data and backups.'

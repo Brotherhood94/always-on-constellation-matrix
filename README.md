@@ -113,32 +113,33 @@ An agent adds 👀 when it accepts an assignment and clears it after delivery. A
 
 ## Quick start
 
-On an Ubuntu 24.04 VPS, select your **rootless Docker** context and run the installer as your regular account. For private access from your devices, enable HTTPS on the VPS tailnet node and have the node administrator delegate Tailscale Serve to your account. [VPS setup](docs/runbook.md#initial-setup) · [Docker rootless mode](https://docs.docker.com/engine/security/rootless/) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
+On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup with sudo so the installer can set file ownership and enable the host services. For private access from your devices, connect the VPS to your tailnet and enable Tailscale HTTPS. [VPS setup](docs/runbook.md#initial-setup) · [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
 
 ```sh
-./constellation_matrix install
-./constellation_matrix agent sign-in manager
+sudo ./constellation_matrix install
+sudo ./constellation_matrix agent sign-in manager
 ./constellation_matrix status
 ```
 
 1. Select the agents to install. Choose Manager, Coder, and Reviewer to try the flow above. Set a default Amplifier subscription label and override it for individual agents as needed.
-2. Run `./constellation_matrix agent sign-in <agent>` for each selected local agent and complete its provider sign-in.
+2. Run `sudo ./constellation_matrix agent sign-in <agent>` for each selected local agent and complete its provider sign-in.
 3. Sign in to Element, open **Agents → Office**, and use the mention picker. Try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.”
 
-For a repeatable setup, edit the [example configuration](deploy/config.example.json), check it with `./constellation_matrix validate --config <file>`, and pass the same file to `./constellation_matrix install --config <file>`.
+For a repeatable setup, edit the [example configuration](deploy/config.example.json), check it with `./constellation_matrix validate --config <file>`, and pass the same file to `sudo ./constellation_matrix install --config <file>`.
 
-Use the administrator install for Root Operations, Dot's system tunnel service, or remote workers. Existing administrator deployments continue to use `sudo ./constellation_matrix` for provisioning and live service management. [Administrator setup](docs/runbook.md#administrator-install)
+The installer enables startup at boot. Docker restarts application containers, Tailscale Serve serves the static dashboard, and systemd runs the host services, including the Dot tunnel once connected. [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 
 ## Operate and extend
 
 | Task | Start here |
 | --- | --- |
 | Check the stack | Run `./constellation_matrix status` for the latest dashboard snapshot, or use **Agents → VPS Alerts → Pinned messages** to open the dashboard or Context Intelligence. |
-| Add an agent | Run `./constellation_matrix agent add --profile /path/to/agent.json`. See [agent profiles and remote workers](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
+| Add an agent | Run `sudo ./constellation_matrix agent add --profile /path/to/agent.json`. See [agent profiles and remote workers](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
 | Review how the team works | Send `review team` in the [Chief of Staff DM](docs/chief-of-staff.md) for proposals backed by Office evidence. |
 | Approve maintenance | Review the exact operation and vote in the private [Root Operations chat](integrations/root/README.md). |
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
-| Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with the installation account. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
+| Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
+| Uninstall | Run `sudo ./constellation_matrix uninstall` to remove workspace services and keep the data and backups. [Uninstall](docs/runbook.md#uninstall) |
 
 Built on [Microsoft Constellation](https://github.com/microsoft/amplifier-constellation) and [Amplifier](https://github.com/microsoft/amplifier).

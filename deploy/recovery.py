@@ -50,17 +50,13 @@ def backup(data, mode):
         installed = data / 'host/telegram-compose.yaml'
         if installed.exists():
             source = installed
-        env = {'TELEGRAM_DATA': str(data / 'telegram'), 'TELEGRAM_MATRIX_NETWORK': settings['project'] + '_clients',
-               'TELEGRAM_DATABASE_NETWORK': settings['project'] + '_database',
-               'TELEGRAM_MEMORY_NETWORK': settings['project'] + '_memory'}
-        telegram_command = ('docker', 'compose', '-p', settings['project'] + '-telegram',
+        telegram_command = ('docker', 'compose', '--env-file', str(data / '.env'), '-p', settings['project'] + '-telegram',
                             '-f', str(source), '--profile', 'agent')
-        options = {'env': {**os.environ, **env}}
         telegram = tuple(run(*telegram_command, 'ps', '--services', '--filter', 'status=running',
-                             capture_output=True, text=True, **options).stdout.splitlines())
+                             capture_output=True, text=True).stdout.splitlines())
     try:
         if telegram:
-            run(*telegram_command, 'stop', *telegram, **options)
+            run(*telegram_command, 'stop', *telegram)
         if running:
             run(*compose, 'stop', *running)
         attempt = run(*restic, 'backup', '--tag', 'constellation-pending', '--json',
@@ -75,7 +71,7 @@ def backup(data, mode):
                 run(*compose, 'start', *running)
         finally:
             if telegram:
-                run(*telegram_command, 'start', *telegram, **options)
+                run(*telegram_command, 'start', *telegram)
     run(*restic, 'forget', '--tag', 'constellation', '--keep-last', '7', '--prune')
     from datetime import datetime, timezone
     (data / 'last-successful-backup').write_text(datetime.now(timezone.utc).isoformat() + '\n')

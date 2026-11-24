@@ -58,7 +58,7 @@ def connect(settings, data, tunnel_id):
     root = safe_path(data)
     unit(name, f'''[Unit]
 Description=OpenAI Secure MCP Tunnel for Dot
-After=network-online.target docker.service
+After=network-online.target docker.service {settings['project']}-stack.service
 Wants=network-online.target
 [Service]
 Type=simple

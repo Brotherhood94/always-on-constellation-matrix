@@ -30,29 +30,6 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y restic
       - run: sudo env VERIFY_RESTIC=1 bash tests/install-smoke
 
-  rootless-install:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - name: Provision rootless Docker on the runner
-        run: |
-          sudo install -m 0755 -d /etc/apt/keyrings
-          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "$RUNNER_TEMP/docker.asc"
-          sudo install -m 0644 "$RUNNER_TEMP/docker.asc" /etc/apt/keyrings/docker.asc
-          printf '%s\n' 'Types: deb' 'URIs: https://download.docker.com/linux/ubuntu' \
-            'Suites: noble' 'Components: stable' 'Architectures: amd64' \
-            'Signed-By: /etc/apt/keyrings/docker.asc' | sudo tee /etc/apt/sources.list.d/constellation-docker.sources >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y uidmap slirp4netns docker-ce-rootless-extras
-          sudo loginctl enable-linger "$(id -un)"
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-          dockerd-rootless-setuptool.sh install --force
-          printf 'DOCKER_HOST=unix://%s/docker.sock\n' "$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
-      - name: Install and exercise the workspace as a regular user
-        run: CONSTELLATION_ROOTLESS_SMOKE=1 VERIFY_RESTIC=1 bash tests/install-smoke
-
   persona-workshop:
     runs-on: ubuntu-24.04
     timeout-minutes: 40

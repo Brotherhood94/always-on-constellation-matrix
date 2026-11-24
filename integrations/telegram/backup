@@ -5,10 +5,12 @@ source_dir=$1
 stack_dir=$2
 operation=$3
 state=$TELEGRAM_DATA
-restic_args=(--repo "$MATRIX_BACKUP_DIR" --password-file "$stack_dir/restic-password")
+password_file="$stack_dir/secrets/restic-password"
+[[ ! -f "$stack_dir/restic-password" || -f "$password_file" ]] || password_file="$stack_dir/restic-password"
+restic_args=(--repo "$MATRIX_BACKUP_DIR" --password-file "$password_file")
 stack=(docker compose --project-directory "$stack_dir")
-compose=(docker compose -f "$source_dir/compose.yaml" --profile agent)
-exec 8>"$MATRIX_DATA/.backup.lock"
+compose=(docker compose -p "${TELEGRAM_PROJECT:-matrix-telegram}" -f "$source_dir/compose.yaml" --profile agent)
+exec 8>"$MATRIX_DATA/.operator.lock"
 flock -n 8 || { echo 'Another Matrix backup is running.' >&2; exit 1; }
 stage=$(mktemp -d "$MATRIX_DATA/staging/telegram.XXXXXXXX")
 

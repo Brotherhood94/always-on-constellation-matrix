@@ -124,6 +124,8 @@ def execute(data, args):
         return
 
     if args.action == 'attach':
+        from host_services import enable_host_dependencies
+
         config = private_json(args.enrollment)
         mount = args.desktop_mount.resolve(strict=True)
         if not mount.is_dir() or not os.path.ismount(mount):
@@ -137,6 +139,7 @@ def execute(data, args):
             config['workshop_host'] = args.workshop_host
         for field in ('matrix_url', 'catalog', 'context'):
             validated_url(config[field])
+        enable_host_dependencies({'tailscale': True})
         directory(data, 0o711)
         with operator_lock(data):
             state = data / 'state' / key

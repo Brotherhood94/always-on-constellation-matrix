@@ -2,35 +2,40 @@
 
 ## Initial setup
 
-On Ubuntu 24.04, install Python 3 and Docker Engine with Compose V2. Set up rootless Docker for your account and select its context. Confirm that `docker info` lists `rootless` under Security Options. A new VPS may need an administrator to install `uidmap`, allocate subordinate UID and GID ranges, and enable lingering for the account if the daemon must start at boot and run after logout. [Docker rootless setup](https://docs.docker.com/engine/security/rootless/)
-
-For Tailscale Serve, enable HTTPS certificates and have the node administrator delegate Serve with `sudo tailscale set --operator=<your-linux-user>`. Use the node's tailnet DNS name for Matrix. Serve gives authorized devices private HTTPS access to the deployment. [Tailscale CLI](https://tailscale.com/docs/reference/tailscale-cli) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
-
-```sh
-./constellation_matrix install
-./constellation_matrix agent sign-in manager
-./constellation_matrix agent sign-in coder
-./constellation_matrix status
-```
-
-The wizard asks for the exact roster. An empty selection provisions the workspace so you can add agents later. Rootless installations store state in `${XDG_STATE_HOME:-$HOME/.local/state}/constellation-matrix`. The installer sets service file ownership inside the rootless Docker user namespace. Use `--data-dir` before the subcommand to scope a second installation. Pick a dedicated directory outside the checkout. In config-file mode, keep the owner password file outside the checkout with mode `0600`. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
-
-`./constellation_matrix status` reads the dashboard snapshots and displays their timestamps and freshness. Run `./constellation_matrix status --refresh` to publish current Docker inventory. In rootless mode, the dashboard metrics and scheduled backup timers from the administrator setup are unavailable. Run backups on demand. Services use Docker restart policies once the user daemon is running.
-
-The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 8444 for Neo4j Browser, and TLS TCP 17687 for Bolt. For a different private proxy, set `tailscale` to false and provide the dashboard and browser URLs in the install config. Proxy to the configured loopback ports, which default to 18008 for Matrix, 18082 for the rootless dashboard, 17474 for Neo4j Browser, and 17688 for Bolt.
-
-Sign in to Element with your Matrix operator account. The Agents Space links Office, VPS Alerts, and the private agent chats you selected. In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view. The monitor publishes its shortcuts once it sees the operator in VPS Alerts. Sign in to Neo4j Browser as `neo4j` using the deployment’s local `context/neo4j-password` file.
-
-## Administrator install
-
-Use this mode for Root Operations, the system service for Dot's OpenAI tunnel, and remote workers. Install Docker Engine with Compose V2, Python 3, curl, and Restic on the VPS. The default state directory is `/srv/constellation-matrix`.
+On Ubuntu 24.04, install standard Docker Engine with Compose V2, Python 3, curl, and Restic. For Tailscale Serve, join the VPS to your tailnet, enable HTTPS certificates, and use the node's tailnet DNS name for Matrix. Serve gives authorized devices private HTTPS access to the deployment. [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
 
 ```sh
 sudo ./constellation_matrix install
 sudo ./constellation_matrix agent sign-in manager
+sudo ./constellation_matrix agent sign-in coder
+./constellation_matrix status
 ```
 
-Use the same administrator account for agent changes, Telegram management, live status, and recovery commands in this guide. Read cached status as a regular user. Moving between modes requires a separate deployment directory, project, and ports.
+The wizard asks for the exact roster. An empty selection provisions the workspace so you can add agents later. State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, keep the owner password file outside the checkout with mode `0600`. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
+
+`./constellation_matrix status` reads dashboard snapshots as a regular user. Run `sudo ./constellation_matrix status --refresh` to publish current Docker inventory.
+
+The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 8444 for Neo4j Browser, and TLS TCP 17687 for Bolt. For a different private proxy, set `tailscale` to false and provide the dashboard and browser URLs in the install config. Serve the deployment’s `dashboard/` directory and proxy to the configured loopback ports, which default to 18008 for Matrix, 17474 for Neo4j Browser, and 17688 for Bolt.
+
+Sign in to Element with your Matrix operator account. The Agents Space links Office, VPS Alerts, and the private agent chats you selected. In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view. The monitor publishes its shortcuts once it sees the operator in VPS Alerts. Sign in to Neo4j Browser as `neo4j` using the deployment’s local `context/neo4j-password` file.
+
+## Boot and service placement
+
+| Where | Services and startup |
+| --- | --- |
+| Docker Compose | Synapse, PostgreSQL, Neo4j, Context Intelligence, the private proxy, Persona Workshop, agent Instances and connectors, the VPS Alerts bot, and optional Dot bridge, Telegram and desktop SFTP containers. Docker uses restart policies, and the workspace’s systemd unit starts the primary Compose project at boot. |
+| Tailscale | The optional host daemon serves the static dashboard directory and proxies private endpoints. The installer enables the daemon when Tailscale is selected. |
+| systemd | The resource collector reads host cgroups. The backup timer coordinates consistent Docker and filesystem snapshots. The Root broker uses a host socket for approved host commands. The optional Dot tunnel uses a host service with systemd credentials for its private socket connection. |
+
+The installer enables Docker, containerd, the stack unit, the collector, and the backup timer. Root’s socket is enabled when Root is activated. Dot’s tunnel service is enabled by `dot-connect`. Enable Telegram’s optional scheduled jobs separately with `sudo ./constellation_matrix telegram enable-operations`.
+
+```sh
+systemctl is-enabled docker.service containerd.service
+systemctl is-enabled constellation-matrix-stack.service constellation-matrix-monitor.service constellation-matrix-backup.timer
+sudo ./constellation_matrix status --refresh
+```
+
+Use your configured project name in the unit names. After a staging reboot, confirm the signed-in agents and integrations return to service, then run a small Office task. [Docker boot setup](https://docs.docker.com/engine/install/linux-postinstall/#configure-docker-to-start-on-boot-with-systemd) · [Deployment scenarios](acceptance.md#post-deployment-scenarios)
 
 ## Add a worker
 
@@ -53,8 +58,8 @@ Save a profile like the one below. Use capability names and resource scopes that
 ```
 
 ```sh
-./constellation_matrix agent add --profile /path/to/qa.json
-./constellation_matrix agent sign-in qa
+sudo ./constellation_matrix agent add --profile /path/to/qa.json
+sudo ./constellation_matrix agent sign-in qa
 ```
 
 The registry has one active coordinator and observer when those roles are enabled. Pending workers become available for routing after provider sign-in, an ACP session restore probe, and connector startup.
@@ -89,10 +94,20 @@ Then run `sudo ./constellation_matrix remote confirm remote-worker --receipt /pa
 ## Back up and recover
 
 ```sh
-./constellation_matrix backup
-./constellation_matrix restore-check
+sudo ./constellation_matrix backup
+sudo ./constellation_matrix restore-check
 ```
 
 The checkpoint briefly stops the deployment’s running services to capture consistent PostgreSQL, Neo4j, Matrix, agent, and desktop state. The encrypted Restic repository keeps seven successful checkpoints. Keep the Restic password outside the VPS’s failure domain. The restore check verifies an unpacked copy in an isolated directory.
 
 For a fresh live cutover, first test a separate installation with a different project name, data directory, and local ports. Leave `tailscale` and `systemd` off for the isolated fixture. Before stopping the current deployment, inventory its services, data, mounts, and Serve routes and prove that you can restore an encrypted backup. Switch only the routes owned by this deployment. Verify the fresh setup before removing the superseded state.
+
+## Uninstall
+
+```sh
+sudo ./constellation_matrix uninstall
+```
+
+Pass the original `--data-dir` before `uninstall` for a separate workspace. This stops and removes the selected Compose projects, disables their installed systemd units, and removes matching Tailscale Serve routes. It keeps the deployment directory, Matrix state, agent workspaces, and encrypted backups for recovery. A reinstall using the same configuration can reuse that state. Reconnect optional integrations through their respective setup commands.
+
+For a remote worker, run the same uninstall command on the worker with its own data directory. Then unmount its SSHFS desktop and remove its mount entry if you created one. Remove the worker's desktop key and revoke its access when retiring it permanently.

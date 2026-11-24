@@ -4,7 +4,7 @@ Record the source revision, component pins, and result for each target independe
 
 | Feature | Automated check | Deployment acceptance |
 | --- | --- | --- |
-| Installation and registry | [Installer tests](../tests/test_installer.py) and [rootless install smoke](../tests/rootless-install) cover roster selection, reruns, agent registration retries, and pending sign-in in the catalog. | Sign in to the actual subscription, then route a task to the new agent. |
+| Installation and registry | [Installer tests](../tests/test_installer.py) and [standard Docker install smoke](../tests/install-smoke) cover roster selection, reruns, agent registration retries, and pending sign-in in the catalog. | Sign in to the actual subscription, then route a task to the new agent. |
 | Element spaces and DMs | [Synapse smoke](../tests/synapse-smoke) checks layout, membership, encryption, and pin permissions. | Open Agents in Element and inspect its encrypted rooms and private chats. |
 | Office assignments and reactions | [Routing](../agents/tests/pilot.mjs), [managed tasks](../agents/tests/manager.mjs), and [durable delivery](../agents/tests/instance-acp.mjs) test mentions, provenance, thread routing, and reaction state. | Observe 👀 and one terminal reaction on a real request. |
 | Reply limit and delegated failures | [Capability routing](../agents/tests/capability-routing.mjs) exercises replies 15 and 16, scope, and failure return to Manager. | Confirm Manager closes a real handoff and reports a controlled blocker. |
@@ -15,9 +15,10 @@ Record the source revision, component pins, and result for each target independe
 | Root Operations | [Protocol and broker fixture](../integrations/root/tests/run) tests an encrypted decision and scoped execution. | Reject and accept separate read-only proposals in the operator DM. |
 | Telegram | [Policy tests](../integrations/telegram/policy.test.mjs), [bridge smoke](../integrations/telegram/tests/bridge-smoke), and [offline engine smoke](../integrations/telegram/tests/engine-smoke) test binding, drafts, approvals, delivery recovery, and session restore. | Use a designated Telegram test chat to check update scope and one approved delivery. |
 | Dot | [Matrix operations smoke](../tests/operations-fixture.mjs) checks publication retry and thread isolation. [Telegram tool tests](../integrations/telegram/policy.test.mjs) cover draft and update requests. | Repeat the publication and read checks through the actual OpenAI tunnel. |
+| Boot and uninstall | [Lifecycle tests](../tests/test_lifecycle.py) check service enablement and scoped Serve cleanup. [Install smoke](../tests/install-smoke) removes its own Compose project and verifies retained state. | Reboot the staging host and confirm the enabled services and agents return. |
 | Recovery | [Recovery tests](../tests/test_recovery.py) and [install smoke](../tests/install-smoke) check failure recovery and encrypted Restic restore. | Verify a checkpoint and controlled restart in staging before cutover. |
 
-Use separate projects, ports, and data for VPS staging. Live acceptance requires operator authentication for Element, the provider subscriptions, and enabled integrations. Administrator deployments also require sudo. Record the results under the target where they actually ran.
+Use separate projects, ports, and data for VPS staging. Live acceptance requires operator authentication for Element, the provider subscriptions, and enabled integrations. Deployment management commands use sudo. Record the results under the target where they actually ran.
 
 ## Post-deployment scenarios
 
@@ -25,7 +26,7 @@ Start with Manager, Coder, and Reviewer signed in. Use the Element mention picke
 
 ### 1. Open the workspace
 
-Run `./constellation_matrix status --refresh` with the installation account. Open **Agents → VPS Alerts → Pinned messages**. Open **Open dashboard** and **Open Context Intelligence**, then follow the Context Intelligence link from the dashboard.
+Run `sudo ./constellation_matrix status --refresh`. Open **Agents → VPS Alerts → Pinned messages**. Open **Open dashboard** and **Open Context Intelligence**, then follow the Context Intelligence link from the dashboard.
 
 **Pass** when the signed-in agents show as available, there is one managed pin for each link, and both graph links open the same authenticated Neo4j Browser. Check that the Office and VPS Alerts rooms use encryption and that each enabled private agent chat has only the operator and that agent.
 
@@ -84,13 +85,13 @@ Use the [Dot setup](dot.md), [Telegram Control guide](telegram.md#operate-in-ele
 
 ### 8. Verify recovery in staging
 
-With no active task in your isolated deployment, run the checkpoint and restore check. Restart the staging connector for a signed-in worker and repeat a small Office request with a fresh run ID. [Recovery commands](runbook.md#back-up-and-recover)
+With no active task in your isolated deployment, run the checkpoint and restore check. Reboot the isolated staging host. Verify the enabled units and Compose services, then repeat a small Office request with a fresh run ID. [Recovery commands](runbook.md#back-up-and-recover)
 
 **Pass** when the encrypted checkpoint restores in isolation, the staging agent resumes with the same identity, the shared file is still readable, and each new request gets a single result.
 
 ## Refactor verification record
 
 - Local isolated checks covered coordinator install and rerun, the graph browser proxy, encrypted Matrix pins and Dot task isolation, Constellation startup and ACP session restore, Root approvals, Telegram drafts and updates, and Context Intelligence timelines. The Restic checkpoint and restore ran on a native Linux fixture.
-- A regular account on an isolated Linux rootless Docker daemon passed clean installation with Manager selected, rerun with the same Matrix room IDs, agent registration and retry with one stable Workshop target, dashboard and graph proxy access, live inventory, and encrypted checkpoint and restore. Provider sign-in remains an operator acceptance check.
+- An isolated Linux fixture passed clean installation with Manager selected, rerun with the same Matrix room IDs, agent registration and retry with one stable Workshop target, dashboard and graph proxy access, live inventory, and encrypted checkpoint and restore. Provider sign-in remains an operator acceptance check.
 - The VPS staging checkout passed configuration validation and Python tests. The privileged VPS installation, operator sign-ins, private endpoint checks from Element, and live cutover are pending.
-- Hosted CI on `bb1d1db` passed the unit, dashboard, Compose, SFTP, Synapse, Root and Persona Workshop checks. That run stopped the Context Intelligence smoke at Docker tag validation and the nested rootless smoke at user namespace creation. The workflow now normalizes fixture names and provisions native rootless Docker for the hosted job. [Hosted verification run](https://github.com/Brotherhood94/always-on-constellation-matrix/actions/runs/45452175583)
+- Hosted CI on `bb1d1db` passed the unit, dashboard, Compose, SFTP, Synapse, Root and Persona Workshop checks. [Hosted verification run](https://github.com/Brotherhood94/always-on-constellation-matrix/actions/runs/45452175583)

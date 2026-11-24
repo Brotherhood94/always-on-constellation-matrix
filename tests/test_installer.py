@@ -6,11 +6,11 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
-from installer import configure_network, load, main, normalized, prepare_storage, register_entry, PRESETS, save
+from installer import load, main, normalized, prepare_storage, register_entry, PRESETS, save
 from compose import definition
 from remote import compose_remote
 
@@ -54,6 +54,7 @@ class InstallerTest(unittest.TestCase):
         self.assertNotIn('memory', services['persona-workshop']['networks'])
         self.assertNotIn('ports', services['persona-workshop'])
         self.assertTrue(self.settings['context_url'].startswith('https://fixture.test:8444/browser/?connectURL='))
+        self.assertTrue(all(service['restart'] == 'unless-stopped' for service in services.values()))
         for service in ('synapse', 'private-edge'):
             self.assertTrue(all(p.startswith('127.0.0.1:') for p in services[service]['ports']))
 
@@ -65,6 +66,7 @@ class InstallerTest(unittest.TestCase):
         services = compose_remote(data, config, Path('/mnt/desktop'))['services']
         self.assertIn('/mnt/desktop', [v['source'] for v in services['engine']['volumes']])
         self.assertNotIn('ports', services['engine'])
+        self.assertTrue(all(service['restart'] == 'unless-stopped' for service in services.values()))
         self.assertEqual(services['coder']['environment']['CONTEXT_INTELLIGENCE_URL'], config['context'])
         managed = compose_remote(data, {**config, 'workshop_host': 'worker.fixture.ts.net'}, Path('/mnt/desktop'))
         self.assertEqual(managed['services']['engine']['ports'], ['127.0.0.1:19444:19443'])
@@ -101,49 +103,25 @@ class InstallerTest(unittest.TestCase):
             self.assertIn('Integrations (updated', output.getvalue())
             self.assertIn('Matrix  running', output.getvalue())
 
-    def test_rootless_commands_use_account_state_and_preserve_sign_in(self):
+    def test_standard_docker_management_requires_sudo(self):
+        command = ['constellation_matrix', 'status', '--refresh']
+        error = StringIO()
+        with patch('sys.argv', command), patch('installer.os.geteuid', return_value=1000), \
+             patch('installer.compose') as compose, redirect_stderr(error):
+            with self.assertRaises(SystemExit):
+                main()
+        self.assertIn('with sudo', error.getvalue())
+        compose.assert_not_called()
+
+    def test_old_rootless_data_is_not_opened_by_standard_docker(self):
         with TemporaryDirectory() as work:
-            data = Path(work).resolve() / 'constellation-matrix'
-            data.mkdir()
-            save(data / 'settings.json', {'rootless': True})
-            with patch.dict('os.environ', {'XDG_STATE_HOME': work}), \
-                 patch('installer.os.geteuid', return_value=1000), patch('installer.launch') as launch:
-                for command in (['status', '--refresh'], ['agent', 'sign-in', 'manager']):
-                    with patch('sys.argv', ['constellation_matrix', *command]):
-                        main()
-            self.assertEqual(launch.call_args_list, [
-                call(ROOT, data, ['status', '--refresh'], [], tailnet=''),
-                call(ROOT, data, ['agent', 'sign-in', 'manager'], [], tailnet=''),
-            ])
-            error = StringIO()
-            save(data / 'settings.json', {})
-            with patch('sys.argv', ['constellation_matrix', '--data-dir', str(data), 'status', '--refresh']), \
-                 patch('installer.os.geteuid', return_value=1000), patch('installer.launch') as launch, \
-                 redirect_stderr(error):
+            save(Path(work) / 'settings.json', {'rootless': True})
+            command = ['constellation_matrix', '--data-dir', work, 'install']
+            with patch('sys.argv', command), patch('installer.os.geteuid', return_value=0), \
+                 patch('installer.install') as install, redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit):
                     main()
-            launch.assert_not_called()
-            self.assertIn('sudo for administrator state', error.getvalue())
-
-    def test_rootless_settings_and_tailnet_dashboard_route(self):
-        for changes in ({'agents': ['root']}, {'agents': ['remote-worker']}, {'dot': True}, {'systemd': True}):
-            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, 'administrator install'):
-                normalized({**self.raw, 'dot': False, 'subscriptions': {'default': 'Work'}, **changes},
-                           self.presets, rootless=True)
-        settings = normalized({**self.raw, 'agents': ['coder'], 'dot': False}, self.presets, rootless=True)
-        self.assertTrue(settings['rootless'])
-        self.assertFalse(settings['systemd'])
-        with self.assertRaisesRegex(ValueError, 'administrator install'):
-            register_entry(settings, {'agents': {}}, 'custom', {**self.presets['coder'], 'placement': 'remote'})
-        doc = definition(settings, Path('/srv/fixture'), {'agents': {}}, {'POSTGRES_PASSWORD': 'fixture'})
-        dashboard = doc['services']['dashboard']
-        self.assertEqual(dashboard['ports'], ['127.0.0.1:18082:8080'])
-        self.assertTrue(dashboard['volumes'][0]['read_only'])
-        info = json.dumps({'Self': {'DNSName': 'fixture.test.'}, 'CertDomains': ['fixture.test']})
-        with patch('installer.command_output', side_effect=[info, '{}']), \
-             patch('installer.load', return_value={'agents': {}}), patch('installer.run') as run:
-            configure_network(settings, Path('/srv/fixture'))
-        self.assertIn(call('tailscale', 'serve', '--bg', '--https=8443', 'http://127.0.0.1:18082'), run.call_args_list)
+            install.assert_not_called()
 
     def test_dashboard_assets_are_readable_by_an_unprivileged_server(self):
         with TemporaryDirectory() as work, patch('installer.os.chown'):
