@@ -3,22 +3,27 @@ set -Eeuo pipefail
 src=$(cd -- "$(dirname -- "$0")/.." && pwd)
 work=$(mktemp -d /tmp/constellation-sftp.XXXXXXXX)
 fixture="constellation-sftp-$$"
+desktop="$fixture-desktop"
 cleanup() {
   docker rm -f "$fixture" >/dev/null 2>&1 || true
+  docker volume rm "$desktop" >/dev/null 2>&1 || true
   rm -rf -- "$work"
 }
 trap cleanup EXIT
-mkdir "$work/config" "$work/desktop"
-chmod 0755 "$work/config" "$work/desktop"
+mkdir -m 0755 "$work/config"
 ssh-keygen -q -t ed25519 -N '' -f "$work/client"
 ssh-keygen -q -t ed25519 -N '' -f "$work/config/host-key"
 cp "$src/deploy/sftp/sshd_config" "$work/config/"
 printf 'restrict %s\n' "$(cat "$work/client.pub")" > "$work/config/authorized-keys"
 chmod 0644 "$work/config/authorized-keys"
 docker build --quiet -t constellation-desktop-sftp:fixture "$src/deploy/sftp" >/dev/null
-docker run --rm --entrypoint chown -v "$work/desktop:/desktop" constellation-desktop-sftp:fixture 991:991 /desktop
-docker run -d --name "$fixture" -p 127.0.0.1::2222 \
-  -v "$work/config:/config:ro" -v "$work/desktop:/chroot/desktop" constellation-desktop-sftp:fixture >/dev/null
+docker create --name "$fixture" -p 127.0.0.1::2222 \
+  -v "$desktop:/chroot/desktop" constellation-desktop-sftp:fixture >/dev/null
+# Match the administrator deployment's config ownership for OpenSSH StrictModes.
+docker cp "$work/config" "$fixture:/config"
+docker start "$fixture" >/dev/null
+docker exec "$fixture" chown -R 0:0 /config
+docker exec "$fixture" chown 991:991 /chroot/desktop
 port=$(docker port "$fixture" 2222/tcp)
 port=${port##*:}
 printf '[127.0.0.1]:%s %s\n' "$port" "$(cut -d ' ' -f1-2 "$work/config/host-key.pub")" > "$work/known-hosts"
@@ -30,7 +35,8 @@ if ! sftp -b "$work/batch" -P "$port" "${options[@]}" desktop-share@127.0.0.1; t
   exit 1
 fi
 cmp "$work/input" "$work/output"
-cmp "$work/input" "$work/desktop/remote.txt"
+docker run --rm --user 991:991 --entrypoint cat -v "$desktop:/desktop:ro" \
+  constellation-desktop-sftp:fixture /desktop/remote.txt | cmp "$work/input" -
 if ssh -n -q -p "$port" "${options[@]}" desktop-share@127.0.0.1 'echo unexpected shell' >/dev/null; then
   echo 'The desktop account unexpectedly accepted a shell command.' >&2
   exit 1
