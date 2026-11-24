@@ -117,12 +117,12 @@ On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup wi
 
 ```sh
 sudo ./constellation_matrix install
-sudo ./constellation_matrix agent sign-in manager
+sudo ./constellation_matrix agent sign-in
 ./constellation_matrix status
 ```
 
-1. Browse the agent checklist with the arrow keys to read each profile. Press Space to select and Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above. Set a default Amplifier subscription label and override it for individual agents as needed.
-2. Run `sudo ./constellation_matrix agent sign-in <agent>` for each selected local agent and complete its provider sign-in.
+1. Choose **ChatGPT via Codex subscription** in the Amplifier connection menu. Browse the agent checklist with the arrow keys, press Space to select, and press Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above.
+2. Run `sudo ./constellation_matrix agent sign-in` to connect the pending local agents in order. Complete the browser sign-in presented for each agent using the ChatGPT account you want it to use.
 3. Sign in to Element, open **Agents → Office**, and use the mention picker. Try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.”
 
 For a repeatable setup, edit the [example configuration](deploy/config.example.json), check it with `./constellation_matrix validate --config <file>`, and pass the same file to `sudo ./constellation_matrix install --config <file>`.

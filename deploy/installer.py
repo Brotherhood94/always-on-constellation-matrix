@@ -18,7 +18,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from agent_picker import placement as agent_placement, select_agents
+from agent_picker import choose_option, placement as agent_placement, select_agents
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
@@ -37,6 +37,8 @@ RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
             'telegram-agent', 'telegrambot'}
+DEFAULT_CONNECTION = 'chatgpt-codex'
+CONNECTIONS = {DEFAULT_CONNECTION: 'ChatGPT via Codex subscription'}
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
          'context_port': 18081, 'context_https_port': 8445}
@@ -107,7 +109,9 @@ def normalized(raw, presets):
     if raw.get('rootless'):
         raise ValueError('Use standard Docker Engine for this deployment')
     settings = {**PORTS, 'project': 'constellation-matrix', 'tailscale': True, 'systemd': True,
-                'dot': False, 'telegram': False, **raw}
+                'connection': DEFAULT_CONNECTION, 'dot': False, 'telegram': False, **raw}
+    if not isinstance(settings['connection'], str) or settings['connection'] not in CONNECTIONS:
+        raise ValueError('Choose a supported Amplifier connection: ' + ', '.join(CONNECTIONS))
     if not SERVER.fullmatch(settings.get('server_name', '')) or not PROJECT.fullmatch(settings['project']):
         raise ValueError('Use a DNS name and a lowercase Compose project name')
     if not OWNER.fullmatch(settings.get('owner', '')) or settings['owner'] in (RESERVED | presets.keys()):
@@ -123,15 +127,16 @@ def normalized(raw, presets):
             raise ValueError(f'{key} must be a TCP port from 1024 to 65535')
     if len({settings[key] for key in PORTS}) != len(PORTS):
         raise ValueError('Deployment ports must be distinct')
-    subscriptions = settings.get('subscriptions')
-    if (not isinstance(subscriptions, dict) or not isinstance(subscriptions.get('default'), str)
-            or not subscriptions['default'].strip()):
-        raise ValueError('Choose a default subscription label')
-    overrides = subscriptions.get('overrides', {})
-    if not isinstance(overrides, dict) or any(
-        key not in chosen or not isinstance(value, str) or not value.strip() for key, value in overrides.items()
-    ):
-        raise ValueError('Subscription overrides must identify selected agents and nonempty labels')
+    if 'subscriptions' in settings:
+        subscriptions = settings['subscriptions']
+        if (not isinstance(subscriptions, dict) or not isinstance(subscriptions.get('default'), str)
+                or not subscriptions['default'].strip()):
+            raise ValueError('Legacy subscription labels require a nonempty default')
+        overrides = subscriptions.get('overrides', {})
+        if not isinstance(overrides, dict) or any(
+            key not in chosen or not isinstance(value, str) or not value.strip() for key, value in overrides.items()
+        ):
+            raise ValueError('Subscription overrides must identify selected agents and nonempty labels')
     server = settings['server_name']
     settings['dashboard_url'] = validated_url(raw.get('dashboard_url', f"https://{server}:{settings['dashboard_https_port']}/"))
     bolt = f"bolt+s://{server}:{settings['bolt_https_port']}"
@@ -274,8 +279,11 @@ def register_entry(settings, registry, key, definition):
     validated = profile(definition['profile'])
     if validated['role'] == 'observer' and key != 'chief-of-staff':
         raise ValueError('The observer role belongs to Chief of Staff')
-    subscription = definition.get('subscription', settings['subscriptions'].get('overrides', {}).get(
-        key, settings['subscriptions']['default']))
+    previous = registry['agents'].get(key)
+    labels = settings.get('subscriptions', {})
+    default_label = previous['subscription'] if previous else CONNECTIONS[settings.get('connection', DEFAULT_CONNECTION)]
+    label = labels.get('overrides', {}).get(key, labels.get('default', default_label))
+    subscription = definition.get('subscription', label)
     if not isinstance(subscription, str) or not subscription.strip() or not subscription.isprintable():
         raise ValueError('Use a printable subscription label')
     server = definition.get('server', settings['server_name'] if placement == 'local' else 'remote')
@@ -287,7 +295,6 @@ def register_entry(settings, registry, key, definition):
         raise ValueError('Agent display names must be unique and only one coordinator can be installed')
     desired = {'name': name, 'server': server, 'placement': placement, 'model': model,
                'effort': effort, 'profile': validated, 'subscription': subscription, 'active': False}
-    previous = registry['agents'].get(key)
     if previous and {**previous, 'active': False} != desired:
         raise ValueError(f'Agent {key} is already provisioned with different settings')
     registry['agents'][key] = previous or desired
@@ -456,34 +463,68 @@ def operator_lock(data):
         yield
 
 
-def interactive(presets):
-    chosen = select_agents(presets)
-    subscription = input('Default Amplifier subscription label: ').strip()
-    overrides = {}
-    for key in chosen:
-        value = input(f'{key} subscription override (blank uses {subscription}): ').strip()
-        if value:
-            overrides[key] = value
-    default = ''
-    tailnet = input('Configure private HTTPS using Tailscale Serve? [Y/n] ').lower() != 'n'
-    if tailnet:
-        output = json.loads(command_output('tailscale', 'status', '--json'))
-        default = ((output.get('Self') or {}).get('DNSName') or '').rstrip('.')
-    server = input(f'Matrix server DNS name [{default}]: ').strip() or default
-    return {'server_name': server, 'owner': input('Matrix operator username: ').strip(), 'agents': chosen,
-            'subscriptions': {'default': subscription, 'overrides': overrides}, 'tailscale': tailnet,
-            'dot': input('Enable Dot? [y/N] ').lower() == 'y',
-            'telegram': input('Enable Telegram? [y/N] ').lower() == 'y'}
+def tailscale_dns():
+    try:
+        result = run('tailscale', 'status', '--json', capture_output=True, text=True)
+        status = json.loads(result.stdout) or {}
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return None
+    name = ((status.get('Self') or {}).get('DNSName') or '').rstrip('.')
+    if status.get('BackendState') == 'Running' and name in (status.get('CertDomains') or []):
+        return name
+    return None
+
+
+def interactive(presets, saved):
+    connection = choose_option('Choose an Amplifier connection', CONNECTIONS)
+    chosen = select_agents(presets, saved.get('agents', ()))
+
+    dns = tailscale_dns()
+    network = {'proxy': 'Use an existing private HTTPS proxy'}
+    if dns:
+        network = {'tailscale': f'Use Tailscale Serve ({dns})', **network}
+    preferred = 'tailscale' if dns and saved.get('tailscale', True) else 'proxy'
+    tailnet = choose_option('Choose private access for Matrix and the dashboard', network, preferred) == 'tailscale'
+    server = dns if tailnet else saved.get('server_name')
+    if not server:
+        server = input('Private Matrix DNS name: ').strip()
+
+    owner = saved.get('owner', 'operator')
+    account = choose_option('Choose the Matrix operator account', {
+        'suggested': f'Use {owner}',
+        'custom': 'Enter a custom username',
+    })
+    if account == 'custom':
+        owner = input('Matrix operator username: ').strip()
+
+    integrations = {
+        (False, False): 'Workspace only',
+        (True, False): 'Enable Dot',
+        (False, True): 'Enable Telegram',
+        (True, True): 'Enable Dot and Telegram',
+    }
+    dot, telegram = choose_option('Choose optional integrations', integrations,
+                                  (saved.get('dot', False), saved.get('telegram', False)))
+    raw = {**saved, 'connection': connection, 'server_name': server, 'owner': owner,
+           'agents': chosen, 'tailscale': tailnet, 'dot': dot, 'telegram': telegram}
+    if 'subscriptions' in raw:
+        labels = raw['subscriptions']
+        overrides = {key: value for key, value in labels.get('overrides', {}).items() if key in chosen}
+        raw['subscriptions'] = {**labels, 'overrides': overrides}
+    return raw
 
 
 def install(data, args):
     presets = load(PRESETS)
-    raw = load(args.config) if args.config else interactive(presets)
+    previous = data / 'settings.json'
+    if args.config:
+        raw = load(args.config)
+    else:
+        raw = interactive(presets, load(previous) if previous.exists() else {})
     settings = normalized(raw, presets)
     passphrase = password(settings)
     directory(data, 0o711)
     with operator_lock(data):
-        previous = data / 'settings.json'
         current = load(previous) if previous.exists() else None
         if current:
             for key in ('server_name', 'owner', 'project', 'matrix_port'):
@@ -530,9 +571,11 @@ def install(data, args):
             enable_services(settings)
     print('Workspace created. Sign in to Element at https://' + settings['server_name'] + '.')
     print('Dashboard: ' + settings['dashboard_url'])
+    if pending_local_agents(registry):
+        print('Connect local agents with sudo ./constellation_matrix agent sign-in')
     for key, entry in registry['agents'].items():
-        if not entry['active']:
-            print(f"Agent {key} awaits {'remote setup' if entry['placement'] == 'remote' else 'provider sign-in for ' + entry['subscription']}.")
+        if entry['placement'] == 'remote' and not entry['active']:
+            print(f'Agent {key} awaits remote setup.')
 
 
 def agent_add(data, args):
@@ -553,15 +596,37 @@ def agent_add(data, args):
     print('Provisioned ' + key + '. Complete its provider sign-in to activate routing.')
 
 
-def agent_activate(data, key):
+def pending_local_agents(registry):
+    return [key for key, entry in registry['agents'].items()
+            if entry['placement'] == 'local' and not entry['active']]
+
+
+def agent_sign_in(data, key=None):
+    if key is not None:
+        agent_activate(data, key)
+        return
+    pending = pending_local_agents(load(data / 'agents.json'))
+    if not pending:
+        print('All local agents are already connected.')
+    for number, key in enumerate(pending, start=1):
+        print(f'Connecting local agent {number} of {len(pending)}', flush=True)
+        agent_activate(data, key, pending_only=True)
+
+
+def agent_activate(data, key, *, pending_only=False):
     with operator_lock(data):
         settings, registry = open_existing(data)
         entry = registry['agents'][key]
+        if pending_only and entry['active']:
+            return
         if entry['placement'] != 'local':
             raise ValueError('Complete provider sign-in on the authorized worker host')
         engine = 'engine-' + key
         up(data, engine)
-        print(f"Sign in to the Amplifier subscription labeled {entry['subscription']}.")
+        connection = CONNECTIONS[settings.get('connection', DEFAULT_CONNECTION)]
+        print(f"Connect {entry['name']} to {connection}.", flush=True)
+        if entry['subscription'] != connection:
+            print(f"Account reminder: {entry['subscription']}", flush=True)
         compose(data, '--profile', 'agents', 'exec', engine,
                 '/opt/amplifier-acp/.venv/bin/python', '/opt/telegram/sign_in.py')
         if key == 'root':
@@ -660,7 +725,8 @@ def main():
     add = agent.add_parser('add')
     add.add_argument('--profile', type=Path, required=True)
     add.add_argument('--owner-password-file', type=Path)
-    agent.add_parser('sign-in').add_argument('key')
+    agent.add_parser('sign-in', help='Connect one agent or all pending local agents').add_argument(
+        'key', nargs='?', help='Agent ID. Omit to connect all pending local agents in order.')
     remote = commands.add_parser('remote').add_subparsers(dest='action', required=True)
     remote.add_parser('desktop').add_argument('--public-key', type=Path, required=True)
     export = remote.add_parser('export')
@@ -716,7 +782,7 @@ def main():
         if args.action == 'add':
             agent_add(data, args)
         else:
-            agent_activate(data, args.key)
+            agent_sign_in(data, args.key)
     elif args.command == 'remote':
         from remote import execute
         execute(data, args)

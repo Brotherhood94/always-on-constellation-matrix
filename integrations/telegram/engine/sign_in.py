@@ -20,10 +20,10 @@ async def sign_in():
         raise SystemExit('Codex sign-in timed out. Run sign-in again to get a new code.') from None
     finally:
         await provider.close()
-    print('The Telegram Amplifier agent is signed in with Codex. Run telegram probe next.')
+    print('Codex device sign-in complete.')
 
 
 if __name__ == '__main__':
     if not sys.stdin.isatty():
-        raise SystemExit('Run telegram sign-in from an interactive terminal.')
+        raise SystemExit('Run Codex device sign-in from an interactive terminal.')
     asyncio.run(sign_in())

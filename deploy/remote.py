@@ -8,7 +8,8 @@ import stat
 
 from compose import CONNECTOR, ENGINE, health, volume
 from installer import (
-    KEY, RUNTIME_UID, SOURCE, command_output, configure_network, directory, load, open_existing, operator_lock, run,
+    CONNECTIONS, DEFAULT_CONNECTION, KEY, RUNTIME_UID, SOURCE,
+    command_output, configure_network, directory, load, open_existing, operator_lock, run,
     prepare_images, compose, up, publish_inventory, save, validated_url,
 )
 
@@ -151,7 +152,10 @@ def execute(data, args):
             save(data / 'compose.yaml', compose_remote(data, config, mount))
             prepare_images({'dot': False}, {'agents': {key: {'placement': 'local'}}})
             up(data, 'engine')
-            print('Choose the Amplifier subscription labeled ' + config['entry']['subscription'] + '.')
+            connection = CONNECTIONS[DEFAULT_CONNECTION]
+            print(f"Connect {config['entry']['name']} to {connection}.", flush=True)
+            if config['entry']['subscription'] != connection:
+                print(f"Account reminder: {config['entry']['subscription']}", flush=True)
             compose(data, 'exec', 'engine', '/opt/amplifier-acp/.venv/bin/python', '/opt/telegram/sign_in.py')
             compose(data, 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/probe.mjs')
             up(data, key)

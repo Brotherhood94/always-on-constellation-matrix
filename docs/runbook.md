@@ -6,12 +6,15 @@ On Ubuntu 24.04, install standard Docker Engine with Compose V2, Python 3, curl,
 
 ```sh
 sudo ./constellation_matrix install
-sudo ./constellation_matrix agent sign-in manager
-sudo ./constellation_matrix agent sign-in coder
+sudo ./constellation_matrix agent sign-in
 ./constellation_matrix status
 ```
 
-Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, model, capabilities, and limits. Press Space to toggle an agent and Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later. Terminals without checklist support accept comma-separated agent IDs.
+Choose **ChatGPT via Codex subscription**, the Amplifier connection supported by this release. Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, model, capabilities, and limits. Press Space to toggle an agent and Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later.
+
+Choose the suggested Matrix operator account and Tailscale DNS name if available. The wizard asks you to type a username or DNS name when you choose a custom one. Enter the Matrix operator password when prompted. Terminals without checklist support offer numbered menus and accept comma-separated agent IDs.
+
+After installation, `agent sign-in` guides you through device sign-in for each pending local agent. Each agent saves its own credentials. Rerun the command to resume where you left off, or pass an agent ID to connect a single agent. Remote workers sign in during enrollment on their own host. [Amplifier ChatGPT provider](https://github.com/microsoft/amplifier-module-provider-openai-chatgpt)
 
 State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, keep the owner password file outside the checkout with mode `0600`. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
 

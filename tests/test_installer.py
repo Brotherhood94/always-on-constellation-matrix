@@ -4,6 +4,7 @@ import curses
 from io import StringIO
 import json
 from pathlib import Path
+from subprocess import CalledProcessError, CompletedProcess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
@@ -11,8 +12,11 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
-from agent_picker import checklist, select_agents
-from installer import interactive, load, main, normalized, prepare_storage, register_entry, PRESETS, save
+from agent_picker import checklist, choose_option, menu, select_agents
+from installer import (
+    CONNECTIONS, DEFAULT_CONNECTION, PRESETS, agent_sign_in, interactive, load, main,
+    normalized, prepare_storage, register_entry, save, tailscale_dns,
+)
 from compose import definition
 from remote import compose_remote
 
@@ -60,17 +64,97 @@ class InstallerTest(unittest.TestCase):
         picker.assert_not_called()
         self.assertIn('Analyze requirements, evidence and options', output.getvalue())
 
-    def test_interactive_installer_only_asks_overrides_for_selected_agents(self):
-        answers = ['Work', 'Personal', '', 'n', 'fixture.test', 'operator', 'n', 'n']
-        with patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
-             patch('builtins.input', side_effect=answers) as answer:
-            settings = normalized(interactive(self.presets), self.presets)
-        picker.assert_called_once_with(self.presets)
+    def test_single_choice_menu_can_move_and_confirm(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        screen.getch.side_effect = [curses.KEY_DOWN, curses.KEY_UP, curses.KEY_DOWN, ord('\n')]
+        options = {'skip': 'Workspace only', 'dot': 'Enable Dot'}
+        self.assertEqual(menu(screen, 'Choose integrations', options, 'skip'), 'dot')
+        self.assertIn('> Enable Dot', [call.args[2] for call in screen.addnstr.call_args_list])
+
+    def test_single_choice_fallback_accepts_a_number_or_default(self):
+        options = {'first': 'First choice', 'second': 'Second choice'}
+        with patch('agent_picker.terminal_picker', return_value=None), redirect_stdout(StringIO()), \
+             patch('builtins.input', side_effect=['invalid', '2', '']):
+            self.assertEqual(choose_option('Choose', options), 'second')
+            self.assertEqual(choose_option('Choose', options, 'second'), 'second')
+
+    def test_interactive_installer_offers_connection_first_and_defaults_without_typing(self):
+        choices = [DEFAULT_CONNECTION, 'tailscale', 'suggested', (True, True)]
+        with patch('installer.choose_option', side_effect=choices) as choose, \
+             patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
+             patch('installer.tailscale_dns', return_value='fixture.test'), patch('builtins.input') as answer:
+            settings = normalized(interactive(self.presets, {}), self.presets)
+        self.assertEqual(choose.call_args_list[0].args[1], CONNECTIONS)
+        picker.assert_called_once_with(self.presets, ())
+        answer.assert_not_called()
         self.assertEqual(settings['agents'], ['coder', 'reviewer'])
-        self.assertEqual(settings['subscriptions'], {'default': 'Work', 'overrides': {'coder': 'Personal'}})
-        prompts = [call.args[0] for call in answer.call_args_list if 'subscription override' in call.args[0]]
-        self.assertEqual(prompts, ['coder subscription override (blank uses Work): ',
-                                   'reviewer subscription override (blank uses Work): '])
+        self.assertEqual(settings['connection'], DEFAULT_CONNECTION)
+        self.assertNotIn('subscriptions', settings)
+        self.assertEqual(settings['owner'], 'operator')
+        self.assertEqual(settings['server_name'], 'fixture.test')
+        self.assertTrue(settings['tailscale'] and settings['dot'] and settings['telegram'])
+
+    def test_interactive_installer_supports_custom_proxy_and_operator(self):
+        choices = [DEFAULT_CONNECTION, 'proxy', 'custom', (False, False)]
+        with patch('installer.choose_option', side_effect=choices) as choose, \
+             patch('installer.select_agents', return_value=[]), patch('installer.tailscale_dns', return_value=None), \
+             patch('builtins.input', side_effect=['matrix.example', 'my-operator']):
+            settings = normalized(interactive(self.presets, {}), self.presets)
+        self.assertEqual(list(choose.call_args_list[1].args[1]), ['proxy'])
+        self.assertFalse(settings['tailscale'])
+        self.assertEqual(settings['server_name'], 'matrix.example')
+        self.assertEqual(settings['owner'], 'my-operator')
+
+    def test_tailnet_suggestion_requires_a_running_https_node(self):
+        status = {'BackendState': 'Running', 'Self': {'DNSName': 'fixture.test.'}, 'CertDomains': ['fixture.test']}
+        result = CompletedProcess([], 0, json.dumps(status))
+        with patch('installer.run', return_value=result):
+            self.assertEqual(tailscale_dns(), 'fixture.test')
+            result.stdout = json.dumps({**status, 'CertDomains': []})
+            self.assertIsNone(tailscale_dns())
+        with patch('installer.run', side_effect=FileNotFoundError):
+            self.assertIsNone(tailscale_dns())
+
+    def test_default_connection_preserves_existing_account_reminders(self):
+        raw = dict(self.raw)
+        del raw['subscriptions']
+        settings = normalized(raw, self.presets)
+        self.assertEqual(settings['connection'], DEFAULT_CONNECTION)
+        register_entry(settings, self.registry, 'coder', self.presets['coder'])
+        self.assertEqual(self.registry['agents']['coder']['subscription'], 'Personal')
+        register_entry(settings, self.registry, 'analyst', self.presets['analyst'])
+        self.assertEqual(self.registry['agents']['analyst']['subscription'], CONNECTIONS[DEFAULT_CONNECTION])
+        with self.assertRaises(ValueError):
+            normalized({**raw, 'connection': 'unsupported'}, self.presets)
+
+    def test_batch_sign_in_resumes_with_pending_local_agents(self):
+        self.registry['agents']['root']['active'] = True
+        self.registry['agents']['chief-of-staff']['active'] = True
+        register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()):
+            data = Path(work)
+            registry_path = data / 'agents.json'
+            save(registry_path, self.registry)
+
+            def activate(data, key, *, pending_only):
+                self.assertTrue(pending_only)
+                if key == 'coder':
+                    raise CalledProcessError(1, ['fixture-sign-in'])
+                registry = load(registry_path)
+                registry['agents'][key]['active'] = True
+                save(registry_path, registry)
+
+            with patch('installer.agent_activate', side_effect=activate) as connect:
+                with self.assertRaises(CalledProcessError):
+                    agent_sign_in(data)
+                self.assertEqual([call.args[1] for call in connect.call_args_list], ['manager', 'coder'])
+            with patch('installer.agent_activate') as connect:
+                agent_sign_in(data)
+                connect.assert_called_once_with(data, 'coder', pending_only=True)
+                connect.reset_mock()
+                agent_sign_in(data, 'manager')
+                connect.assert_called_once_with(data, 'manager')
 
     def test_repeat_setup_retains_active_agents_and_provider_choice(self):
         self.registry['agents']['coder']['active'] = True
