@@ -37,6 +37,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Provision rootless Docker on the runner
         run: |
+          sudo install -m 0755 -d /etc/apt/keyrings
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o "$RUNNER_TEMP/docker.asc"
+          sudo install -m 0644 "$RUNNER_TEMP/docker.asc" /etc/apt/keyrings/docker.asc
+          printf '%s\n' 'Types: deb' 'URIs: https://download.docker.com/linux/ubuntu' \
+            'Suites: noble' 'Components: stable' 'Architectures: amd64' \
+            'Signed-By: /etc/apt/keyrings/docker.asc' | sudo tee /etc/apt/sources.list.d/constellation-docker.sources >/dev/null
           sudo apt-get update
           sudo apt-get install -y uidmap slirp4netns docker-ce-rootless-extras
           sudo loginctl enable-linger "$(id -un)"
