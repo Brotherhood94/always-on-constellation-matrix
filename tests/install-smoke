@@ -16,7 +16,8 @@ cleanup() {
     rm -rf -- "$work"
   else
     # The rootless daemon maps service files to subordinate UIDs.
-    docker run --rm --network none --mount "type=bind,source=$work,target=/fixture" +      constellation-matrix-operator:28.2.2-1 sh -c 'rm -rf /fixture/data' >/dev/null 2>&1 || true
+    docker run --rm --network none --mount "type=bind,source=$work,target=/fixture" \
+      constellation-matrix-operator:28.2.2-1 sh -c 'rm -rf /fixture/data' >/dev/null || true
     rm -rf -- "$work"
   fi
 }
