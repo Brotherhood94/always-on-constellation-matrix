@@ -11,6 +11,7 @@ import { isTeamReview, reportId, workshopObservation } from './review.mjs';
 import { createCatalog, gapKey } from '../../../agents/connector/agent-catalog.mjs';
 import { reviewTeam } from './run-review.mjs';
 import { capabilityReview, confirmedGap } from './capability-review.mjs';
+import { createRosterApproval } from './roster-approval.mjs';
 
 const { MATRIX_URL: url, MATRIX_SERVER_NAME: server, MATRIX_OWNER: owner } = process.env;
 const state = '/publisher';
@@ -54,14 +55,22 @@ const client = await openRoomClient({
 });
 
 async function checkDestination() {
-  const rules = await client.getRoomStateEventContent(destination, 'm.room.join_rules', '');
-  const members = await client.getJoinedRoomMembers(destination);
-  if (rules.join_rule !== 'invite' || members.length !== 2 || !members.includes(owner) || !members.includes(user)) {
+  const events = await client.getRoomState(destination);
+  const rules = events.find(event => event.type === 'm.room.join_rules');
+  const members = events.filter(event => event.type === 'm.room.member' &&
+    ['invite', 'join'].includes(event.content.membership));
+  if (rules?.content.join_rule !== 'invite' || members.length !== 2 || ![owner, user].every(id =>
+    members.some(event => event.state_key === id && event.content.membership === 'join'))) {
     throw new Error('The Chief of Staff reporting room must be invite-only with the owner and bot joined');
   }
 }
 
 await checkDestination();
+const roster = process.env.ROSTER_MANAGEMENT === 'true' ? createRosterApproval({
+  db, client, room: destination, owner, checkDestination,
+  currentAgents: () => catalog.fresh() ? catalog.current().agents : null,
+  configureCommand: process.env.ROSTER_CONFIGURE_COMMAND,
+}) : null;
 while (!(await client.getJoinedRooms()).includes(source)) {
   try {
     await client.joinRoom(source);
@@ -85,14 +94,14 @@ const filter = JSON.stringify({
 });
 console.log('Direct Matrix reading is active for Agents.');
 
-async function fillGap(previous, previousBatch) {
+async function fillGap(room, previous, previousBatch) {
   const events = [];
   const visited = new Set();
   let cursor = previousBatch;
   while (cursor && cursor !== previous && !visited.has(cursor)) {
     visited.add(cursor);
     const response = await client.doRequest('GET',
-      '/_matrix/client/v3/rooms/' + encodeURIComponent(source) + '/messages',
+      '/_matrix/client/v3/rooms/' + encodeURIComponent(room) + '/messages',
       { from: cursor, to: previous, dir: 'b', limit: 100,
         filter: JSON.stringify({ types: ['m.room.encrypted'] }) }, null, 15000);
     events.push(...(response.chunk || []));
@@ -120,7 +129,13 @@ async function sync() {
   }
   const timeline = joined[source]?.timeline;
   const events = [...(timeline?.events || [])];
-  if (since && timeline?.limited && timeline.prev_batch) events.push(...await fillGap(since, timeline.prev_batch));
+  if (since && timeline?.limited && timeline.prev_batch) events.push(...await fillGap(source, since, timeline.prev_batch));
+  const directTimeline = joined[destination]?.timeline;
+  let directEvents = directTimeline?.events || [];
+  if (roster && since && directTimeline?.limited && directTimeline.prev_batch) {
+    const backfill = await fillGap(destination, since, directTimeline.prev_batch);
+    directEvents = [...backfill.reverse(), ...directEvents];
+  }
   db.exec('BEGIN');
   try {
     for (const event of events) {
@@ -130,7 +145,7 @@ async function sync() {
       }
     }
     const addReview = db.prepare('INSERT OR IGNORE INTO review_requests (event,raw) VALUES (?,?)');
-    for (const event of joined[destination]?.timeline?.events ?? []) {
+    for (const event of directEvents) {
       if (event.type === 'm.room.encrypted' && event.sender === owner && event.event_id &&
           event.origin_server_ts >= start && !event.unsigned?.redacted_because) {
         addReview.run(event.event_id, JSON.stringify(event));
@@ -196,14 +211,22 @@ async function drainReviewRequest() {
       db.prepare('UPDATE review_requests SET retry=? WHERE event=?').run(Date.now() + 30000, row.event);
       return;
     }
-    if (!isTeamReview(event)) {
+    const handled = roster ? await roster.accept(event, JSON.parse(row.raw)) : null;
+    if (handled !== null) {
+      if (!handled) {
+        finish.run(row.event);
+        return;
+      }
+      response = handled;
+    } else if (!isTeamReview(event)) {
       finish.run(row.event);
       return;
-    }
-    try {
-      response = await reviewTeam();
-    } catch {
-      response = 'Chief of Staff could not complete the review. Send “review team” again after checking Workshop and Context Intelligence.';
+    } else {
+      try {
+        response = await reviewTeam();
+      } catch {
+        response = 'Chief of Staff could not complete the review. Send “review team” again after checking Workshop and Context Intelligence.';
+      }
     }
     db.prepare('UPDATE review_requests SET response=?,raw=NULL WHERE event=?').run(response, row.event);
   }
@@ -256,13 +279,16 @@ async function drainReports() {
 }
 
 let review;
+let rosterWork;
 for (;;) {
   try {
     await catalog.refresh();
     await sync();
     await drainEvidence();
-    review ??= drainReviewRequest().catch(() => console.warn('Chief of Staff will retry the private review request.'))
+    review ??= drainReviewRequest().catch(() => console.warn('Chief of Staff will retry the private DM request.'))
       .finally(() => { review = undefined; });
+    if (roster) rosterWork ??= roster.tick().catch(() => console.warn('Chief of Staff will retry the roster operation.'))
+      .finally(() => { rosterWork = undefined; });
     if (catalog.fresh()) capabilityGaps.plan(catalog.current());
     for (const job of capabilityGaps.pending()) {
       const { content, observation } = JSON.parse(job.data);

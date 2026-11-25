@@ -99,11 +99,28 @@ Save a profile like the one below. Use capability names and resource scopes that
 ```
 
 ```sh
-sudo ./constellation_matrix agent add --profile /path/to/qa.json
+sudo ./constellation_matrix agent add --profile /path/to/qa.json --configure
+```
+
+Run the command from the VPS checkout. Omit `--configure` to provision first, then use the command below to finish or resume native Amplifier sign-in.
+
+```sh
 sudo ./constellation_matrix agent configure qa
 ```
 
 The registry has one active coordinator and observer when those roles are enabled. Pending workers become available for routing after provider sign-in, an ACP session restore probe, and connector startup.
+
+### Retire a worker
+
+```sh
+sudo ./constellation_matrix agent remove qa
+```
+
+Confirm by typing the worker ID. Automation can pass `--yes`. The worker stops accepting assignments while it finishes accepted work. If the terminal reports that it is still draining, check the worker and run the same command to resume. Chief of Staff management also enables background retries.
+
+Retirement removes the worker from Office, the dashboard, Docker Compose, and Persona Workshop. It revokes the Matrix account and Context Intelligence key. The worker’s private archive is under `archive/agents/qa` in the deployment data directory. Office history, Context Intelligence evidence, and the shared desktop remain available. Use a fresh ID when hiring a replacement, and remove the old ID from any install config that declares it.
+
+Retirement supports ordinary local Office workers. [Chief of Staff approval](chief-of-staff.md#hire-or-retire-an-office-worker)
 
 ## Add a remote worker
 

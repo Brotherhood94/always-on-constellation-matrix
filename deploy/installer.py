@@ -25,7 +25,7 @@ sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
 from agent_catalog import KEY, profile
 from configure import write_config
 from layout import CLIENT, create_layout, direct_room, invite, join, link_child, login, missing, encoded
-from provision import request
+from provision import MatrixError, request
 
 DATA = Path('/srv/constellation-matrix')
 PRESETS = SOURCE / 'deploy/matrix/agent-profiles.json'
@@ -36,7 +36,7 @@ PROJECT = re.compile(r'[a-z][a-z0-9-]{0,38}')
 RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
-            'telegram-agent', 'telegrambot'}
+            'telegram-agent', 'telegrambot', 'roster-inviter'}
 LEGACY_CONNECTION = 'chatgpt-codex'
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
@@ -226,14 +226,18 @@ def up(data, *services):
         compose(data, '--profile', 'agents', 'up', '-d', '--wait', '--wait-timeout', '150', *services)
 
 
-def refresh_context(data):
+def refresh_context(data, *, retire=None):
     compose(data, 'stop', 'context')
     program = """import json
 from pathlib import Path
+import sys
 from context_intelligence_server.identity_store import IdentityStore
 config = json.loads(Path('/etc/context/server.json').read_text())
 store = IdentityStore(Path(config['api_keys_store_path']))
 store.load()
+for digest, contributor in list(store.flat_dict.items()):
+    if contributor in sys.argv[1:]:
+        store.delete(digest)
 for digest, entry in config['api_keys'].items():
     if store.flat_dict.get(digest) != entry['id']:
         if entry['id'] in store.flat_dict.values():
@@ -241,7 +245,7 @@ for digest, entry in config['api_keys'].items():
         store.put(digest, entry)
 """
     compose(data, 'run', '--rm', '--no-deps', '-T', '--entrypoint', '/app/.venv/bin/python',
-            'context', '-B', '-c', program)
+            'context', '-B', '-c', program, *([retire] if retire else []))
     up(data, 'context')
 
 
@@ -326,6 +330,8 @@ def prepare_images(settings, registry):
 def register_entry(settings, registry, key, definition):
     if not KEY.fullmatch(key) or len(key) > 36 or key in RESERVED or key == settings['owner'] or key.startswith(('engine-', 'acp-')):
         raise ValueError('Invalid or reserved agent ID')
+    if key in registry.get('retired', {}):
+        raise ValueError(f'Agent {key} was retired. Use a new ID or remove it from the install config.')
     name, model, effort = (definition[field] for field in ('name', 'model', 'effort'))
     if not name or len(name) > 64 or not name.isprintable() or not MODEL.fullmatch(model):
         raise ValueError('Agent requires a printable name and a valid provider model')
@@ -338,6 +344,8 @@ def register_entry(settings, registry, key, definition):
     if validated['role'] == 'observer' and key != 'chief-of-staff':
         raise ValueError('The observer role belongs to Chief of Staff')
     previous = registry['agents'].get(key)
+    if previous and previous.get('retirement'):
+        raise ValueError(f'Agent {key} is retiring. Resume its removal first.')
     labels = settings.get('subscriptions', {})
     default_label = (previous or {}).get('subscription')
     label = labels.get('overrides', {}).get(key, labels.get('default', default_label))
@@ -623,6 +631,12 @@ def install(data, args):
         registry_path = data / 'agents.json'
         registry = load(registry_path) if registry_path.exists() else {
             'local_server': settings['server_name'], 'dynamic_handoffs': True, 'agents': {}}
+        if any(entry.get('retirement') for entry in registry['agents'].values()):
+            raise ValueError('Resume the pending agent removal before reinstalling')
+        if current and current.get('roster_management'):
+            settings['roster_management'] = True
+        else:
+            settings.pop('roster_management', None)
         for key in settings['agents']:
             register_entry(settings, registry, key, presets[key])
         settings.pop('owner_password_file', None)
@@ -696,27 +710,47 @@ def provision_selected_agents(data, settings, registry, selection, passphrase):
     save(data / 'settings.json', roster)
 
 
+def provision_agent(data, settings, registry, candidate, inviter):
+    key = candidate['key']
+    if any(entry.get('retirement') in {'stopped', 'revoked'} for entry in registry['agents'].values()):
+        raise ValueError('Resume the pending agent removal before adding another worker')
+    register_entry(settings, registry, key, candidate)
+    compose_config(settings, data, registry)
+    refresh_context(data)
+    prepare_agent_state(data, key, registry['agents'][key], load(data / 'rooms.json'), inviter, settings)
+    if registry['agents'][key]['placement'] == 'local':
+        prepare_images(settings, registry)
+        up(data, 'engine-' + key)
+    save(data / 'agents.json', registry)
+    sync_workshop(settings, data, registry)
+    publish_inventory(settings, data, registry)
+    return key
+
+
 def agent_add(data, args):
+    candidate = load(args.profile)
+    configure = getattr(args, 'configure', False)
+    if configure:
+        from roster import local_worker
+        local_worker(candidate['key'], {'profile': candidate['profile'], 'placement': agent_placement(candidate['key'], candidate)})
+        if not sys.stdin.isatty():
+            raise ValueError('Run --configure from an interactive terminal')
     with operator_lock(data):
         settings, registry = open_existing(data)
-        candidate = load(args.profile)
-        key = candidate.pop('key')
-        register_entry(settings, registry, key, candidate)
-        compose_config(settings, data, registry)
-        refresh_context(data)
-        provision_layout(settings, data, registry, password(settings, args.owner_password_file))
-        if registry['agents'][key]['placement'] == 'local':
-            prepare_images(settings, registry)
-            up(data, 'engine-' + key)
-        save(data / 'agents.json', registry)
-        sync_workshop(settings, data, registry)
-        publish_inventory(settings, data, registry)
-    print('Provisioned ' + key + '. Complete its provider sign-in to activate routing.')
+        own = login(settings['owner'], password(settings, args.owner_password_file))['access_token']
+        try:
+            key = provision_agent(data, settings, registry, candidate, own)
+        finally:
+            request('POST', CLIENT + '/logout', {}, own)
+    if configure:
+        agent_activate(data, key, pending_only=True)
+    else:
+        print('Provisioned ' + key + '. Complete its provider sign-in to activate routing.')
 
 
 def pending_local_agents(registry):
     return [key for key, entry in registry['agents'].items()
-            if entry['placement'] == 'local' and not entry['active']]
+            if entry['placement'] == 'local' and not entry['active'] and not entry.get('retirement')]
 
 
 def agent_sign_in(data, key=None, *, selection=None):
@@ -750,6 +784,8 @@ def agent_activate(data, key, *, pending_only=False):
     with operator_lock(data):
         settings, registry = open_existing(data)
         entry = registry['agents'][key]
+        if entry.get('retirement'):
+            raise ValueError(f'Agent {key} is retiring. Resume its removal first.')
         if pending_only and entry['active']:
             return
         if entry['placement'] != 'local':
@@ -859,6 +895,13 @@ def main():
     add = agent.add_parser('add')
     add.add_argument('--profile', type=Path, required=True)
     add.add_argument('--owner-password-file', type=Path)
+    add.add_argument('--configure', action='store_true', help='Open Amplifier setup after registering a local Office worker')
+    remove = agent.add_parser('remove', help='Drain, deregister and archive a local Office worker')
+    remove.add_argument('key')
+    remove.add_argument('--yes', action='store_true')
+    management = agent.add_parser('management').add_subparsers(dest='management', required=True)
+    enable = management.add_parser('enable', help='Enable approved roster changes in the Chief of Staff DM')
+    enable.add_argument('--owner-password-file', type=Path)
     agent.add_parser('configure', aliases=['sign-in'], help='Open native Amplifier provider setup').add_argument(
         'key', nargs='?', help='Agent ID. Omit to configure all pending local agents in order.')
     remote = commands.add_parser('remote').add_subparsers(dest='action', required=True)
@@ -923,6 +966,12 @@ def main():
     elif args.command == 'agent':
         if args.action == 'add':
             agent_add(data, args)
+        elif args.action == 'remove':
+            from roster import remove_command
+            remove_command(data, args.key, args.yes)
+        elif args.action == 'management':
+            from roster import enable_management
+            enable_management(data, args.owner_password_file)
         else:
             agent_sign_in(data, args.key)
             selected = load(data / 'settings.json')['agents']
@@ -982,5 +1031,5 @@ if __name__ == '__main__':
     os.umask(0o077)
     try:
         main()
-    except (KeyError, ValueError, OSError, subprocess.CalledProcessError) as error:
+    except (KeyError, ValueError, OSError, MatrixError, subprocess.CalledProcessError) as error:
         raise SystemExit(f'Constellation setup failed: {error}') from None

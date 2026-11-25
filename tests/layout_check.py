@@ -2,13 +2,16 @@
 import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import sleep
 import unittest
 from unittest.mock import patch
 
 from installer import save
 from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded, room_route
 from onboarding import finish
-from provision import request
+from provision import MatrixError, request
+from roster import deactivate_worker, office_inviter
+from roster_broker import verify
 
 
 class LayoutTest(unittest.TestCase):
@@ -77,6 +80,65 @@ class LayoutTest(unittest.TestCase):
             join(office, remote['user_id'], remote['access_token'])
             self.assertEqual(finish(data, 'fixture'), {'sender': manager['user_id'], 'room': office, 'event': '$welcome'})
             publish.assert_called_once()
+
+    def test_roster_invitation_approval_receipt_and_retirement_against_synapse(self):
+        server = os.environ['MATRIX_SERVER_NAME']
+        password = 'synthetic-test-passphrase-88'
+        owner, chief, worker = (login(key, password) for key in ('operator', 'chief-of-staff', 'roster-fixture'))
+        owner_token, chief_token, worker_token = (account['access_token'] for account in (owner, chief, worker))
+        rooms = create_layout(server, owner['user_id'], owner_token)
+        dm = direct_room(server, rooms['space'], 'chief-of-staff', 'Chief of Staff', owner['user_id'],
+                         owner_token, chief['user_id'], chief_token)
+        settings = {'server_name': server, 'owner': 'operator'}
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            save(data / 'rooms.json', rooms)
+            (data / 'roster').mkdir()
+            inviter = office_inviter(data, settings, owner_token)
+            self.assertEqual(office_inviter(data, settings, owner_token), inviter)
+            office = rooms['office']
+            invite(office, worker['user_id'], inviter)
+            join(office, worker['user_id'], worker_token)
+            with self.assertRaises(MatrixError):
+                request('PUT', room_route(office) + '/state/m.room.name', {'name': 'Changed'}, inviter)
+            with self.assertRaises(MatrixError):
+                invite(dm, worker['user_id'], inviter)
+
+            def encrypted(room, step, token, relation=None):
+                content = {'algorithm': 'm.megolm.v1.aes-sha2', 'ciphertext': 'synthetic-envelope'}
+                if relation:
+                    content['m.relates_to'] = {'rel_type': 'm.reference', 'event_id': relation}
+                return request('PUT', room_route(room) + '/send/m.room.encrypted/roster-' + step, content, token)['event_id']
+
+            matrix = data / 'state/chief-of-staff/matrix'
+            matrix.mkdir(parents=True)
+            save(matrix / 'room-id', dm)
+            save(matrix / 'matrix-token', chief_token)
+            proposal = {'request': encrypted(dm, 'request', owner_token),
+                        'proposal': encrypted(dm, 'proposal', chief_token),
+                        'poll': encrypted(dm, 'poll', chief_token)}
+            proposal['vote'] = encrypted(dm, 'vote', owner_token, proposal['poll'])
+            vote = request('GET', room_route(dm) + '/event/' + encoded(proposal['vote']), token=chief_token)
+            proposal['decided'] = vote['origin_server_ts']
+            verify(data, settings, proposal, proposal['decided'])
+
+            history = encrypted(office, 'history', worker_token)
+            matrix = data / 'state/roster-fixture/matrix'
+            matrix.mkdir(parents=True)
+            save(matrix / 'matrix-password', password)
+            deactivate_worker(data, 'roster-fixture', settings)
+            deactivate_worker(data, 'roster-fixture', settings)
+            with self.assertRaises(MatrixError):
+                request('GET', CLIENT + '/account/whoami', token=worker_token)
+            for _ in range(30):
+                if worker['user_id'] not in request('GET', room_route(office) + '/joined_members', token=owner_token)['joined']:
+                    break
+                sleep(0.2)
+            else:
+                self.fail('The retired worker stayed in Office')
+            stored = request('GET', room_route(office) + '/event/' + encoded(history), token=owner_token)
+            self.assertEqual(stored['sender'], worker['user_id'])
+            self.assertEqual(stored['type'], 'm.room.encrypted')
 
 
 if __name__ == '__main__':

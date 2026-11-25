@@ -5,10 +5,13 @@ import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { request as http } from 'node:http';
 import { createServer } from 'node:https';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer } from 'ws';
+import matrix from '@vector-im/matrix-bot-sdk';
 import { openRoomClient, sendEncrypted } from './matrix-session.mjs';
 import { mentionMessage } from './matrix-format.mjs';
+import { createRosterApproval } from './chief-of-staff/direct/roster-approval.mjs';
 
 const url = 'http://synapse:8008';
 const domain = 'fixture.test';
@@ -51,6 +54,90 @@ async function eventually(check) {
   assert.fail('The operations service did not become ready');
 }
 
+async function rosterFixture(chiefRoom, catalog, apply) {
+  const db = new DatabaseSync(':memory:');
+  const chiefId = '@chief-of-staff:' + domain;
+  async function participant(key, userId, deviceId, name) {
+    const state = join(base, deviceId);
+    await mkdir(state);
+    await writeFile(join(state, 'matrix-token'), await login(key, deviceId));
+    const client = await openRoomClient({ url, state, roomId: chiefRoom, userId, deviceId, name });
+    client.syncingTimeout = 0;
+    let cursor;
+    return { client, sync: async () => {
+      const update = await client.doSync(cursor);
+      cursor = update.next_batch;
+      await client.processSync(update);
+    } };
+  }
+  const { client: chief, sync: syncChief } = await participant('chief-of-staff', chiefId, 'ROSTERCHIEF', 'Chief of Staff');
+  const { client: operator, sync: syncOperator } = await participant('operator', owner, 'ROSTEROPERATOR', 'Fixture Operator');
+
+  async function receive(client, sync, event) {
+    return eventually(async () => {
+      await sync();
+      const envelope = await client.getRawEvent(chiefRoom, event);
+      assert.equal(envelope.type, 'm.room.encrypted');
+      try {
+        const decoded = await client.crypto.decryptRoomEvent(new matrix.EncryptedRoomEvent(envelope), chiefRoom);
+        return { envelope, clear: decoded.raw };
+      } catch (error) {
+        if (error.code !== 'GenericFailure') throw error;
+      }
+    });
+  }
+
+  const profile = { key: 'fixture-worker', name: 'Fixture Worker', model: 'fixture-model', effort: 'low',
+    profile: { role: 'worker', limits: 'Write welcome tips.', capabilities: [
+      { code: 'welcome-tip', description: 'Write welcome tips.', resources: ['task:*'] },
+    ] } };
+  let time = Date.now();
+  const approval = createRosterApproval({ db, client: chief, room: chiefRoom, owner,
+    now: () => time, checkDestination: async () => assert.equal((await chief.getJoinedRoomMembers(chiefRoom)).length, 2),
+    currentAgents: () => [{ ...catalog, placement: 'local' }], draft: async () => profile, apply });
+  try {
+    await syncChief();
+    await syncOperator();
+    for (const [command, expected] of [['hire fixture-worker Write welcome tips', 'add'], ['retire analyst', 'retire']]) {
+      const event = await sendEncrypted(operator, chiefRoom, 'roster-command-' + expected, mentionMessage(command));
+      const request = await receive(chief, syncChief, event);
+      await approval.accept(request.clear, request.envelope);
+      time = Date.now();
+      await approval.tick();
+      const row = db.prepare('SELECT * FROM roster_requests WHERE request=?').get(event);
+      assert.ok(row?.poll);
+      const proposal = await receive(operator, syncOperator, row.proposal);
+      assert.equal(proposal.envelope.sender, chiefId);
+      assert.match(proposal.clear.content.body, expected === 'add' ? /"key": "fixture-worker"/ : /Finish accepted assignments/);
+      const poll = await receive(operator, syncOperator, row.poll);
+      const start = 'org.matrix.msc3381.poll.start';
+      const type = 'org.matrix.msc3381.poll.response';
+      const answer = poll.clear.content[start].answers[0].id;
+      const encrypted = await operator.crypto.encryptRoomEvent(chiefRoom, type, {
+        [type]: { answers: [answer] }, 'm.relates_to': { rel_type: 'm.reference', event_id: row.poll },
+      });
+      const endpoint = '/_matrix/client/v3/rooms/' + encodeURIComponent(chiefRoom) + '/send/m.room.encrypted/roster-vote-' + expected;
+      const vote = await operator.doRequest('PUT', endpoint, null, encrypted);
+      const received = await receive(chief, syncChief, vote.event_id);
+      assert.equal(received.envelope.sender, owner);
+      assert.equal(received.envelope.content['m.relates_to'].event_id, row.poll);
+      await approval.accept(received.clear, received.envelope);
+      time = Date.now();
+      await approval.tick();
+      if (expected === 'retire') {
+        assert.equal(db.prepare('SELECT announced FROM roster_requests WHERE request=?').get(event).announced, 'draining');
+        time += 31_000;
+        await approval.tick();
+      }
+      assert.equal(db.prepare('SELECT done FROM roster_requests WHERE request=?').get(event).done, 1);
+    }
+  } finally {
+    operator.crypto.engine.machine.close();
+    chief.crypto.engine.machine.close();
+    db.close();
+  }
+}
+
 async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog) {
   const readerState = join(base, 'welcome-reader');
   await mkdir(readerState);
@@ -84,9 +171,11 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     limits: 'Fixture', status: 'Available', capabilities: [] };
   const handoff = { agent: 'analyst', capability: 'welcome-tip', resource: 'task:welcome' };
   let turn = 0;
+  let releaseRetire;
+  const retirementWork = new Promise(resolve => { releaseRetire = resolve; });
   ws.on('connection', (socket, upgrade) => {
     assert.equal(upgrade.headers.authorization, 'Bearer welcome-acp-fixture');
-    socket.on('message', raw => {
+    socket.on('message', async raw => {
       const { method, id, params } = JSON.parse(raw);
       let result = {};
       if (method === 'initialize') result = { protocolVersion: 1, agentCapabilities: { loadSession: true } };
@@ -94,6 +183,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       if (method === 'session/prompt') {
         const prompt = params.prompt.map(entry => entry.text ?? '').join('\n');
         assert.match(prompt, /three-step checklist/i);
+        if (prompt.includes('Retirement fixture')) await retirementWork;
         const text = prompt.includes('You are Analyst') ? 'Fixture tip: mention an available agent.'
           : prompt.includes('Fixture tip: mention an available agent.') ?
             'TASK_OUTCOME: {"status":"completed","result":"Welcome to Office","verification":"Analyst shared a tip"}'
@@ -181,6 +271,38 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       await eventually(() => findMessage(item => inThread(item) && item.sender === manager.id &&
         item.content['net.matrix_agents.task_outcome']?.status === 'completed'));
     }
+    const duringRetirement = await sendEncrypted(reader, office, 'retirement-fixture-active',
+      mentionMessage('Retirement fixture: draft a three-step checklist.', analyst));
+    const workerDb = new DatabaseSync(join(base, 'welcome-analyst', 'connector.sqlite3'));
+    workerDb.exec('PRAGMA busy_timeout=3000');
+    try {
+      await eventually(() => workerDb.prepare('SELECT id FROM inbox WHERE id=? AND sent IS NULL').get(duringRetirement));
+      let draining = false;
+      await rosterFixture(chiefRoom, analyst, async payload => {
+        const operation = JSON.parse(payload.operation);
+        if (operation.kind === 'add') {
+          assert.equal(operation.profile.key, 'fixture-worker');
+          return { status: 'provisioned' };
+        }
+        assert.equal(operation.agent, 'analyst');
+        if (!draining) {
+          workerDb.exec(await readFile('/app/retire-worker.sql', 'utf8'));
+          const ignored = await sendEncrypted(reader, office, 'retirement-fixture-blocked',
+            mentionMessage('Try to assign another three-step checklist.', analyst));
+          releaseRetire();
+          await eventually(() => findMessage(item => item.content['m.relates_to']?.event_id === duringRetirement &&
+            item.sender === analyst.id));
+          assert.equal(workerDb.prepare('SELECT id FROM inbox WHERE id=?').get(ignored), undefined);
+          draining = true;
+          return { status: 'draining' };
+        }
+        return { status: 'retired' };
+      });
+    } finally {
+      releaseRetire();
+      workerDb.close();
+    }
+    console.log('Real encrypted Chief of Staff approvals verified. A retiring worker delivered its accepted task and rejected new work.');
     const identity = await api('/_matrix/client/v3/profile/' + encodeURIComponent(owner), { token: ownerToken });
     assert.equal(identity.displayname, 'Fixture Operator');
     console.log('Chief and Office welcomes stayed informational. Element and Dot both routed the example to Manager.');

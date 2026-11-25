@@ -7,7 +7,8 @@ from unittest import TestCase
 from unittest.mock import call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy'))
-from host_services import enable_host_dependencies, enable_services, enable_telegram_units, remove_units, units
+from host_services import (enable_host_dependencies, enable_services, enable_telegram_units, remove_units, roster_units,
+                           stage_roster_runtime, units)
 from dot import connect as connect_dot
 from installer import PRESETS, load, normalized, save
 from serve import Route, configure, remove_matching
@@ -67,6 +68,35 @@ class LifecycleTest(TestCase):
                 call('systemctl', 'disable', '--now', 'fixture-monitor.service', 'fixture-stack.service'),
                 call('systemctl', 'daemon-reload'),
             ])
+
+    def test_roster_socket_and_retry_timer_are_scoped_and_removed_on_uninstall(self):
+        with TemporaryDirectory() as work, patch('host_services.run') as run, \
+             patch('host_services.stage_roster_runtime', return_value=Path('/srv/fixture/host/roster-runtime')):
+            path = Path(work)
+            with patch('host_services.UNITS', path):
+                roster_units({'project': 'fixture'}, Path('/srv/fixture'))
+                socket = (path / 'fixture-roster.socket').read_text()
+                service = (path / 'fixture-roster@.service').read_text()
+                self.assertIn('ListenStream=/run/fixture-roster.sock', socket)
+                self.assertIn('SocketMode=0660', socket)
+                self.assertIn('StandardInput=socket', service)
+                self.assertIn('StandardOutput=journal', service)
+                self.assertIn('/srv/fixture/host/roster-runtime/deploy/roster_broker.py', service)
+                self.assertIn('OnUnitActiveSec=30s', (path / 'fixture-roster-reconcile.timer').read_text())
+                remove_units('fixture')
+                self.assertEqual(list(path.iterdir()), [])
+            run.assert_any_call('systemctl', 'enable', '--now', 'fixture-roster.socket', 'fixture-roster-reconcile.timer')
+            run.assert_any_call('systemctl', 'stop', 'fixture-roster@*.service')
+
+    def test_roster_runtime_copies_code_into_private_host_state(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            runtime = stage_roster_runtime(data)
+            self.assertEqual(runtime.parent, data / 'host')
+            self.assertEqual(runtime.stat().st_mode & 0o777, 0o700)
+            self.assertTrue((runtime / 'deploy/roster_broker.py').is_file())
+            self.assertTrue((runtime / 'agents/connector/Dockerfile').is_file())
+            self.assertFalse((runtime / 'agents/connector/node_modules').exists())
 
     def test_dot_tunnel_stays_a_boot_enabled_host_service(self):
         with TemporaryDirectory() as work, patch('dot.run') as run, \

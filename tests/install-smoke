@@ -173,6 +173,34 @@ assert {agent['name']: agent['status'] for agent in agents} == {
 }
 print('New agent joined Office once, retained its Workshop target, and appeared pending sign-in on the dashboard.')
 PYTHON
+printf '%s\n' 'Worker workspace artifact' > "$data/state/fixture-worker/work/fixture.md"
+printf '%s\n' 'Shared desktop artifact' > "$data/desktop/shared.md"
+cp "$data/context/fixture-worker.token" "$work/fixture-context-token"
+"$src/constellation_matrix" --data-dir "$data" agent remove fixture-worker --yes
+"$src/constellation_matrix" --data-dir "$data" agent remove fixture-worker --yes
+python3 - "$data" "$work" <<'PYTHON'
+from hashlib import sha256
+import json
+from pathlib import Path
+import sys
+
+data, work = map(Path, sys.argv[1:])
+registry = json.loads((data / 'agents.json').read_text())
+assert set(registry['agents']) == {'manager', 'coder'}
+assert 'fixture-worker' in registry['retired']
+assert 'fixture-worker' not in json.loads((data / 'workshop-management/targets.json').read_text())
+assert 'fixture-worker' not in {row['key'] for row in json.loads((data / 'dashboard/agents.json').read_text())['agents']}
+assert 'engine-fixture-worker' not in json.loads((data / 'compose.yaml').read_text())['services']
+assert not (data / 'state/fixture-worker').exists()
+assert not (data / 'workshop-management/fixture-worker.token').exists()
+assert not (data / 'context/fixture-worker.token').exists()
+token_digest = sha256((work / 'fixture-context-token').read_text().strip().encode()).hexdigest()
+assert token_digest not in (data / 'context/data/identity/api-keys.json').read_text()
+assert 'fixture-worker' not in json.loads((data / 'context/config/server.json').read_text())['contributor_grants']
+assert (data / 'archive/agents/fixture-worker/workspace/fixture.md').read_text() == 'Worker workspace artifact\n'
+assert (data / 'desktop/shared.md').read_text() == 'Shared desktop artifact\n'
+print('Worker removed from Compose, Context Intelligence, Persona Workshop and the dashboard. The private archive and shared desktop survived.')
+PYTHON
 if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
   "$src/constellation_matrix" --data-dir "$data" backup
   "$src/constellation_matrix" --data-dir "$data" restore-check

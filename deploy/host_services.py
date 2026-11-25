@@ -2,6 +2,8 @@
 from pathlib import Path
 import re
 import shutil
+from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from installer import SOURCE, directory, run, save
 
@@ -43,6 +45,10 @@ def remove_units(project):
         '-dot.service': 'OpenAI Secure MCP Tunnel for Dot',
         '-root.socket': 'Private socket for approved Root operations',
         '-root.service': 'Execute operator-approved Root operations',
+        '-roster.socket': 'Private socket for approved Office roster changes',
+        '-roster@.service': 'Apply an approved Office roster change',
+        '-roster-reconcile.timer': 'Resume pending Office worker retirements',
+        '-roster-reconcile.service': 'Reconcile pending Office worker retirements',
         '-monitor.service': 'Constellation VPS resource collector',
         '-stack.service': 'Private Matrix Constellation deployment',
     }
@@ -60,15 +66,89 @@ def remove_units(project):
             enabled_services.append(path)
         else:
             static_services.append(path)
-    for action, targets in ((('disable', '--now'), triggers), (('stop',), static_services),
+    for action, targets in ((('disable', '--now'), triggers),
+                            (('stop',), [path for path in static_services if not path.name.endswith('@.service')]),
                             (('disable', '--now'), enabled_services)):
         if targets:
             run('systemctl', *action, *(path.name for path in targets))
+    if any(path.name == project + '-roster@.service' for path in static_services):
+        run('systemctl', 'stop', project + '-roster@*.service')
     installed = triggers + static_services + enabled_services
     if installed:
         for path in installed:
             path.unlink()
         run('systemctl', 'daemon-reload')
+
+
+def stage_roster_runtime(data):
+    # Socket activation grants root. Use the version installed by the operator
+    # even if the original checkout is later edited by an unprivileged user.
+    host = data / 'host'
+    directory(host)
+    runtime = host / ('roster-runtime-' + uuid4().hex[:12])
+    ignored = shutil.ignore_patterns('.git', 'node_modules', '__pycache__', '.env*', '.pytest_cache')
+
+    def exclude(path, names):
+        return ignored(path, names) | {name for name in names if (Path(path) / name).is_symlink()}
+
+    with TemporaryDirectory(dir=host) as workspace:
+        source = Path(workspace) / 'runtime'
+        directory(source)
+        for name in ('deploy', 'agents', 'integrations', 'dashboard'):
+            shutil.copytree(SOURCE / name, source / name, ignore=exclude)
+        shutil.copyfile(SOURCE / '.dockerignore', source / '.dockerignore')
+        source.rename(runtime)
+    return runtime
+
+
+def roster_units(settings, data):
+    deployment = safe_path(data)
+    source = safe_path(stage_roster_runtime(data))
+    name = settings['project'] + '-roster'
+    command = f'/usr/bin/python3 -B {source}/deploy/roster_broker.py {deployment}'
+    unit(name + '.socket', f'''[Unit]
+Description=Private socket for approved Office roster changes
+[Socket]
+ListenStream=/run/{name}.sock
+Accept=yes
+SocketMode=0660
+SocketGroup=991
+RemoveOnStop=yes
+[Install]
+WantedBy=sockets.target
+''')
+    unit(name + '@.service', f'''[Unit]
+Description=Apply an approved Office roster change
+After=docker.service
+Requires=docker.service
+[Service]
+ExecStart={command}
+StandardInput=socket
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+NoNewPrivileges=yes
+''')
+    unit(name + '-reconcile.service', f'''[Unit]
+Description=Reconcile pending Office worker retirements
+After=docker.service {settings['project']}-stack.service
+Requires=docker.service
+[Service]
+Type=oneshot
+ExecStart={command} reconcile
+UMask=0077
+NoNewPrivileges=yes
+''')
+    unit(name + '-reconcile.timer', f'''[Unit]
+Description=Resume pending Office worker retirements
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=30s
+[Install]
+WantedBy=timers.target
+''')
+    run('systemctl', 'daemon-reload')
+    run('systemctl', 'enable', '--now', name + '.socket', name + '-reconcile.timer')
 
 
 def enable_telegram_units(settings, data):
@@ -187,3 +267,5 @@ UMask=0077
     run('systemctl', 'start', 'matrix-workload.slice')
     if broker:
         run('systemctl', 'enable', '--now', project + '-root.socket')
+    if settings.get('roster_management'):
+        roster_units(settings, data)

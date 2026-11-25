@@ -1,5 +1,6 @@
 """Compose topology generated from the operator's configuration and registry."""
 from pathlib import Path
+from shlex import quote
 
 SOURCE = Path(__file__).resolve().parent.parent
 CONNECTOR = 'constellation-office-connector:0.22.17'
@@ -123,6 +124,13 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                 volume(data / 'context' / f'{key}.token', '/writer-token', True),
                 volume(data / 'context/observation-reader.token', '/reader-token', True),
             ]
+            if settings.get('roster_management'):
+                socket = volume(f"/run/{settings['project']}-roster.sock", '/run/office-roster.sock', True)
+                socket['bind'] = {'create_host_path': False}
+                worker['volumes'] += [socket, volume(data / 'roster/bridge-key', '/roster-key', True)]
+                worker['environment']['ROSTER_MANAGEMENT'] = 'true'
+                worker['environment']['ROSTER_CONFIGURE_COMMAND'] = (
+                    f'sudo ./constellation_matrix --data-dir {quote(str(data))} agent configure')
         elif key == 'root':
             worker.update(user='992:992', command=['node', '/app/root/agent.mjs'],
                           healthcheck=health('test', '-s', '/state/synced'))

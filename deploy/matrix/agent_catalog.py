@@ -89,8 +89,10 @@ def document(registry, inventory, server_name, now):
         default = 'Unavailable' if host == registry['local_server'] else 'Registered'
         active = entry.get('active', True)
         status = current.get('status', default) if active else 'Sign-in required'
+        if entry.get('retirement'):
+            status = 'Retiring'
         result.append(dict(key=key, id=f'@{key}:{server_name}', name=entry['name'], server=host,
-                           status=status, active=active,
+                           status=status, active=active, placement=entry.get('placement', 'local'),
                            model=amplifier.get('model', current.get('model', entry.get('model'))),
                            effort=amplifier.get('effort', current.get('effort', entry.get('effort'))),
                            **profile(entry['profile'])))

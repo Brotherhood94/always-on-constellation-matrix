@@ -131,3 +131,27 @@ def remember_remote(data, registry, key, origin, token_file, ca_file):
     if ca_file:
         value['ca_pem'] = ca_file.read_text()
     save(home / f'{key}.json', value)
+
+
+def disconnect(data, key):
+    from installer import compose, load, save
+
+    home = data / 'workshop-management'
+    mappings = home / 'targets.json'
+    saved = load(mappings) if mappings.exists() else {}
+    previous = saved.get(key)
+    if previous:
+        target = str(UUID(previous['target']))
+        container = compose(data, '--profile', 'agents', 'ps', '-q', 'persona-workshop',
+                            capture_output=True, text=True).stdout.strip()
+        if not container:
+            raise ValueError('Start Persona Workshop to complete worker retirement')
+        matches = [row for row in api(container, 'GET', TARGETS)['items'] if row['id'] == target]
+        if matches:
+            item = matches[0]
+            if item['agent_id'] != previous['instance'] or item['url'] != f'https://engine-{key}:19443':
+                raise ValueError('The Workshop target no longer matches this worker')
+            api(container, 'DELETE', f'{TARGETS}/{target}')
+        del saved[key]
+        save(mappings, saved)
+    (home / f'{key}.token').unlink(missing_ok=True)

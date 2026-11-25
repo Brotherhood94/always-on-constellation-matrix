@@ -40,6 +40,8 @@ docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
   docker run --rm --network "$name" --user 0:0 --entrypoint node \
     --tmpfs /welcome -v "$src/agents/connector/welcome.mjs:/app/welcome.mjs:ro" \
+    -v "$src/integrations/chief-of-staff:/app/chief-of-staff:ro" \
+    -v "$src/deploy/retire-worker.sql:/app/retire-worker.sql:ro" \
     -v "$src/deploy/matrix/bot:/app/ops:ro" -v "$src/tests/operations-fixture.mjs:/app/operations.mjs:ro" \
     constellation-office-connector:0.22.17 /app/operations.mjs
 fi

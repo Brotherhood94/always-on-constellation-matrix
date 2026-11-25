@@ -150,7 +150,9 @@ The installer enables startup at boot. Docker restarts application containers, T
 | Task | Start here |
 | --- | --- |
 | Check the stack | Run `./constellation_matrix status` for the latest dashboard snapshot, or use **Agents → VPS Alerts → Pinned messages** to open the dashboard or Context Intelligence. |
-| Add an agent | Run `sudo ./constellation_matrix agent add --profile /path/to/agent.json`. See [agent profiles and remote workers](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
+| Add a local Office worker | Run `sudo ./constellation_matrix agent add --profile /path/to/agent.json --configure`. This opens native Amplifier sign-in after provisioning. See [agent profiles](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
+| Retire a local Office worker | Run `sudo ./constellation_matrix agent remove <id>` to finish accepted work, revoke access, and archive the workspace. [Retirement](docs/runbook.md#retire-a-worker) |
+| Manage the Office roster from Element | Enable `sudo ./constellation_matrix agent management enable` on the VPS. Send `hire` or `retire` in Chief of Staff’s DM and approve the exact proposal. [Chief of Staff approval](docs/chief-of-staff.md#hire-or-retire-an-office-worker) |
 | Review how the team works | Send `review team` in the [Chief of Staff DM](docs/chief-of-staff.md) for proposals backed by Office evidence. |
 | Approve maintenance | Review the exact operation and vote in the private [Root Operations chat](integrations/root/README.md). |
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
