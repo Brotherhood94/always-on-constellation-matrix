@@ -234,24 +234,48 @@ class InstallerTest(unittest.TestCase):
         with redirect_stdout(output):
             show_element_setup(self.settings)
         rendered = output.getvalue()
+        self.assertIn('Constellation workspace', rendered)
+        self.assertNotIn('\x1b[', rendered)
         self.assertIn('https://element.io/download', rendered)
-        self.assertIn('choose Sign in on the welcome screen', rendered)
-        self.assertIn('choose Edit next to Account provider', rendered)
-        self.assertIn('Choose your account provider, enter the value below and select Continue.\n'
-                      '   Other account provider: https://fixture.test', rendered)
-        self.assertIn('check that Account provider shows fixture.test', rendered)
-        self.assertIn('Enter operator in Username.', rendered)
-        self.assertIn('In Password, enter the Matrix operator password from setup.', rendered)
-        self.assertIn('Select Sign in.', rendered)
+        self.assertIn('choose Sign in, then Edit next to Account provider', rendered)
+        self.assertIn('Other account provider is the address of your Matrix homeserver.', rendered)
+        self.assertIn('Other account provider: https://fixture.test', rendered)
+        self.assertIn('Username: operator', rendered)
+        self.assertIn('Your Matrix operator password from setup', rendered)
         self.assertIn('Agents → Office', rendered)
         self.assertIn('Tailscale', rendered)
         self.assertIn('Agents → VPS Alerts → Pinned messages', rendered)
         self.assertIn(self.settings['dashboard_url'], rendered)
         self.assertIn(self.settings['context_url'], rendered)
+        self.assertIn('Username: neo4j', rendered)
+        self.assertIn('sudo cat -- /srv/constellation-matrix/context/neo4j-password', rendered)
         output = StringIO()
         with redirect_stdout(output):
             show_element_setup({**self.settings, 'tailscale': False})
         self.assertNotIn('Tailscale', output.getvalue())
+
+    def test_setup_guide_prints_custom_graph_password_command_without_disclosing_password(self):
+        with TemporaryDirectory() as work:
+            data = Path(work).resolve() / 'fixture workspace'
+            (data / 'context').mkdir(parents=True)
+            save(data / 'settings.json', self.settings)
+            (data / 'context/neo4j-password').write_text('synthetic-graph-password')
+            command = ['constellation_matrix', '--data-dir', str(data), 'setup-guide']
+            output = StringIO()
+            with patch('installer.os.geteuid', return_value=0), patch('sys.argv', command), redirect_stdout(output):
+                main()
+            self.assertIn(f"sudo cat -- '{data}/context/neo4j-password'", output.getvalue())
+            self.assertNotIn('synthetic-graph-password', output.getvalue())
+
+    def test_setup_guide_uses_color_only_when_enabled(self):
+        for environment, colored in [({'TERM': 'xterm'}, True), ({'TERM': 'dumb'}, False),
+                                     ({'TERM': 'xterm', 'NO_COLOR': ''}, False)]:
+            with self.subTest(environment=environment):
+                output = StringIO()
+                with patch.dict('os.environ', environment, clear=True), \
+                        patch.object(output, 'isatty', return_value=True), redirect_stdout(output):
+                    show_element_setup(self.settings)
+                self.assertEqual('\x1b[1;36m' in output.getvalue(), colored)
 
     def test_last_local_agent_configuration_prints_element_setup(self):
         self.registry['agents']['chief-of-staff']['active'] = True
@@ -274,12 +298,13 @@ class InstallerTest(unittest.TestCase):
                 earlier = StringIO()
                 with patch('sys.argv', [*command, 'manager']), redirect_stdout(earlier):
                     main()
-                self.assertNotIn('Connect to your workspace in Element Desktop', earlier.getvalue())
+                self.assertNotIn('Constellation workspace', earlier.getvalue())
 
                 final = StringIO()
                 with patch('sys.argv', [*command, 'coder']), redirect_stdout(final):
                     main()
-                self.assertIn('Connect to your workspace in Element Desktop', final.getvalue())
+                self.assertIn('Constellation workspace', final.getvalue())
+                self.assertIn(f'{data}/context/neo4j-password', final.getvalue())
 
     def test_legacy_connection_config_preserves_existing_agent_identity(self):
         raw = dict(self.raw)

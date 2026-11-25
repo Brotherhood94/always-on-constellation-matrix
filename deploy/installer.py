@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+from shlex import quote
 import stat
 import subprocess
 import sys
@@ -151,7 +152,6 @@ def normalized(raw, presets):
 
 def env_write(data, values):
     # The Telegram operator tools use an explicitly exported, root-owned dotenv.
-    from shlex import quote
     save(data / '.env', ''.join(f'{key}={quote(str(value))}\n' for key, value in values.items()))
 
 
@@ -525,27 +525,31 @@ def interactive(presets, saved):
     return raw
 
 
-def show_element_setup(settings):
+def show_element_setup(settings, data=DATA):
     server = settings['server_name']
-    print()
-    print('Connect to your workspace in Element Desktop')
-    print('1. Download and install Element Desktop on your computer.')
-    print('   https://element.io/download')
+    color = sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and 'NO_COLOR' not in os.environ
+    accent, reset = ('\x1b[1;36m', '\x1b[0m') if color else ('', '')
+    print(f'\n{accent}━━  Constellation workspace  ━━{reset}')
+    print(f'\n{accent}Element Desktop{reset}')
+    print('  Download    https://element.io/download')
     if settings['tailscale']:
-        print('   Connect that device to your Tailscale network before signing in.')
-    print('2. Open Element Desktop and choose Sign in on the welcome screen.')
-    print('3. On the Sign in screen, choose Edit next to Account provider.')
-    print('4. In Choose your account provider, enter the value below and select Continue.')
-    print(f'   Other account provider: https://{server}')
-    print(f'5. Back on the Sign in screen, check that Account provider shows {server}.')
-    print(f"   Enter {settings['owner']} in Username.")
-    print('   In Password, enter the Matrix operator password from setup.')
-    print('   Select Sign in.')
-    print('6. In the left sidebar, open Agents → Office to work with the agents.')
-    print('   Open Agents → VPS Alerts → Pinned messages for the workspace shortcuts.')
-    print()
-    print('Dashboard: ' + settings['dashboard_url'])
-    print('Context Intelligence: ' + settings['context_url'])
+        print('  Connect this computer to Tailscale before opening the workspace links.')
+    print('  Open Element Desktop, choose Sign in, then Edit next to Account provider.')
+    print('  Other account provider is the address of your Matrix homeserver.')
+    print(f'  Other account provider: https://{server}')
+    print('  Select Continue, then enter the credentials below and select Sign in.')
+    print(f"  Username: {settings['owner']}")
+    print('  Password: Your Matrix operator password from setup')
+    print('  Open Agents → Office in the left sidebar.')
+    print('\n' + accent + 'Dashboard' + reset)
+    print('  ' + settings['dashboard_url'])
+    print(f'\n{accent}Context Intelligence · Neo4j Browser{reset}')
+    print('  ' + settings['context_url'])
+    print('  Username: neo4j')
+    print('  Password: Run this command on the server and paste the result.')
+    print(f"    sudo cat -- {quote(str(data / 'context/neo4j-password'))}")
+    print('  Select Connect in Neo4j Browser.')
+    print('\n  Find both links in Agents → VPS Alerts → Pinned messages.\n')
 
 
 def install(data, args):
@@ -615,7 +619,7 @@ def install(data, args):
     for key, entry in registry['agents'].items():
         if entry['placement'] == 'remote' and not entry['active']:
             print(f'Agent {key} awaits remote setup.')
-    show_element_setup(settings)
+    show_element_setup(settings, data)
 
 
 def agent_add(data, args):
@@ -796,6 +800,7 @@ def main():
     confirm.add_argument('--receipt', type=Path, required=True)
     status = commands.add_parser('status', help='Read the dashboard snapshots')
     status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services')
+    commands.add_parser('setup-guide', help='Show the Element, dashboard, and graph sign-in details')
     commands.add_parser('uninstall', help='Remove workspace services and retain deployment data')
     commands.add_parser('backup')
     commands.add_parser('restore-check')
@@ -829,6 +834,8 @@ def main():
         parser.error('Use a separate directory for standard Docker. This directory contains an older rootless deployment')
     if args.command == 'install':
         install(data, args)
+    elif args.command == 'setup-guide':
+        show_element_setup(load(data / 'settings.json'), data)
     elif args.command == 'uninstall':
         from uninstall import uninstall
         uninstall(data)
@@ -838,7 +845,7 @@ def main():
         else:
             agent_sign_in(data, args.key)
             if not pending_local_agents(load(data / 'agents.json')):
-                show_element_setup(load(data / 'settings.json'))
+                show_element_setup(load(data / 'settings.json'), data)
     elif args.command == 'remote':
         from remote import execute
         execute(data, args)

@@ -42,19 +42,33 @@ cp "$data/rooms.json" "$work/initial-rooms.json"
 cmp "$work/initial-rooms.json" "$data/rooms.json"
 graph=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["neo4j_port"])' "$data/settings.json")
 python3 - "$graph" <<'PYTHON'
+from gzip import decompress
+import re
 from time import sleep
 import sys
-from urllib.request import urlopen
+from urllib.parse import urljoin
+from urllib.request import Request, urlopen
 
+browser = f'http://127.0.0.1:{sys.argv[1]}/browser/'
 for attempt in range(12):
     try:
-        with urlopen(f'http://127.0.0.1:{sys.argv[1]}/browser/', timeout=5) as response:
+        with urlopen(browser, timeout=5) as response:
             assert response.status == 200 and response.headers.get_content_type() == 'text/html'
+            html = response.read().decode()
         break
     except OSError:
         if attempt == 11:
             raise
         sleep(1)
+
+script = re.search(r'<script\b[^>]*src="(\./assets/[^"]+\.js)"', html)
+assert script, 'Neo4j Browser did not advertise its entry script'
+asset = urljoin(browser, script[1])
+with urlopen(Request(asset, headers={'Accept-Encoding': 'identity'}), timeout=5) as response:
+    original = response.read()
+with urlopen(Request(asset, headers={'Accept-Encoding': 'gzip'}), timeout=5) as response:
+    assert response.headers.get('Content-Encoding') == 'gzip', 'Neo4j Browser asset was not compressed'
+    assert decompress(response.read()) == original
 PYTHON
 printf '%s\n' 'Clean coordinator install, rerun and graph browser proxy verified.'
 cat > "$work/worker.json" <<'JSON'

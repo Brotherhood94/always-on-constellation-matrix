@@ -34,11 +34,21 @@ The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 
 
 1. Download and install Element Desktop on your computer. If you selected Tailscale Serve, connect that computer to your tailnet. [Download Element](https://element.io/download)
 2. Open Element Desktop and choose **Sign in** on the welcome screen. On the sign-in page, click **Edit** next to **Account provider**.
-3. In **Choose your account provider**, paste the HTTPS homeserver URL printed by the installer into **Other account provider** and select **Continue**.
+3. In **Choose your account provider**, paste the installer’s HTTPS Matrix homeserver URL into **Other account provider** and select **Continue**.
 4. Back on the sign-in page, confirm **Account provider** matches your homeserver. Enter your Matrix operator credentials in **Username** and **Password**, then select **Sign in**. [Element onboarding](https://docs.element.io/latest/element-support/quick-start-guide/onboarding/)
 5. In the left sidebar, open **Agents → Office**. The Space also links VPS Alerts and the private agent chats you selected. Open **Agents → VPS Alerts → Pinned messages** for the dashboard and Context Intelligence shortcuts. The monitor publishes them once it sees the operator in VPS Alerts.
 
-In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view. Sign in to Neo4j Browser as `neo4j` using the deployment’s local `context/neo4j-password` file.
+In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view.
+
+## Sign in to Context Intelligence
+
+Open **Context Intelligence** from the dashboard or VPS Alerts to launch Neo4j Browser. Enter `neo4j` in **Username**. Retrieve the generated password on the server, paste it into **Password**, and select **Connect**.
+
+```sh
+sudo cat -- /srv/constellation-matrix/context/neo4j-password
+```
+
+Run `sudo ./constellation_matrix setup-guide` to see the sign-in links and password-file command for your deployment. Pass the same `--data-dir` used during installation if you changed the default.
 
 ## Boot and service placement
 
