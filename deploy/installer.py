@@ -833,7 +833,11 @@ def main():
     status = commands.add_parser('status', help='Read the dashboard snapshots')
     status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services')
     commands.add_parser('setup-guide', help='Show workspace sign-in and integration setup')
-    commands.add_parser('uninstall', help='Remove workspace services and retain deployment data')
+    removal = commands.add_parser('uninstall', help='Remove workspace services, with optional data deletion')
+    removal.add_argument('--data-dir', type=Path, default=argparse.SUPPRESS,
+                         help='Deployment data directory, defaults to /srv/constellation-matrix.')
+    removal.add_argument('--purge', action='store_true',
+                         help='Permanently delete the deployment data, backups, and project volumes.')
     commands.add_parser('backup')
     commands.add_parser('restore-check')
     commands.add_parser('telegram').add_argument('arguments', nargs=argparse.REMAINDER)
@@ -870,7 +874,7 @@ def main():
         show_element_setup(load(data / 'settings.json'), data)
     elif args.command == 'uninstall':
         from uninstall import uninstall
-        uninstall(data)
+        uninstall(data, purge=args.purge)
     elif args.command == 'agent':
         if args.action == 'add':
             agent_add(data, args)

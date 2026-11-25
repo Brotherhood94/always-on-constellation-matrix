@@ -46,14 +46,26 @@ def remove_units(project):
         '-monitor.service': 'Constellation VPS resource collector',
         '-stack.service': 'Private Matrix Constellation deployment',
     }
-    installed = []
+    triggers, enabled_services, static_services = [], [], []
     for suffix, description in descriptions.items():
         path = UNITS / (project + suffix)
-        if (path.is_file() and not path.is_symlink()
-                and f'Description={description}' in path.read_text().splitlines()):
-            installed.append(path)
+        if path.is_symlink() or not path.is_file():
+            continue
+        lines = path.read_text().splitlines()
+        if f'Description={description}' not in lines:
+            continue
+        if path.suffix in ('.timer', '.socket'):
+            triggers.append(path)
+        elif '[Install]' in lines:
+            enabled_services.append(path)
+        else:
+            static_services.append(path)
+    for action, targets in ((('disable', '--now'), triggers), (('stop',), static_services),
+                            (('disable', '--now'), enabled_services)):
+        if targets:
+            run('systemctl', *action, *(path.name for path in targets))
+    installed = triggers + static_services + enabled_services
     if installed:
-        run('systemctl', 'disable', '--now', *(path.name for path in installed))
         for path in installed:
             path.unlink()
         run('systemctl', 'daemon-reload')

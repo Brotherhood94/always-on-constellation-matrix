@@ -146,9 +146,17 @@ For a fresh live cutover, first test a separate installation with a different pr
 ## Uninstall
 
 ```sh
-sudo ./constellation_matrix uninstall
+sudo ./uninstall.sh
 ```
 
-Pass the original `--data-dir` before `uninstall` for a separate workspace. This stops and removes the selected Compose projects, disables their installed systemd units, and removes matching Tailscale Serve routes. It keeps the deployment directory, Matrix state, agent workspaces, and encrypted backups for recovery. A reinstall using the same configuration can reuse that state. Reconnect optional integrations through their respective setup commands.
+This removes the workspace's Docker containers, systemd units, and matching Tailscale Serve routes. It keeps the deployment directory, Matrix state, agent workspaces, and encrypted backups for recovery. Use `--data-dir /path/to/deployment` if you installed into a custom directory.
 
-For a remote worker, run the same uninstall command on the worker with its own data directory. Then unmount its SSHFS desktop and remove its mount entry if you created one. Remove the worker's desktop key and revoke its access when retiring it permanently.
+For a completely fresh setup, run:
+
+```sh
+sudo ./uninstall.sh --purge
+```
+
+`--purge` permanently deletes the selected deployment directory and its Docker volumes. This includes Matrix rooms and accounts, provider credentials, agent workspaces, Context Intelligence, Telegram bindings, and backups stored in that directory. Run the installer again to create the new workspace.
+
+For a remote worker, run the script on the worker with its own data directory. Unmount any SSHFS desktop inside that directory before using `--purge`. Remove the worker's mount entry and revoke its desktop key when retiring it permanently.

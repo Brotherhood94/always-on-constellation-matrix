@@ -150,6 +150,6 @@ The installer enables startup at boot. Docker restarts application containers, T
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
-| Uninstall | Run `sudo ./constellation_matrix uninstall` to remove workspace services and keep the data and backups. [Uninstall](docs/runbook.md#uninstall) |
+| Uninstall | Run `sudo ./uninstall.sh` to remove workspace services and keep the data. Use `--purge` for a fresh setup. [Uninstall](docs/runbook.md#uninstall) |
 
 Built on [Microsoft Constellation](https://github.com/microsoft/amplifier-constellation) and [Amplifier](https://github.com/microsoft/amplifier).

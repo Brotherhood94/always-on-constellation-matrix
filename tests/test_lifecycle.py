@@ -59,7 +59,14 @@ class LifecycleTest(TestCase):
                 self.assertFalse((unit_dir / 'fixture-telegram-backup.timer').exists())
             run.assert_any_call('systemctl', 'enable', '--now', 'fixture-root.socket')
             run.assert_any_call('systemctl', 'enable', '--now', 'fixture-telegram-backup.timer', 'fixture-telegram-metrics.timer')
-            self.assertEqual(sum('disable' in command.args for command in run.call_args_list), 1)
+            self.assertEqual(run.call_args_list[-4:], [
+                call('systemctl', 'disable', '--now', 'fixture-telegram-backup.timer',
+                     'fixture-telegram-metrics.timer', 'fixture-backup.timer', 'fixture-root.socket'),
+                call('systemctl', 'stop', 'fixture-telegram-backup.service', 'fixture-telegram-metrics.service',
+                     'fixture-backup.service', 'fixture-root.service'),
+                call('systemctl', 'disable', '--now', 'fixture-monitor.service', 'fixture-stack.service'),
+                call('systemctl', 'daemon-reload'),
+            ])
 
     def test_dot_tunnel_stays_a_boot_enabled_host_service(self):
         with TemporaryDirectory() as work, patch('dot.run') as run, \
@@ -99,6 +106,52 @@ class LifecycleTest(TestCase):
             with patch('uninstall.remove_units') as units, self.assertRaisesRegex(ValueError, 'does not match'):
                 uninstall(data)
             units.assert_not_called()
+
+    def test_purge_removes_the_deployment_and_scoped_leftover_resources(self):
+        with TemporaryDirectory() as work:
+            root = Path(work).resolve()
+            data = root / 'workspace'
+            data.mkdir()
+            save(data / 'settings.json', {'project': 'fixture', 'server_name': 'fixture.test'})
+            save(data / 'agents.json', {'local_server': 'fixture.test', 'agents': {}})
+            save(data / 'compose.yaml', {'name': 'fixture'})
+            outside = root / 'telegram-api.json'
+            outside.touch()
+            mounts = root / 'mountinfo'
+            mounts.write_text('1 0 0:1 / / rw - tmpfs tmpfs rw\n')
+
+            with patch('uninstall.MOUNT_INFO', mounts), patch('uninstall.compose') as compose, \
+                 patch('uninstall.remove_units'), patch('uninstall.remove_workspace'), \
+                 patch('uninstall.run') as run, patch('uninstall.command_output') as listing:
+                listing.side_effect = ['leftover-container', 'leftover-volume', 'leftover-network', *([''] * 6)]
+                uninstall(data, purge=True)
+                uninstall(data, purge=True)
+
+            compose.assert_called_once_with(data, '--profile', 'agents', 'down', '--remove-orphans', '--volumes')
+            self.assertEqual(run.call_args_list, [
+                call('docker', 'rm', '--force', '--volumes', 'leftover-container'),
+                call('docker', 'volume', 'rm', 'leftover-volume'),
+                call('docker', 'network', 'rm', 'leftover-network'),
+            ])
+            for project in ('fixture', 'fixture-telegram', 'fixture-desktop'):
+                listing.assert_any_call('docker', 'ps', '-aq', '--filter', f'label=com.docker.compose.project={project}')
+            self.assertTrue(outside.is_file())
+            self.assertFalse(data.exists())
+
+    def test_purge_preserves_mounted_data(self):
+        with TemporaryDirectory() as work:
+            root = Path(work).resolve()
+            data = root / 'workspace'
+            desktop = data / 'shared desktop'
+            desktop.mkdir(parents=True)
+            mount = str(desktop).replace(' ', r'\040')
+            mounts = root / 'mountinfo'
+            mounts.write_text(f'2 1 0:1 / {mount} rw - tmpfs tmpfs rw\n')
+            with patch('uninstall.MOUNT_INFO', mounts), patch('uninstall.compose') as compose, \
+                 self.assertRaisesRegex(ValueError, 'Unmount .*shared desktop'):
+                uninstall(data, purge=True)
+            compose.assert_not_called()
+            self.assertTrue(desktop.is_dir())
 
     def test_tailnet_removal_matches_targets_and_keeps_neighbor_paths(self):
         config = {'Web': {'fixture.test:8443': {'Handlers': {

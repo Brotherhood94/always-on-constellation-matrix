@@ -148,7 +148,7 @@ if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
 fi
 
 project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' "$data/settings.json")
-"$src/constellation_matrix" --data-dir "$data" uninstall
+"$src/uninstall.sh" --data-dir "$data"
 "$src/constellation_matrix" --data-dir "$data" uninstall
 [[ -z $(docker ps -aq --filter "label=com.docker.compose.project=$project") ]]
 [[ -z $(docker network ls -q --filter "label=com.docker.compose.project=$project") ]]
@@ -157,3 +157,8 @@ if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
   test -f "$data/backups/config"
 fi
 printf '%s\n' 'Uninstall removed the Compose project and retained rooms, data and backups.'
+"$src/uninstall.sh" --data-dir "$data" --purge
+[[ ! -e "$data" ]]
+[[ -s "$work/install.json" ]]
+[[ -z $(docker volume ls -q --filter "label=com.docker.compose.project=$project") ]]
+printf '%s\n' 'Purge removed the deployment data and project volumes.'
