@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, interactive, load, main,
-    normalized, prepare_storage, register_entry, save, tailscale_dns,
+    normalized, password, prepare_storage, register_entry, save, tailscale_dns,
 )
 from agent_catalog import document
 from compose import definition
@@ -134,6 +134,42 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(text_page(screen, 'Matrix operator username', validate, 'my-operator'), 'my-operator')
         validate.assert_called_once_with('my-operator')
         self.assertIn('Leave blank to keep my-operator.', [call.args[2] for call in screen.addnstr.call_args_list])
+
+    def test_password_page_masks_input_and_keeps_spaces_on_retry(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        fixture = '  synthetic contraseña  '
+        screen.get_wch.side_effect = [*'short', '\n', *([curses.KEY_BACKSPACE] * 5), *fixture, '\n']
+        with patch('agent_picker.terminal_picker', side_effect=lambda render, *args, **kwargs:
+                   render(screen, *args, **kwargs)):
+            self.assertEqual(password({}), fixture)
+        rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
+        self.assertIn('Matrix operator password', rendered)
+        self.assertIn('Use an operator password of at least 12 characters', rendered)
+        self.assertIn('*' * len(fixture), rendered)
+        self.assertNotIn('short', rendered)
+        self.assertNotIn('synthetic', rendered)
+
+    def test_password_fallback_uses_getpass(self):
+        fixture = '  synthetic-password  '
+        with patch('agent_picker.terminal_picker', return_value=None), \
+             patch('agent_picker.getpass', return_value=fixture) as getpass, \
+             patch('builtins.input') as line_input:
+            self.assertEqual(password({}), fixture)
+        getpass.assert_called_once_with('Matrix operator password: ')
+        line_input.assert_not_called()
+
+    def test_password_file_bypasses_the_screen_and_requires_private_permissions(self):
+        with TemporaryDirectory() as work, patch('installer.prompt_text') as prompt:
+            path = Path(work) / 'operator-password'
+            fixture = '  synthetic-password  '
+            path.write_text(fixture + '\n')
+            path.chmod(0o600)
+            self.assertEqual(password({'owner_password_file': str(path)}), fixture)
+            path.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, 'must be private'):
+                password({'owner_password_file': str(path)})
+        prompt.assert_not_called()
 
     def test_interactive_installer_requests_username_directly(self):
         with patch('installer.choose_option', return_value='tailscale') as choose, \

@@ -4,7 +4,6 @@ import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import fcntl
-from getpass import getpass
 from hashlib import sha256
 import json
 import os
@@ -240,17 +239,22 @@ for digest, entry in config['api_keys'].items():
     up(data, 'context')
 
 
+def password_error(value):
+    if len(value) < 12:
+        return 'Use an operator password of at least 12 characters'
+    return None
+
+
 def password(settings, file=None):
     path = file or settings.get('owner_password_file')
-    if path:
-        path = Path(path)
-        if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_mode & 0o077:
-            raise ValueError('The operator password file must be private')
-        value = path.read_text().rstrip('\r\n')
-    else:
-        value = getpass('Matrix operator password: ')
-    if len(value) < 12:
-        raise ValueError('Use an operator password of at least 12 characters')
+    if not path:
+        return prompt_text('Matrix operator password', password_error, masked=True)
+    path = Path(path)
+    if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_mode & 0o077:
+        raise ValueError('The operator password file must be private')
+    value = path.read_text().rstrip('\r\n')
+    if error := password_error(value):
+        raise ValueError(error)
     return value
 
 

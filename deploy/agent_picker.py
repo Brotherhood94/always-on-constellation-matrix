@@ -1,5 +1,6 @@
 """Keyboard menus for the installer."""
 import curses
+from getpass import getpass
 import os
 import sys
 from textwrap import wrap
@@ -69,7 +70,7 @@ def choose_numbered_option(title, options, default):
         print('Choose one of the numbers above.')
 
 
-def text_page(screen, title, validate, default):
+def text_page(screen, title, validate, default, *, masked=False):
     value = ''
     cursor = 0
     error = None
@@ -86,9 +87,10 @@ def text_page(screen, title, validate, default):
         screen.addnstr(1, 0, 'Enter: continue', width - 1)
         field_width = min(65, width - 1)
         start = max(0, cursor - field_width + 1)
-        shown = value[start:start + field_width].encode('ascii', 'replace').decode('ascii')
+        visible = value[start:start + field_width]
+        shown = '*' * len(visible) if masked else visible.encode('ascii', 'replace').decode('ascii')
         screen.addnstr(3, 0, shown.ljust(field_width), field_width, curses.A_UNDERLINE)
-        messages = [f'Leave blank to keep {default}.'] if default else []
+        messages = [f'Leave blank to keep {default}.'] if default and not masked else []
         if error:
             messages.append(error)
         lines = [line for message in messages for line in wrap(message, width - 1)]
@@ -100,13 +102,14 @@ def text_page(screen, title, validate, default):
         key = screen.get_wch()
         keycode = ord(key) if isinstance(key, str) else key
         if keycode in ENTER:
-            answer = value.strip() or default
+            answer = value if masked else value.strip() or default
             error = validate(answer)
             if error is None:
                 return answer
-        elif keycode in (curses.KEY_BACKSPACE, 8, 127) and cursor:
-            value = value[:cursor - 1] + value[cursor:]
-            cursor -= 1
+        elif keycode in (curses.KEY_BACKSPACE, 8, 127):
+            if cursor:
+                value = value[:cursor - 1] + value[cursor:]
+                cursor -= 1
         elif keycode == curses.KEY_DC:
             value = value[:cursor] + value[cursor + 1:]
         elif keycode == curses.KEY_LEFT:
@@ -117,18 +120,18 @@ def text_page(screen, title, validate, default):
             cursor = 0
         elif keycode == curses.KEY_END:
             cursor = len(value)
-        elif isinstance(key, str) and key.isprintable():
+        elif isinstance(key, str) and (key.isprintable() or (masked and keycode >= 32)):
             value = value[:cursor] + key + value[cursor:]
             cursor += 1
 
 
-def prompt_text(title, validate, *, default=''):
-    answer = terminal_picker(text_page, title, validate, default)
+def prompt_text(title, validate, *, default='', masked=False):
+    answer = terminal_picker(text_page, title, validate, default, masked=masked)
     if answer is not None:
         return answer
-    prompt = f'{title} [{default}]: ' if default else f'{title}: '
+    prompt = f'{title} [{default}]: ' if default and not masked else f'{title}: '
     while True:
-        answer = input(prompt).strip() or default
+        answer = getpass(prompt) if masked else input(prompt).strip() or default
         error = validate(answer)
         if error is None:
             return answer
