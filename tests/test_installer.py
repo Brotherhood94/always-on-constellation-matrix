@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
-from agent_picker import checklist, choose_option, menu, select_agents, text_page
+from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, interactive, load, main,
     normalized, prepare_storage, register_entry, save, tailscale_dns,
@@ -42,7 +42,7 @@ class InstallerTest(unittest.TestCase):
             curses.KEY_UP, ord('\n'), curses.KEY_DOWN, curses.KEY_DOWN, ord('\n'),
             *([curses.KEY_DOWN] * 4), ord('\n'),
         ]
-        self.assertEqual(checklist(screen, self.presets), ['reviewer', 'manager'])
+        self.assertEqual(agent_checklist(screen, self.presets), ['reviewer', 'manager'])
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
         self.assertIn('[x] Coder', rendered)
         self.assertIn('Implement and test code changes.', rendered)
@@ -57,10 +57,36 @@ class InstallerTest(unittest.TestCase):
             curses.KEY_UP, curses.KEY_UP, curses.KEY_ENTER, curses.KEY_ENTER,
             curses.KEY_DOWN, curses.KEY_DOWN, curses.KEY_ENTER,
         ]
-        self.assertEqual(checklist(screen, self.presets), [])
+        self.assertEqual(agent_checklist(screen, self.presets), [])
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
         self.assertIn('[x] Remote Worker', rendered)
         self.assertIn('Runs: remote', rendered)
+
+    def test_integration_checklist_opens_with_all_selected_and_done_highlighted(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        screen.getch.return_value = ord('\n')
+        with patch('agent_picker.terminal_picker', side_effect=lambda render, *args, **kwargs:
+                   render(screen, *args, **kwargs)):
+            self.assertEqual(select_integrations(['telegram', 'dot']), ['element', 'telegram', 'dot'])
+        rendered = [call.args[2] for call in screen.addnstr.call_args_list]
+        self.assertIn('  [x] Element workspace (required)', rendered)
+        self.assertIn('  [x] Telegram', rendered)
+        self.assertIn('  [x] Dot', rendered)
+        screen.addnstr.assert_any_call(7, 0, '>     Done', 79, curses.A_REVERSE)
+
+    def test_integration_checklist_toggles_optional_items_and_keeps_element(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        screen.getch.side_effect = [curses.KEY_UP, ord('\n')] * 3 + [curses.KEY_DOWN] * 3 + [ord('\n')]
+        with patch('agent_picker.terminal_picker', side_effect=lambda render, *args, **kwargs:
+                   render(screen, *args, **kwargs)):
+            self.assertEqual(select_integrations(['telegram', 'dot']), ['element'])
+
+    def test_integration_numbered_fallback_keeps_the_initial_selection(self):
+        with patch('agent_picker.terminal_picker', return_value=None), \
+             patch('builtins.input', return_value=''), redirect_stdout(StringIO()):
+            self.assertEqual(select_integrations(['telegram']), ['element', 'telegram'])
 
     def test_agent_selection_can_use_line_input_without_a_terminal(self):
         output = StringIO()
@@ -110,16 +136,16 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('Leave blank to keep my-operator.', [call.args[2] for call in screen.addnstr.call_args_list])
 
     def test_interactive_installer_requests_username_directly(self):
-        choices = ['tailscale', (True, True)]
-        options = ['Choose private access for Matrix and the dashboard', 'Choose optional integrations']
-        with patch('installer.choose_option', side_effect=choices) as choose, \
+        with patch('installer.choose_option', return_value='tailscale') as choose, \
+             patch('installer.select_integrations', return_value=['element', 'telegram', 'dot']) as integrations, \
              patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
              patch('agent_picker.terminal_picker', return_value=None), \
              patch('installer.tailscale_dns', return_value='fixture.test'), \
              patch('builtins.input', return_value='my-operator') as answer:
             settings = normalized(interactive(self.presets, {}), self.presets)
-        self.assertEqual([call.args[0] for call in choose.call_args_list], options)
+        self.assertEqual([call.args[0] for call in choose.call_args_list], ['Choose private access for Matrix and the dashboard'])
         picker.assert_called_once_with(self.presets, ())
+        integrations.assert_called_once_with(['telegram', 'dot'])
         answer.assert_called_once_with('Matrix operator username: ')
         self.assertEqual(settings['agents'], ['coder', 'reviewer'])
         self.assertNotIn('connection', settings)
@@ -129,8 +155,8 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue(settings['tailscale'] and settings['dot'] and settings['telegram'])
 
     def test_interactive_installer_supports_custom_proxy_and_operator(self):
-        choices = ['proxy', (False, False)]
-        with patch('installer.choose_option', side_effect=choices) as choose, \
+        with patch('installer.choose_option', return_value='proxy') as choose, \
+             patch('installer.select_integrations', return_value=['element']), \
              patch('installer.select_agents', return_value=[]), patch('installer.tailscale_dns', return_value=None), \
              patch('agent_picker.terminal_picker', return_value=None), \
              patch('builtins.input', side_effect=['matrix.example', '', 'Coder', 'coder', 'my-operator']) as answer, \
@@ -143,13 +169,18 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(settings['owner'], 'my-operator')
 
     def test_interactive_rerun_keeps_the_existing_operator_username(self):
-        with patch('installer.choose_option', side_effect=['tailscale', (False, False)]), \
+        with patch('installer.choose_option', return_value='tailscale'), \
+             patch('installer.select_integrations', return_value=['element', 'telegram']) as integrations, \
              patch('installer.select_agents', return_value=[]), \
              patch('agent_picker.terminal_picker', return_value=None), \
              patch('installer.tailscale_dns', return_value='fixture.test'), \
              patch('builtins.input', side_effect=['different-operator', '']) as answer, redirect_stdout(StringIO()):
-            settings = normalized(interactive(self.presets, {'owner': 'my-operator'}), self.presets)
+            saved = {'owner': 'my-operator', 'telegram': True, 'dot': False}
+            settings = normalized(interactive(self.presets, saved), self.presets)
         self.assertEqual(settings['owner'], 'my-operator')
+        integrations.assert_called_once_with(['telegram'])
+        self.assertTrue(settings['telegram'])
+        self.assertFalse(settings['dot'])
         self.assertEqual([call.args[0] for call in answer.call_args_list], ['Matrix operator username [my-operator]: '] * 2)
 
     def test_tailnet_suggestion_requires_a_running_https_node(self):

@@ -18,7 +18,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from agent_picker import choose_option, placement as agent_placement, prompt_text, select_agents
+from agent_picker import choose_option, placement as agent_placement, prompt_text, select_agents, select_integrations
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
@@ -510,16 +510,10 @@ def interactive(presets, saved):
 
     owner = prompt_text('Matrix operator username', username_error, default=saved_owner)
 
-    integrations = {
-        (False, False): 'Workspace only',
-        (True, False): 'Enable Dot',
-        (False, True): 'Enable Telegram',
-        (True, True): 'Enable Dot and Telegram',
-    }
-    dot, telegram = choose_option('Choose optional integrations', integrations,
-                                  (saved.get('dot', False), saved.get('telegram', False)))
+    initial_integrations = [name for name in ('telegram', 'dot') if saved.get(name, True)]
+    integrations = select_integrations(initial_integrations)
     raw = {**saved, 'server_name': server, 'owner': owner,
-           'agents': chosen, 'tailscale': tailnet, 'dot': dot, 'telegram': telegram}
+           'agents': chosen, 'tailscale': tailnet, 'dot': 'dot' in integrations, 'telegram': 'telegram' in integrations}
     if 'subscriptions' in raw:
         labels = raw['subscriptions']
         overrides = {key: value for key, value in labels.get('overrides', {}).items() if key in chosen}

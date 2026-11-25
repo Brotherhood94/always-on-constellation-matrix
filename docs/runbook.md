@@ -14,6 +14,8 @@ Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, s
 
 Choose the suggested Tailscale DNS name if available. On the next screen, type the Matrix username you want to use in Element and press Enter. When rerunning setup, press Enter with the field empty to keep the existing username. Enter the Matrix operator password when prompted. Terminals without full-screen support use line prompts.
 
+The workspace and integrations checklist opens with **Done** highlighted. On a fresh install, **Element workspace**, **Telegram**, and **Dot** are checked. Use the arrow keys and Enter to toggle Telegram or Dot, then choose **Done**. Element workspace is required. Reruns start with the integrations already saved for that workspace.
+
 At the end of installation, choose **Open Amplifier provider setup** to configure the local agents one at a time. Each agent runs Amplifier’s own provider manager. It offers Anthropic for Claude, OpenAI with an API key, and ChatGPT for Codex sign-in. Add or edit a provider, follow its login prompts, pick the model, and choose **Done**. Amplifier keeps credentials and settings in that Instance’s private persistent home. Constellation activates the agent after its request and session-resume checks pass. [Amplifier provider setup](https://github.com/microsoft/amplifier-app-cli#readme)
 
 Run `agent configure` later to continue with pending agents, or pass an agent ID to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow. Remote workers configure Amplifier during enrollment on their own host.
