@@ -526,16 +526,23 @@ def interactive(presets, saved):
 
 
 def show_element_setup(settings):
-    homeserver = 'https://' + settings['server_name']
+    server = settings['server_name']
     print()
-    print('Connect to your workspace in Element')
-    print('1. Download Element Desktop on your computer from https://element.io/download')
+    print('Connect to your workspace in Element Desktop')
+    print('1. Download and install Element Desktop on your computer.')
+    print('   https://element.io/download')
     if settings['tailscale']:
         print('   Connect that device to your Tailscale network before signing in.')
-    print('2. Open Element, choose Sign in, then Edit next to the homeserver.')
-    print(f'   Enter {homeserver} as your custom homeserver.')
-    print(f"3. Sign in as {settings['owner']} with the Matrix password you chose during setup.")
-    print('4. Open Agents → Office to work with the agents.')
+    print('2. Open Element Desktop and choose Sign in on the welcome screen.')
+    print('3. On the Sign in screen, choose Edit next to Account provider.')
+    print('4. In Choose your account provider, paste this URL into Other account provider.')
+    print(f'   https://{server}')
+    print('   Select Continue.')
+    print(f'5. Back on the Sign in screen, check that Account provider shows {server}.')
+    print(f"   Enter {settings['owner']} in Username.")
+    print('   In Password, enter the Matrix operator password from setup.')
+    print('   Select Sign in.')
+    print('6. In the left sidebar, open Agents → Office to work with the agents.')
     print('   Open Agents → VPS Alerts → Pinned messages for the workspace shortcuts.')
     print()
     print('Dashboard: ' + settings['dashboard_url'])
@@ -831,6 +838,8 @@ def main():
             agent_add(data, args)
         else:
             agent_sign_in(data, args.key)
+            if not pending_local_agents(load(data / 'agents.json')):
+                show_element_setup(load(data / 'settings.json'))
     elif args.command == 'remote':
         from remote import execute
         execute(data, args)

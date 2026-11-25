@@ -235,8 +235,15 @@ class InstallerTest(unittest.TestCase):
             show_element_setup(self.settings)
         rendered = output.getvalue()
         self.assertIn('https://element.io/download', rendered)
-        self.assertIn('https://fixture.test as your custom homeserver', rendered)
-        self.assertIn('Sign in as operator', rendered)
+        self.assertIn('choose Sign in on the welcome screen', rendered)
+        self.assertIn('choose Edit next to Account provider', rendered)
+        self.assertIn('Choose your account provider, paste this URL into Other account provider.\n'
+                      '   https://fixture.test\n   Select Continue.', rendered)
+        self.assertIn('check that Account provider shows fixture.test', rendered)
+        self.assertIn('Enter operator in Username.', rendered)
+        self.assertIn('In Password, enter the Matrix operator password from setup.', rendered)
+        self.assertIn('Select Sign in.', rendered)
+        self.assertIn('Agents → Office', rendered)
         self.assertIn('Tailscale', rendered)
         self.assertIn('Agents → VPS Alerts → Pinned messages', rendered)
         self.assertIn(self.settings['dashboard_url'], rendered)
@@ -245,6 +252,34 @@ class InstallerTest(unittest.TestCase):
         with redirect_stdout(output):
             show_element_setup({**self.settings, 'tailscale': False})
         self.assertNotIn('Tailscale', output.getvalue())
+
+    def test_last_local_agent_configuration_prints_element_setup(self):
+        self.registry['agents']['chief-of-staff']['active'] = True
+        self.registry['agents']['root']['active'] = True
+        register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
+        with TemporaryDirectory() as work:
+            data = Path(work).resolve()
+            registry_path = data / 'agents.json'
+            save(registry_path, self.registry)
+            save(data / 'settings.json', self.settings)
+
+            def activate(directory, key):
+                self.assertEqual(data, directory)
+                registry = load(registry_path)
+                registry['agents'][key]['active'] = True
+                save(registry_path, registry)
+
+            command = ['constellation_matrix', '--data-dir', work, 'agent', 'configure']
+            with patch('installer.os.geteuid', return_value=0), patch('installer.agent_sign_in', side_effect=activate):
+                earlier = StringIO()
+                with patch('sys.argv', [*command, 'manager']), redirect_stdout(earlier):
+                    main()
+                self.assertNotIn('Connect to your workspace in Element Desktop', earlier.getvalue())
+
+                final = StringIO()
+                with patch('sys.argv', [*command, 'coder']), redirect_stdout(final):
+                    main()
+                self.assertIn('Connect to your workspace in Element Desktop', final.getvalue())
 
     def test_legacy_connection_config_preserves_existing_agent_identity(self):
         raw = dict(self.raw)
