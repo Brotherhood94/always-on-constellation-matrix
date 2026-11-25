@@ -237,7 +237,8 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('Constellation workspace', rendered)
         self.assertNotIn('\x1b[', rendered)
         self.assertIn('https://element.io/download', rendered)
-        self.assertIn('choose Sign in, then Edit next to Account provider', rendered)
+        self.assertIn('Under Account provider, find the current server (usually matrix.org).\n'
+                      '  Click Edit to the right of the server name, above Continue.', rendered)
         self.assertIn('Other account provider is the address of your Matrix homeserver.', rendered)
         self.assertIn('Other account provider: https://fixture.test', rendered)
         self.assertIn('Username: operator', rendered)

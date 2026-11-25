@@ -534,7 +534,9 @@ def show_element_setup(settings, data=DATA):
     print('  Download    https://element.io/download')
     if settings['tailscale']:
         print('  Connect this computer to Tailscale before opening the workspace links.')
-    print('  Open Element Desktop, choose Sign in, then Edit next to Account provider.')
+    print('  Open Element Desktop and choose Sign in.')
+    print('  Under Account provider, find the current server (usually matrix.org).')
+    print(f'  Click {accent}Edit{reset} to the right of the server name, above Continue.')
     print('  Other account provider is the address of your Matrix homeserver.')
     print(f'  Other account provider: https://{server}')
     print('  Select Continue, then enter the credentials below and select Sign in.')

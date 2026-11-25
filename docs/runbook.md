@@ -33,7 +33,7 @@ The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 
 ## Connect in Element
 
 1. Download and install Element Desktop on your computer. If you selected Tailscale Serve, connect that computer to your tailnet. [Download Element](https://element.io/download)
-2. Open Element Desktop and choose **Sign in** on the welcome screen. On the sign-in page, click **Edit** next to **Account provider**.
+2. Open Element Desktop and choose **Sign in** on the welcome screen. Under **Account provider**, find the current server (usually `matrix.org`) and click **Edit** to its right, above **Continue**.
 3. In **Choose your account provider**, paste the installer’s HTTPS Matrix homeserver URL into **Other account provider** and select **Continue**.
 4. Back on the sign-in page, confirm **Account provider** matches your homeserver. Enter your Matrix operator credentials in **Username** and **Password**, then select **Sign in**. [Element onboarding](https://docs.element.io/latest/element-support/quick-start-guide/onboarding/)
 5. In the left sidebar, open **Agents → Office**. The Space also links VPS Alerts and the private agent chats you selected. Open **Agents → VPS Alerts → Pinned messages** for the dashboard and Context Intelligence shortcuts. The monitor publishes them once it sees the operator in VPS Alerts.
