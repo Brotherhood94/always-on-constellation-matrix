@@ -51,7 +51,7 @@ def run_amplifier(home):
 def verify(home):
     pid, terminal = pty.fork()
     if pid == 0:
-        os.environ.update(TERM='xterm-256color', COLUMNS='100', LINES='30')
+        os.environ.update(TERM='xterm-256color', COLUMNS='100', LINES='30', AGENT_NAME='Analyst Fixture')
         try:
             run_amplifier(home)
         except SystemExit as result:
@@ -77,17 +77,22 @@ def verify(home):
             if not select.select([terminal], [], [], 0.2)[0]:
                 continue
             try:
-                output.extend(os.read(terminal, 65536))
+                chunk = os.read(terminal, 65536)
             except OSError as error:
                 if error.errno != errno.EIO:
                     raise
                 break
+            if not chunk:
+                break
+            output.extend(chunk)
             if steps:
                 marker, keys, page_break = steps[0]
                 index = output.find(marker, cursor)
                 if index >= 0:
+                    page = output[cursor:index]
                     if page_break:
-                        assert b'\x1b[2J' in output[cursor:index], marker
+                        assert b'\x1b[2J' in page, marker
+                    assert b'Amplifier setup for Analyst Fixture' in page, marker
                     cursor = index + len(marker)
                     steps.pop(0)
                     os.write(terminal, keys)

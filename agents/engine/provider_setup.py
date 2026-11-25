@@ -1,4 +1,5 @@
 """Run Amplifier's own provider setup against this Instance's private home."""
+from importlib import import_module
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,26 @@ def configured_provider(home):
         raise SystemExit('Select a supported provider and model in Amplifier before activating this agent.') from None
 
 
+def setup_console():
+    from amplifier_app_cli import provider_config_utils
+    from rich.console import Console
+    from rich.text import Text
+
+    name = os.environ.get('AGENT_NAME') or os.environ.get('AGENT_USERNAME')
+    title = f'Amplifier setup for {name}' if name else 'Amplifier provider setup'
+
+    class AgentSetupConsole(Console):
+        def clear(self, home=True):
+            super().clear(home=home)
+            self.print(Text(title, style='bold'))
+            self.print()
+
+    console = AgentSetupConsole()
+    provider_config_utils.console = console
+    import_module('amplifier_app_cli.commands.provider').console = console
+    return console
+
+
 def main():
     os.umask(0o077)
     if sys.argv[1:] == ['metadata']:
@@ -61,12 +82,13 @@ def main():
     os.chdir(HOME.parent)
     # Only show providers pre-installed from the release's pinned packages.
     from amplifier_app_cli.provider_sources import DEFAULT_PROVIDER_SOURCES
-    from rich.console import Console
 
     DEFAULT_PROVIDER_SOURCES.clear()
     from amplifier_app_cli.__main__ import main as amplifier
     sys.argv[:] = ['amplifier', 'provider', 'manage', '--scope', 'global']
-    with Console().screen(hide_cursor=False):
+    console = setup_console()
+    with console.screen(hide_cursor=False):
+        console.clear()
         amplifier()
 
 
