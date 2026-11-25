@@ -14,7 +14,7 @@ Choose the suggested Tailscale DNS name if available. On the next screen, type t
 
 The workspace and integrations checklist opens with **Done** highlighted. On a fresh install, **Element workspace**, **Telegram**, and **Dot** are checked. Use the arrow keys and Enter to toggle Telegram or Dot, then choose **Done**. Element workspace is required. Reruns start with the integrations already saved for that workspace.
 
-Type a Matrix operator password of at least 12 characters. The field masks what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
+Enter a Matrix operator password of at least 12 characters, then re-enter it on the confirmation screen. Both fields mask what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
 
 Installation starts the selected local Amplifier Instances together and opens their provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup or to start sign-in after unattended provisioning.
 

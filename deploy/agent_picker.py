@@ -225,7 +225,7 @@ def agent_checklist(screen, presets, initial=()):
     def describe(key, width):
         return profile_lines(key, presets[key], width)
 
-    return checklist(screen, 'Select agents to install', labels, initial, describe=describe)
+    return checklist(screen, '🤖 Select agents to install', labels, initial, describe=describe)
 
 
 def select_agents(presets, initial=()):
@@ -234,7 +234,7 @@ def select_agents(presets, initial=()):
     selection = terminal_picker(agent_checklist, presets, initial)
     if selection is not None:
         return selection
-    print('Available agents: ' + ', '.join(presets))
+    print('🤖 Available agents: ' + ', '.join(presets))
     for key, preset in presets.items():
         print('\n'.join(profile_lines(key, preset, 79)))
         print()
@@ -242,7 +242,7 @@ def select_agents(presets, initial=()):
 
 
 def select_integrations(initial):
-    title = 'Choose workspace and integrations'
+    title = '🔌 Choose workspace and integrations'
     labels = {'element': 'Element workspace (required)', 'telegram': 'Telegram', 'dot': 'Dot'}
     selection = terminal_picker(checklist, title, labels, initial, required=('element',), focus_done=True)
     if selection is not None:

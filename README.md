@@ -119,7 +119,7 @@ On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup wi
 sudo ./constellation_matrix install
 ```
 
-Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** to confirm. Select Manager and at least one Office worker for a collaborative welcome. Choose your Matrix and Context Intelligence passwords when prompted.
+Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** to confirm. Select Manager and at least one Office worker for a collaborative welcome. Enter and confirm your Matrix and Context Intelligence passwords when prompted.
 
 The installer deploys the workspace, then opens each local agent’s Amplifier provider setup. Complete its sign-in, pick a model, and choose **Done**. After the agents pass their checks, the terminal wizard walks through Element, the dashboard, Context Intelligence, and any selected integrations. On **Finish**, it opens **Hello Collaboration** in Office once all selected agents are ready.
 

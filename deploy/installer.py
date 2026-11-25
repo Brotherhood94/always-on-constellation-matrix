@@ -251,17 +251,25 @@ def password_error(value):
     return None
 
 
-def password(settings, file=None):
+def password(settings, file=None, *, confirm=False):
     path = file or settings.get('owner_password_file')
     if not path:
-        return prompt_text(
-            'Matrix operator password', password_error, masked=True,
+        value = prompt_text(
+            '🔐 Matrix operator password', password_error, masked=True,
             notice='Save this password in a password manager before continuing. You need it to sign in to Element.',
         )
+        if confirm:
+            confirm_password('Matrix operator password', value)
+        return value
     value = read_password_file(Path(path), 'Matrix operator')
     if error := password_error(value):
         raise ValueError(error)
     return value
+
+
+def confirm_password(label, expected):
+    prompt_text(f'🔑 Confirm {label}',
+                lambda value: None if value == expected else 'Enter the same password again', masked=True)
 
 
 def read_password_file(path, label):
@@ -289,10 +297,9 @@ def prepare_graph_password(data, source, *, interactive):
 
     directory(path.parent)
     if interactive:
-        supplied = prompt_text('Context Intelligence password', validate, masked=True,
+        supplied = prompt_text('🧠 Context Intelligence password', validate, masked=True,
                                notice='Save this password for Neo4j Browser.')
-        prompt_text('Confirm Context Intelligence password',
-                    lambda value: None if value == supplied else 'Enter the same password again', masked=True)
+        confirm_password('Context Intelligence password', supplied)
     if supplied is None:
         save(path, secrets.token_hex(32) + '\n')
         return
@@ -539,10 +546,11 @@ def interactive(presets, saved):
     if dns:
         network = {'tailscale': f'Use Tailscale Serve ({dns})', **network}
     preferred = 'tailscale' if dns and saved.get('tailscale', True) else 'proxy'
-    tailnet = choose_option('Choose private access for Matrix and the dashboard', network, preferred) == 'tailscale'
+    tailnet = choose_option('🌐 Choose private access for Matrix and the dashboard', network, preferred) == 'tailscale'
     server = dns if tailnet else saved.get('server_name')
     if not server:
-        server = input('Private Matrix DNS name: ').strip()
+        server = prompt_text('🌐 Private Matrix DNS name',
+                             lambda value: None if SERVER.fullmatch(value) else 'Enter a DNS name such as matrix.example.')
 
     saved_owner = saved.get('owner', '')
 
@@ -554,7 +562,7 @@ def interactive(presets, saved):
                     'Start with a letter or digit and choose a name distinct from the agents and services.')
         return None
 
-    owner = prompt_text('Matrix operator username', username_error, default=saved_owner)
+    owner = prompt_text('👤 Matrix operator username', username_error, default=saved_owner)
 
     initial_integrations = [name for name in ('telegram', 'dot') if saved.get(name, True)]
     integrations = select_integrations(initial_integrations)
@@ -598,7 +606,7 @@ def install(data, args):
     settings = normalized(raw, presets)
     if args.config and not settings.get('owner_password_file'):
         raise ValueError('Config-file installation requires a private owner_password_file')
-    passphrase = password(settings)
+    passphrase = password(settings, confirm=not args.config)
     directory(data, 0o711)
     with operator_lock(data):
         current = load(previous) if previous.exists() else None

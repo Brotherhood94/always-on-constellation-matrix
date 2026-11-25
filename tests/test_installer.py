@@ -48,6 +48,7 @@ class InstallerTest(unittest.TestCase):
         ]
         self.assertEqual(agent_checklist(screen, self.presets), ['reviewer', 'manager'])
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
+        self.assertIn('🤖 Select agents to install', rendered)
         self.assertIn('[x] Coder', rendered)
         self.assertIn('Implement and test code changes.', rendered)
         self.assertIn('Role: coordinator', rendered)
@@ -74,6 +75,7 @@ class InstallerTest(unittest.TestCase):
                    render(screen, *args, **kwargs)):
             self.assertEqual(select_integrations(['telegram', 'dot']), ['element', 'telegram', 'dot'])
         rendered = [call.args[2] for call in screen.addnstr.call_args_list]
+        self.assertIn('🔌 Choose workspace and integrations', rendered)
         self.assertIn('  [x] Element workspace (required)', rendered)
         self.assertIn('  [x] Telegram', rendered)
         self.assertIn('  [x] Dot', rendered)
@@ -139,21 +141,27 @@ class InstallerTest(unittest.TestCase):
         validate.assert_called_once_with('my-operator')
         self.assertIn('Leave blank to keep my-operator.', [call.args[2] for call in screen.addnstr.call_args_list])
 
-    def test_password_page_masks_input_and_keeps_spaces_on_retry(self):
+    def test_matrix_password_pages_mask_input_and_retry_a_mismatched_confirmation(self):
         screen = Mock()
         screen.getmaxyx.return_value = (24, 80)
         fixture = '  synthetic contraseña  '
-        screen.get_wch.side_effect = [*'short', '\n', *([curses.KEY_BACKSPACE] * 5), *fixture, '\n']
+        screen.get_wch.side_effect = [
+            *'short', '\n', *([curses.KEY_BACKSPACE] * 5), *fixture, '\n',
+            *'mismatch', '\n', *([curses.KEY_BACKSPACE] * 8), *fixture, '\n',
+        ]
         with patch('agent_picker.terminal_picker', side_effect=lambda render, *args, **kwargs:
                    render(screen, *args, **kwargs)):
-            self.assertEqual(password({}), fixture)
+            self.assertEqual(password({}, confirm=True), fixture)
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
-        self.assertIn('Matrix operator password', rendered)
+        self.assertIn('🔐 Matrix operator password', rendered)
+        self.assertIn('🔑 Confirm Matrix operator password', rendered)
         self.assertIn('Save this password in a password manager before continuing.', rendered)
         self.assertIn('You need it to sign in to Element.', ' '.join(rendered.split()))
         self.assertIn('Use an operator password of at least 12 characters', rendered)
+        self.assertIn('Enter the same password again', rendered)
         self.assertIn('*' * len(fixture), rendered)
         self.assertNotIn('short', rendered)
+        self.assertNotIn('mismatch', rendered)
         self.assertNotIn('synthetic', rendered)
 
     def test_password_fallback_uses_getpass(self):
@@ -162,9 +170,22 @@ class InstallerTest(unittest.TestCase):
              patch('agent_picker.getpass', return_value=fixture) as getpass, \
              patch('builtins.input') as line_input, redirect_stdout(StringIO()) as output:
             self.assertEqual(password({}), fixture)
-        getpass.assert_called_once_with('Matrix operator password: ')
+        getpass.assert_called_once_with('🔐 Matrix operator password: ')
         line_input.assert_not_called()
         self.assertIn('Save this password in a password manager before continuing.', output.getvalue())
+
+    def test_install_password_confirmation_also_uses_getpass_without_a_full_screen_terminal(self):
+        fixture = 'synthetic-password'
+        with patch('agent_picker.terminal_picker', return_value=None), \
+             patch('agent_picker.getpass', side_effect=[fixture, 'wrong', fixture]) as getpass, \
+             patch('builtins.input') as line_input, redirect_stdout(StringIO()) as output:
+            self.assertEqual(password({}, confirm=True), fixture)
+        self.assertEqual([call.args[0] for call in getpass.call_args_list], [
+            '🔐 Matrix operator password: ', '🔑 Confirm Matrix operator password: ',
+            '🔑 Confirm Matrix operator password: ',
+        ])
+        line_input.assert_not_called()
+        self.assertNotIn(fixture, output.getvalue())
 
     def test_password_file_bypasses_the_screen_and_requires_private_permissions(self):
         with TemporaryDirectory() as work, patch('installer.prompt_text') as prompt:
@@ -172,7 +193,7 @@ class InstallerTest(unittest.TestCase):
             fixture = '  synthetic-password  '
             path.write_text(fixture + '\n')
             path.chmod(0o600)
-            self.assertEqual(password({'owner_password_file': str(path)}), fixture)
+            self.assertEqual(password({'owner_password_file': str(path)}, confirm=True), fixture)
             path.chmod(0o644)
             with self.assertRaisesRegex(ValueError, 'must be private'):
                 password({'owner_password_file': str(path)})
@@ -186,10 +207,10 @@ class InstallerTest(unittest.TestCase):
              patch('installer.tailscale_dns', return_value='fixture.test'), \
              patch('builtins.input', return_value='my-operator') as answer:
             settings = normalized(interactive(self.presets, {}), self.presets)
-        self.assertEqual([call.args[0] for call in choose.call_args_list], ['Choose private access for Matrix and the dashboard'])
+        self.assertEqual([call.args[0] for call in choose.call_args_list], ['🌐 Choose private access for Matrix and the dashboard'])
         picker.assert_called_once_with(self.presets, ())
         integrations.assert_called_once_with(['telegram', 'dot'])
-        answer.assert_called_once_with('Matrix operator username: ')
+        answer.assert_called_once_with('👤 Matrix operator username: ')
         self.assertEqual(settings['agents'], ['coder', 'reviewer'])
         self.assertNotIn('connection', settings)
         self.assertNotIn('subscriptions', settings)
@@ -202,11 +223,12 @@ class InstallerTest(unittest.TestCase):
              patch('installer.select_integrations', return_value=['element']), \
              patch('installer.select_agents', return_value=[]), patch('installer.tailscale_dns', return_value=None), \
              patch('agent_picker.terminal_picker', return_value=None), \
-             patch('builtins.input', side_effect=['matrix.example', '', 'Coder', 'coder', 'my-operator']) as answer, \
+             patch('builtins.input', side_effect=['invalid', 'matrix.example', '', 'Coder', 'coder', 'my-operator']) as answer, \
              redirect_stdout(StringIO()):
             settings = normalized(interactive(self.presets, {}), self.presets)
         self.assertEqual(list(choose.call_args_list[0].args[1]), ['proxy'])
-        self.assertEqual(answer.call_count, 5)
+        self.assertEqual(answer.call_count, 6)
+        self.assertEqual([call.args[0] for call in answer.call_args_list[:2]], ['🌐 Private Matrix DNS name: '] * 2)
         self.assertFalse(settings['tailscale'])
         self.assertEqual(settings['server_name'], 'matrix.example')
         self.assertEqual(settings['owner'], 'my-operator')
@@ -224,7 +246,7 @@ class InstallerTest(unittest.TestCase):
         integrations.assert_called_once_with(['telegram'])
         self.assertTrue(settings['telegram'])
         self.assertFalse(settings['dot'])
-        self.assertEqual([call.args[0] for call in answer.call_args_list], ['Matrix operator username [my-operator]: '] * 2)
+        self.assertEqual([call.args[0] for call in answer.call_args_list], ['👤 Matrix operator username [my-operator]: '] * 2)
 
     def test_tailnet_suggestion_requires_a_running_https_node(self):
         status = {'BackendState': 'Running', 'Self': {'DNSName': 'fixture.test.'}, 'CertDomains': ['fixture.test']}
@@ -412,7 +434,7 @@ class InstallerTest(unittest.TestCase):
                 prepare_graph_password(data, None, interactive=True)
                 prepare_graph_password(data, None, interactive=True)
             self.assertEqual([call.args[0] for call in prompt.call_args_list], [
-                'Context Intelligence password', 'Confirm Context Intelligence password',
+                '🧠 Context Intelligence password', '🔑 Confirm Context Intelligence password',
             ])
             saved = data / 'context/neo4j-password'
             self.assertEqual(saved.read_text(), graph_password + '\n')
@@ -553,6 +575,7 @@ class InstallerTest(unittest.TestCase):
                 ('monitor', 'private-edge', 'dot', 'engine-manager', 'engine-coder'),
             ])
             steps['choose_option'].assert_not_called()
+            steps['password'].assert_called_once_with(normalized(config, self.presets), confirm=True)
             steps['finalize_setup'].assert_called_once()
             steps['prepare_graph_password'].assert_called_once_with(data, None, interactive=True)
             registry = load(data / 'agents.json')

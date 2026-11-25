@@ -57,7 +57,7 @@ def setup_console():
     from rich.text import Text
 
     name = os.environ.get('AGENT_NAME') or os.environ.get('AGENT_USERNAME')
-    title = f'Amplifier setup for {name}' if name else 'Amplifier provider setup'
+    title = f'🤖 Amplifier setup for {name}' if name else '🤖 Amplifier provider setup'
 
     class AgentSetupConsole(Console):
         def clear(self, home=True):

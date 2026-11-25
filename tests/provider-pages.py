@@ -92,7 +92,7 @@ def verify(home):
                     page = output[cursor:index]
                     if page_break:
                         assert b'\x1b[2J' in page, marker
-                    assert b'Amplifier setup for Analyst Fixture' in page, marker
+                    assert '🤖 Amplifier setup for Analyst Fixture'.encode() in page, marker
                     cursor = index + len(marker)
                     steps.pop(0)
                     os.write(terminal, keys)
