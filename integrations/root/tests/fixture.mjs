@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { createServer as httpServer } from 'node:http';
 import { once } from 'node:events';
@@ -104,11 +104,15 @@ async function castVote(transaction, poll, answer) {
 }
 
 try {
-  await waitFor(async () => {
-    const joined = await api('/joined_rooms', undefined, root.access_token);
-    return joined.joined_rooms.includes(audit);
+  const readiness = await waitFor(async () => {
+    try {
+      return await stat('/state/synced');
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      return null;
+    }
   });
-  await delay(2200);
+  assert.ok(readiness.size > 0, 'Root must write a non-empty marker for the Compose health check.');
   let cursor = (await timeline()).next_batch;
   const thread = await sendEncrypted(reader, agents, 'fixture-thread', {msgtype:'m.text', body:'Original task thread'});
   for (const [index, action, label] of [[1, 'approve', 'Accept'], [2, 'reject', 'Reject'], [3, 'approve', 'Accept']]) {

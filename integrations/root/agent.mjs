@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,6 +11,7 @@ import { agentTurnKey, auditRecord, digest, eventId, executionCause, resultHando
   maximumScriptBytes, ProposalError, reviewedScriptOperation, reviewWindow, sourceTurn, submittedProposal } from './protocol.mjs';
 
 const state = '/state';
+const readiness = state + '/synced';
 const config = JSON.parse(readFileSync('/config.json', 'utf8'));
 const { url, agents, audit, owner, root } = config;
 const operationCatalog = JSON.parse(readFileSync('/operations.json', 'utf8'));
@@ -64,6 +65,7 @@ if (process.argv[2] === 'probe') {
   console.log('Root confirmed its dedicated Amplifier and Codex connection.');
   process.exit(0);
 }
+rmSync(readiness, { force: true });
 if (!existsSync(state + '/model-ready')) throw new Error('Run the Root model probe before starting the agent.');
 const db = new DatabaseSync(state + '/gateway.sqlite3');
 db.exec(`
@@ -424,7 +426,9 @@ for (;;) {
       try { await client.joinRoom(agents); await client.crypto.onRoomJoin(agents); } catch { /* Wait for the invitation. */ }
     }
     await sync();
-    if (joined && await canReview()) writeFileSync(state + '/synced', '', { mode: 0o600 });
+    if (!existsSync(readiness) && joined && await canReview()) {
+      writeFileSync(readiness, 'ready\n', { mode: 0o600 });
+    }
     const now = Date.now();
     db.prepare("UPDATE tasks SET outcome='expired', body=NULL, command=NULL, finished_at=? WHERE outcome IS NULL AND action IS NULL AND COALESCE(expires,time+?)<=?")
       .run(now, reviewWindow, now);
