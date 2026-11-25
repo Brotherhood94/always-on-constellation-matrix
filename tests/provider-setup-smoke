@@ -6,6 +6,7 @@ docker run --rm -i --network none --read-only \
   "${OFFICE_ENGINE_TEST_IMAGE:-constellation-office-engine:0.22.17}" -B - <<'PY'
 from pathlib import Path
 from subprocess import run
+from unittest.mock import patch
 import json
 import os
 import sys
@@ -46,6 +47,13 @@ async def verify():
     async def observe(event):
         pass
     document = json.loads(Path(os.environ['OFFICE_FIXTURE_CONFIG']).read_text())
+    if os.environ['OFFICE_FIXTURE_MODULE'] == 'provider-openai-chatgpt':
+        from amplifier_module_provider_openai_chatgpt import ChatGPTProvider
+        provider = ChatGPTProvider()
+        try:
+            assert provider.auth_status() == 'authenticated', 'ACP cannot read the saved Codex login'
+        finally:
+            await provider.close()
     worker = NativeWorker(str(uuid4()), '/workspace', document, observe, None)
     try:
         report = await asyncio.wait_for(worker.start(), 50)
@@ -57,7 +65,8 @@ async def verify():
 asyncio.run(verify())
 """
 
-for name, module in [('coding', 'provider-openai'), ('analysis', 'provider-anthropic')]:
+for name, module in [('coding', 'provider-openai'), ('analysis', 'provider-anthropic'),
+                     ('codex', 'provider-openai-chatgpt')]:
     home = Path('/instance') / name
     home.mkdir(mode=0o700)
     initialize.HOME = home
@@ -68,13 +77,24 @@ for name, module in [('coding', 'provider-openai'), ('analysis', 'provider-anthr
     fixture_model = name + '-fixture'
     fixture_key = 'synthetic-' + name + '-key'
     os.environ['AMPLIFIER_HOME'] = str(profile)
+    if module == 'provider-openai-chatgpt':
+        from datetime import datetime, timedelta, timezone
+        from amplifier_module_provider_openai_chatgpt.oauth import save_tokens
+        with patch.dict(os.environ, {'HOME': str(home)}):
+            save_tokens({'access_token': fixture_key, 'account_id': 'fixture-account',
+                         'expires_at': (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()})
+        config = {'auth_mode': 'chatgpt_codex', 'default_model': fixture_model}
+    else:
+        config = {'api_key': fixture_key, 'default_model': fixture_model}
     AppSettings()._write_scope('global', {'bundle': {'app': []}, 'config': {'providers': [{
-        'module': module, 'config': {'api_key': fixture_key, 'default_model': fixture_model},
+        'module': module, 'config': config,
     }]}})
     saved = (profile / 'settings.yaml').read_bytes()
     initialize.configure()
     assert (profile / 'settings.yaml').read_bytes() == saved and fixture_key.encode() not in saved
-    assert (profile / 'keys.env').stat().st_mode & 0o777 == 0o600
+    credential = (home / '.amplifier/openai-chatgpt-oauth.json' if module == 'provider-openai-chatgpt'
+                  else profile / 'keys.env')
+    assert credential.stat().st_mode & 0o777 == 0o600
     assert configured_provider(profile) == {'provider': module, 'model': fixture_model, 'effort': None}
     local_settings = workspace / '.amplifier/settings.yaml'
     local_settings.parent.mkdir(exist_ok=True)
@@ -82,8 +102,12 @@ for name, module in [('coding', 'provider-openai'), ('analysis', 'provider-anthr
     # Prevent this test driver from passing a key to the runtime through its
     # environment. The worker must read Amplifier's own private key file.
     env = {key: val for key, val in os.environ.items() if fixture_key not in val}
-    env.update(HOME=str(home), OFFICE_FIXTURE_CONFIG=str(initialize.BACKEND / 'agent.json'),
-               OFFICE_FIXTURE_MODEL=fixture_model)
+    env.update(HOME=str(initialize.BACKEND), OFFICE_FIXTURE_CONFIG=str(initialize.BACKEND / 'agent.json'),
+               OFFICE_FIXTURE_MODEL=fixture_model, OFFICE_FIXTURE_MODULE=module)
+    # The pinned Instance launcher sets the backend home first and then applies
+    # any environment overrides, expanding the per-agent installation path.
+    backend = json.loads((home / 'config.json').read_text())['config']['backend']
+    env.update({key: value.replace('${AGENT_HOME}', str(home)) for key, value in backend['env'].items()})
     run(['/opt/amplifier-acp/.venv/bin/python', '-B', '-c', private], env=env, timeout=65, check=True)
 
 legacy = Path('/instance/legacy')
