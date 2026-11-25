@@ -12,6 +12,7 @@ from installer import (CLIENT, CONNECTOR, PRESETS, RUNTIME_UID, SOURCE, agent_si
                        provision_selected_agents, read_password_file, request, save, run)
 from layout import room_route
 from provision import MatrixError
+from roster import enable_management
 from setup_guide import confirm_page, pages
 
 
@@ -63,6 +64,13 @@ def guide(data, settings, command, passphrase):
                 print(f'Provider setup could not be completed. {error}')
             print(f'Resume provider setup with {command} agent configure')
             return
+    try:
+        enable_management(data, automatic=True)
+    except (KeyboardInterrupt, MatrixError, OSError, ValueError, SubprocessError) as error:
+        if not isinstance(error, KeyboardInterrupt):
+            print(f'Roster management could not be enabled. {error}')
+        print(f'Resume setup with {command} setup-guide')
+        return
     deliver_welcome(data, command)
 
 

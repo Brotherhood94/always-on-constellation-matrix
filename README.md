@@ -123,6 +123,8 @@ Choose your network and Matrix username, then enter and confirm your Matrix pass
 
 After those pages, use the arrow keys and Enter to select your agents and choose **Done**. The installer registers the roster and opens Amplifier provider setup for each local agent. After everyone is ready, Chief of Staff sends a private welcome when selected. Otherwise, an available Office agent sends the welcome in Office. The message links to both shortcuts pinned in **Agents → VPS Alerts**.
 
+On a standard systemd VPS, setup automatically enables Office roster management when you select and activate Chief of Staff. Each hire or retirement still requires your approval in its private chat. [Chief of Staff approval](docs/chief-of-staff.md#hire-or-retire-an-office-worker)
+
 If agent sign-in was interrupted, resume it from the same checkout.
 
 ```sh
@@ -152,7 +154,7 @@ The installer enables startup at boot. Docker restarts application containers, T
 | Check the stack | Run `./constellation_matrix status` for the latest dashboard snapshot, or use **Agents → VPS Alerts → Pinned messages** to open the dashboard or Context Intelligence. |
 | Add a local Office worker | Run `sudo ./constellation_matrix agent add --profile /path/to/agent.json --configure`. This opens native Amplifier sign-in after provisioning. See [agent profiles](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
 | Retire a local Office worker | Run `sudo ./constellation_matrix agent remove <id>` to finish accepted work, revoke access, and archive the workspace. [Retirement](docs/runbook.md#retire-a-worker) |
-| Manage the Office roster from Element | Enable `sudo ./constellation_matrix agent management enable` on the VPS. Send `hire` or `retire` in Chief of Staff’s DM and approve the exact proposal. [Chief of Staff approval](docs/chief-of-staff.md#hire-or-retire-an-office-worker) |
+| Manage the Office roster from Element | Send `hire` or `retire` in Chief of Staff’s DM and approve the exact proposal. Setup enables roster management when Chief of Staff is ready. [Chief of Staff approval](docs/chief-of-staff.md#hire-or-retire-an-office-worker) |
 | Review how the team works | Send `review team` in the [Chief of Staff DM](docs/chief-of-staff.md) for proposals backed by Office evidence. |
 | Approve maintenance | Review the exact operation and vote in the private [Root Operations chat](integrations/root/README.md). |
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |

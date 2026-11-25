@@ -22,13 +22,7 @@ This saves a Workshop revision for review and exports the portable profile, work
 
 ## Hire or retire an Office worker
 
-On the VPS, activate Chief of Staff and enable its roster workflow once. Enter your Matrix operator password at the hidden prompt. The step creates a service identity that can invite workers to Office.
-
-```sh
-sudo ./constellation_matrix agent management enable
-```
-
-In the encrypted Chief of Staff DM, send one of these requests.
+On a systemd VPS, setup prepares an Office-only invitation identity and enables roster management after Chief of Staff passes its readiness checks. In the encrypted Chief of Staff DM, send one of these requests.
 
 ```text
 hire qa Check Office artifacts and describe how to verify them.
@@ -38,6 +32,6 @@ retire qa
 
 Open the proposal linked in the **Accept / Reject** poll. Check the hire profile or retirement target before voting. The first valid operator vote applies to that proposal and closes the poll. The poll expires after 15 minutes.
 
-After updating the checkout, run the enable command again to update the VPS service code used for approved changes.
+For an older deployment or an interrupted setup, run `sudo ./constellation_matrix setup-guide`. If setup needs to create the invitation identity, enter your Matrix operator password at the hidden prompt.
 
 For a hire, Chief registers the worker in Office and Persona Workshop, then sends the VPS command for native Amplifier sign-in. Run it to make the worker available for assignments. A retiring worker finishes accepted assignments before Chief reports that it has been archived. [Worker lifecycle commands](runbook.md#retire-a-worker)

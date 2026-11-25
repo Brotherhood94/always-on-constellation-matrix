@@ -218,20 +218,46 @@ def office_inviter(data, settings, operator):
     return token
 
 
-def enable_management(data, password_file):
+def invitation_ready(data):
+    auth = data / 'roster'
+    ready = auth / 'invitation-ready'
+    return (ready.is_file() and (auth / 'inviter-token').is_file()
+            and ready.read_text().strip() == load(data / 'rooms.json')['office'])
+
+
+def prepare_invitation(data, settings, operator):
+    auth = data / 'roster'
+    directory(auth)
+    office_inviter(data, settings, operator)
+    save(auth / 'invitation-ready', load(data / 'rooms.json')['office'] + '\n')
+
+
+def prepare_management(data, settings, registry, operator):
+    if (settings['systemd'] and not settings.get('roster_management')
+            and 'chief-of-staff' in registry['agents'] and not invitation_ready(data)):
+        prepare_invitation(data, settings, operator)
+
+
+def enable_management(data, password_file=None, *, automatic=False):
     from host_services import roster_units
 
     with operator_lock(data):
-        settings, registry = open_existing(data)
+        settings = load(data / 'settings.json')
+        registry = load(data / 'agents.json')
+        if automatic and settings.get('roster_management'):
+            return
         if not settings['systemd'] or not registry['agents'].get('chief-of-staff', {}).get('active'):
+            if automatic:
+                return
             raise ValueError('Enable systemd and activate Chief of Staff before enabling roster management')
+        settings, registry = open_existing(data)
         auth = data / 'roster'
-        directory(auth)
-        operator = login(settings['owner'], password(settings, password_file))['access_token']
-        try:
-            office_inviter(data, settings, operator)
-        finally:
-            request('POST', CLIENT + '/logout', {}, operator)
+        if not automatic or not invitation_ready(data):
+            operator = login(settings['owner'], password(settings, password_file))['access_token']
+            try:
+                prepare_invitation(data, settings, operator)
+            finally:
+                request('POST', CLIENT + '/logout', {}, operator)
         private_secret(auth / 'bridge-key', uid=RUNTIME_UID)
         roster_units(settings, data)
         settings['roster_management'] = True

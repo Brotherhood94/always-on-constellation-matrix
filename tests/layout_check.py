@@ -10,7 +10,7 @@ from installer import save
 from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded, room_route
 from onboarding import finish
 from provision import MatrixError, request
-from roster import deactivate_worker, office_inviter
+from roster import deactivate_worker, invitation_ready, office_inviter, prepare_management
 from roster_broker import verify
 
 
@@ -89,11 +89,13 @@ class LayoutTest(unittest.TestCase):
         rooms = create_layout(server, owner['user_id'], owner_token)
         dm = direct_room(server, rooms['space'], 'chief-of-staff', 'Chief of Staff', owner['user_id'],
                          owner_token, chief['user_id'], chief_token)
-        settings = {'server_name': server, 'owner': 'operator'}
+        settings = {'server_name': server, 'owner': 'operator', 'systemd': True}
         with TemporaryDirectory() as work:
             data = Path(work)
             save(data / 'rooms.json', rooms)
-            (data / 'roster').mkdir()
+            self.assertFalse(invitation_ready(data))
+            prepare_management(data, settings, {'agents': {'chief-of-staff': {'active': False}}}, owner_token)
+            self.assertTrue(invitation_ready(data))
             inviter = office_inviter(data, settings, owner_token)
             self.assertEqual(office_inviter(data, settings, owner_token), inviter)
             office = rooms['office']

@@ -44,6 +44,8 @@ After the workspace pages, use the arrow keys and Enter to select your roster. C
 
 When all selected agents are ready, Chief of Staff sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery, and the message links to both pins in **VPS Alerts**.
 
+On a systemd VPS, Chief of Staff can propose hires and retirements as soon as setup finishes. Review each exact operation in its private chat. [Manage Office workers](chief-of-staff.md#hire-or-retire-an-office-worker)
+
 When Manager is installed, start with Manager for coordinated Office tasks.
 
 - **Element.** In **Agents → Office**, select `@Manager` with the mention picker and send “@Manager, coordinate a three-step checklist for getting started in Office and post the result in this thread.”

@@ -13,7 +13,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy'))
 from installer import PRESETS, agent_add, load, normalized, register_entry, save
 from compose import definition
-from roster import archive_worker, deactivate_worker, drain_queue, local_worker, retire_locked
+from roster import (archive_worker, deactivate_worker, drain_queue, enable_management, invitation_ready,
+                    local_worker, prepare_management, retire_locked)
 from roster_broker import handle, validate, verify, WINDOW
 from persona_management import disconnect
 from provision import MatrixError
@@ -34,6 +35,57 @@ def approved(operation, decision='approve'):
 
 
 class RosterTest(TestCase):
+    def test_default_management_uses_prepared_invitation_and_waits_for_chief_readiness(self):
+        settings = {**SETTINGS, 'systemd': True, 'roster_management': False}
+        registry = {'agents': {'chief-of-staff': {'active': False}}}
+        with TemporaryDirectory() as work, patch('roster.open_existing', return_value=(settings, registry)), \
+             patch('roster.office_inviter') as inviter, patch('roster.password') as password, \
+             patch('roster.private_secret') as secret, patch('roster.compose_config'), \
+             patch('roster.up') as up, patch('roster.publish_inventory'), patch('host_services.roster_units') as units:
+            data = Path(work)
+            save(data / 'settings.json', settings)
+            save(data / 'agents.json', registry)
+            save(data / 'rooms.json', {'office': '!office:fixture.test'})
+
+            def grant(directory, _settings, token):
+                self.assertEqual(token, 'existing-operator-session')
+                save(directory / 'roster/inviter-token', 'synthetic-inviter-token')
+
+            inviter.side_effect = grant
+            prepare_management(data, settings, registry, 'existing-operator-session')
+            prepare_management(data, settings, registry, 'existing-operator-session')
+            self.assertTrue(invitation_ready(data))
+            self.assertEqual(inviter.call_count, 1)
+            enable_management(data, automatic=True)
+            units.assert_not_called()
+            registry['agents']['chief-of-staff']['active'] = True
+            save(data / 'agents.json', registry)
+            up.side_effect = [OSError('restart interrupted'), None]
+            with self.assertRaisesRegex(OSError, 'interrupted'):
+                enable_management(data, automatic=True)
+            self.assertFalse(load(data / 'settings.json')['roster_management'])
+            enable_management(data, automatic=True)
+            self.assertTrue(load(data / 'settings.json')['roster_management'])
+            enable_management(data, automatic=True)
+            self.assertEqual(units.call_count, 2)
+            self.assertEqual(secret.call_count, 2)
+            password.assert_not_called()
+
+    def test_automatic_management_ignores_hosts_without_systemd_or_an_active_chief(self):
+        with TemporaryDirectory() as work, patch('roster.prepare_invitation') as invite, \
+             patch('roster.open_existing') as reopen:
+            data = Path(work)
+            for systemd, agents in [(False, {'chief-of-staff': {'active': True}}), (True, {})]:
+                settings = {**SETTINGS, 'systemd': systemd}
+                settings.pop('roster_management')
+                registry = {'agents': agents}
+                save(data / 'settings.json', settings)
+                save(data / 'agents.json', registry)
+                prepare_management(data, settings, registry, 'existing-operator-session')
+                enable_management(data, automatic=True)
+            invite.assert_not_called()
+            reopen.assert_not_called()
+
     def test_configure_flag_registers_then_opens_native_setup(self):
         with TemporaryDirectory() as work, patch('installer.sys.stdin.isatty', return_value=True), \
              patch('installer.open_existing', return_value=(SETTINGS, {'agents': {}})), \

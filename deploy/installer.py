@@ -429,6 +429,8 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
 
 
 def provision_layout(settings, data, registry, passphrase):
+    from roster import prepare_management
+
     own = login(settings['owner'], passphrase)
     token = own['access_token']
     try:
@@ -445,6 +447,7 @@ def provision_layout(settings, data, registry, passphrase):
             if space:
                 link_child(rooms['space'], space['room_id'], settings['server_name'], token)
         save(data / 'rooms.json', rooms)
+        prepare_management(data, settings, registry, token)
     finally:
         request('POST', CLIENT + '/logout', {}, token)
 
@@ -677,6 +680,9 @@ def install(data, args):
             if state.pop('select_agents', False):
                 state.pop('selection', None)
                 save(onboarding_path, state)
+    if registry['agents'].get('chief-of-staff', {}).get('active'):
+        from roster import enable_management
+        enable_management(data, automatic=True)
     print('Workspace deployed.')
     if args.config or not interactive_terminal():
         print(f'Continue setup from an interactive terminal.\n  {workspace_command(data)} setup-guide')
@@ -685,6 +691,8 @@ def install(data, args):
 
 
 def provision_selected_agents(data, settings, registry, selection, passphrase):
+    from roster import prepare_management
+
     presets = load(PRESETS)
     roster = normalized({**settings, 'agents': selection}, presets)
     for key in selection:
@@ -699,6 +707,7 @@ def provision_selected_agents(data, settings, registry, selection, passphrase):
         try:
             for key in selection:
                 prepare_agent_state(data, key, registry['agents'][key], rooms, owner['access_token'], roster)
+            prepare_management(data, roster, registry, owner['access_token'])
         finally:
             request('POST', CLIENT + '/logout', {}, owner['access_token'])
         prepare_images(roster, registry)
@@ -718,6 +727,9 @@ def provision_agent(data, settings, registry, candidate, inviter):
     compose_config(settings, data, registry)
     refresh_context(data)
     prepare_agent_state(data, key, registry['agents'][key], load(data / 'rooms.json'), inviter, settings)
+    if key == 'chief-of-staff':
+        from roster import prepare_management
+        prepare_management(data, settings, registry, inviter)
     if registry['agents'][key]['placement'] == 'local':
         prepare_images(settings, registry)
         up(data, 'engine-' + key)
@@ -974,6 +986,9 @@ def main():
             enable_management(data, args.owner_password_file)
         else:
             agent_sign_in(data, args.key)
+            if args.key in (None, 'chief-of-staff'):
+                from roster import enable_management
+                enable_management(data, automatic=True)
             selected = load(data / 'settings.json')['agents']
             if not set(selected).intersection(pending_local_agents(load(data / 'agents.json'))):
                 finalize_setup(data)

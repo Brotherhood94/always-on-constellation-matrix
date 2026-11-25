@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, context_config, install, interactive, load, main,
-    normalized, password, prepare_graph_password, prepare_storage, register_entry, save,
+    normalized, password, prepare_graph_password, prepare_storage, provision_layout, register_entry, save,
     show_element_setup, tailscale_dns,
 )
 from agent_catalog import document
@@ -514,6 +514,48 @@ class InstallerTest(unittest.TestCase):
             sign_in.assert_called_once_with(data, selection=['manager'])
             welcome.assert_called_once_with(data, 'fixture')
             self.assertFalse(load(state).get('select_agents'))
+
+    def test_provisioning_prepares_roster_management_in_the_existing_operator_session(self):
+        settings = {**self.settings, 'dot': False, 'telegram': False}
+        rooms = {'owner': '@operator:fixture.test', 'office': '!office', 'alerts': '!alerts'}
+        with TemporaryDirectory() as work, patch('installer.login', side_effect=[
+                {'user_id': rooms['owner'], 'access_token': 'operator-session'},
+                {'access_token': 'monitor-session'}]), patch('installer.private_secret'), \
+             patch('installer.create_layout', return_value=rooms), patch('installer.prepare_agent_state'), \
+             patch('installer.os.fchown'), patch('installer.request') as matrix, \
+             patch('roster.prepare_management') as prepare:
+            data = Path(work)
+            (data / 'bot').mkdir()
+
+            def prepare_before_logout(*_):
+                self.assertEqual(load(data / 'rooms.json'), rooms)
+                self.assertNotIn('operator-session', [call.args[-1] for call in matrix.call_args_list])
+
+            prepare.side_effect = prepare_before_logout
+            provision_layout(settings, data, self.registry, 'synthetic-password')
+            prepare.assert_called_once_with(data, settings, self.registry, 'operator-session')
+            self.assertEqual(matrix.call_args.args[-1], 'operator-session')
+
+    def test_setup_resumes_management_before_the_welcome_without_repeating_provider_setup(self):
+        settings = {**self.settings, 'agents': ['chief-of-staff'], 'dot': False, 'telegram': False}
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output, \
+             patch('onboarding.agent_sign_in') as sign_in, \
+             patch('onboarding.enable_management', side_effect=[OSError('broker interrupted'), None]) as enable, \
+             patch('onboarding.deliver_welcome') as welcome:
+            data = Path(work)
+            save(data / 'settings.json', settings)
+            save(data / 'agents.json', {'agents': {'chief-of-staff': {'active': False, 'placement': 'local'}}})
+            save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
+            guide(data, settings, 'fixture', None)
+            sign_in.assert_called_once_with(data, selection=['chief-of-staff'])
+            enable.assert_called_once_with(data, automatic=True)
+            welcome.assert_not_called()
+            self.assertIn('Resume setup with fixture setup-guide', output.getvalue())
+            save(data / 'agents.json', {'agents': {'chief-of-staff': {'active': True, 'placement': 'local'}}})
+            guide(data, settings, 'fixture', None)
+            self.assertEqual(sign_in.call_count, 1)
+            self.assertEqual(enable.call_count, 2)
+            welcome.assert_called_once_with(data, 'fixture')
 
     def test_welcome_waits_for_remote_readiness_membership_and_pins_then_keeps_its_sender(self):
         settings = {**self.settings, 'agents': ['coder', 'manager', 'remote-worker'], 'dot': False, 'telegram': False}
