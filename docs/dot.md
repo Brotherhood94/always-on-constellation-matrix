@@ -20,6 +20,7 @@ sudo ./constellation_matrix dot-connect tunnel_REPLACE_WITH_YOUR_ID
 ## Connect and verify the private app
 
 1. **Browser.** In the associated ChatGPT workspace, open Plugins, select **+ → Add custom MCP server**, and name it `Constellation Office`. Under **Connection**, choose **Tunnel** and select the same tunnel or paste its ID. Choose **No authentication** for the app. The running VPS tunnel authenticates to OpenAI with the runtime key and supplies its own credentials to the local bridge. Review the app settings and select **Create as a plugin**. [ChatGPT Plugins](https://chatgpt.com/plugins) · [Custom MCP server setup](https://developers.openai.com/api/docs/guides/custom-mcp-server)
-2. **ChatGPT and Element.** With the private Dot plugin enabled, publish a small Office task with a stable task ID and one available starting agent. Confirm it appears in **Agents → Office**. Repeat the publication with the same ID and confirm Dot returns the same thread link. After the agent replies, ask Dot to read the task by ID and compare its response with the Office thread.
+2. **ChatGPT.** Ask Dot to list the Office agents through the plugin. An empty list confirms the connection during initial setup before agent selection.
+3. **ChatGPT and Element.** Once Manager is available, ask “Dot, send this task to Office starting with Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” Check the task and Manager’s result in **Agents → Office**. A retry with the same task ID should return the same thread link.
 
 If you enable Telegram Control later, refresh the app’s tool list to use the draft and update tools. The operator approves outbound messages in Element. [Telegram Control](telegram.md#dot-and-chat-updates)

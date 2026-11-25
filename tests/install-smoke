@@ -33,7 +33,7 @@ ports = dict(zip(keys, [sock.getsockname()[1] for sock in listeners]))
 project = 'constellation-fixture-' + token_hex(6)
 config = {
     'server_name': 'fixture.test', 'owner': 'operator',
-    'agents': ['manager', 'coder'],
+    'agents': [],
     'owner_password_file': str(work / 'password'),
     'neo4j_password_file': str(work / 'graph-password'),
     'project': project, 'systemd': False, 'tailscale': False, **ports,
@@ -42,6 +42,26 @@ config = {
 PYTHON
 "$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cp "$data/rooms.json" "$work/initial-rooms.json"
+PYTHONPATH="$src/deploy" python3 -B - "$data" "$work" <<'PYTHON'
+from pathlib import Path
+import sys
+
+from installer import load, save
+from onboarding import select_roster
+
+data, work = map(Path, sys.argv[1:])
+assert load(data / 'agents.json')['agents'] == {}
+path = data / 'onboarding.json'
+selection = ['manager', 'coder']
+confirmed = ['element', 'dashboard', 'context']
+save(path, {'confirmed': confirmed, 'select_agents': True, 'selection': selection})
+select_roster(data, path, 'fixture', (work / 'password').read_text().rstrip('\n'))
+assert load(data / 'settings.json')['agents'] == selection
+assert load(path) == {'confirmed': confirmed}
+config = load(work / 'install.json')
+save(work / 'install.json', {**config, 'agents': selection})
+PYTHON
+printf '%s\n' 'Provisioned the workspace first, then registered the saved agent roster.'
 "$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cmp "$work/initial-rooms.json" "$data/rooms.json"
 cmp "$work/graph-password" "$data/context/neo4j-password"

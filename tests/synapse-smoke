@@ -27,7 +27,7 @@ config.update(listeners=[{'type': 'http', 'port': 8008, 'tls': False, 'resources
               rc_login={'address': {'per_second': 50, 'burst_count': 50}, 'account': {'per_second': 50, 'burst_count': 50}})
 path.write_text(json.dumps(config))
 PY
-docker run -d --name "$name" --network "$name" --network-alias synapse -v "$name:/data" -v "$src/deploy/matrix:/provision:ro" \
+docker run -d --name "$name" --network "$name" --network-alias synapse -v "$name:/data" -v "$src/deploy:/deploy:ro" \
   -v "$src/tests/layout_check.py:/test.py:ro" --entrypoint python "$image" \
   -m synapse.app.homeserver -c /data/homeserver.yaml >/dev/null
 for attempt in {1..30}; do
@@ -35,7 +35,7 @@ for attempt in {1..30}; do
   sleep 1
 done
 docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
-  -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/provision \
+  -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/deploy \
   "$name" python -B /test.py
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
   docker run --rm --network "$name" --user 0:0 --entrypoint node \

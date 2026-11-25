@@ -18,7 +18,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from agent_picker import choose_option, placement as agent_placement, prompt_text, select_agents, select_integrations
+from agent_picker import choose_option, placement as agent_placement, prompt_text, select_integrations
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
@@ -445,7 +445,10 @@ def compose_config(settings, data, registry):
     environment = base_environment(settings, data)
     env_write(data, environment)
     context_config(settings, data, registry)
-    save(data / 'compose.yaml', definition(settings, data, registry, environment))
+    manifest = data / 'compose.yaml'
+    networks = load(manifest).get('networks', {}) if manifest.exists() else {}
+    workshop_internal = networks.get('workshop-targets', {}).get('internal', True)
+    save(manifest, definition(settings, data, registry, environment, workshop_internal=workshop_internal))
     return environment
 
 
@@ -539,8 +542,6 @@ def tailscale_dns():
 
 
 def interactive(presets, saved):
-    chosen = select_agents(presets, saved.get('agents', ()))
-
     dns = tailscale_dns()
     network = {'proxy': 'Use an existing private HTTPS proxy'}
     if dns:
@@ -563,16 +564,13 @@ def interactive(presets, saved):
         return None
 
     owner = prompt_text('👤 Matrix operator username', username_error, default=saved_owner)
+    passphrase = password({'owner': owner}, confirm=True)
 
     initial_integrations = [name for name in ('telegram', 'dot') if saved.get(name, True)]
     integrations = select_integrations(initial_integrations)
-    raw = {**saved, 'server_name': server, 'owner': owner,
-           'agents': chosen, 'tailscale': tailnet, 'dot': 'dot' in integrations, 'telegram': 'telegram' in integrations}
-    if 'subscriptions' in raw:
-        labels = raw['subscriptions']
-        overrides = {key: value for key, value in labels.get('overrides', {}).items() if key in chosen}
-        raw['subscriptions'] = {**labels, 'overrides': overrides}
-    return raw
+    settings = {'agents': [], **saved, 'server_name': server, 'owner': owner,
+                'tailscale': tailnet, 'dot': 'dot' in integrations, 'telegram': 'telegram' in integrations}
+    return settings, passphrase
 
 
 def workspace_command(data):
@@ -600,13 +598,13 @@ def install(data, args):
     presets = load(PRESETS)
     previous = data / 'settings.json'
     if args.config:
-        raw = load(args.config)
+        settings = normalized(load(args.config), presets)
+        if not settings.get('owner_password_file'):
+            raise ValueError('Config-file installation requires a private owner_password_file')
+        passphrase = password(settings)
     else:
-        raw = interactive(presets, load(previous) if previous.exists() else {})
-    settings = normalized(raw, presets)
-    if args.config and not settings.get('owner_password_file'):
-        raise ValueError('Config-file installation requires a private owner_password_file')
-    passphrase = password(settings, confirm=not args.config)
+        raw, passphrase = interactive(presets, load(previous) if previous.exists() else {})
+        settings = normalized(raw, presets)
     directory(data, 0o711)
     with operator_lock(data):
         current = load(previous) if previous.exists() else None
@@ -628,6 +626,9 @@ def install(data, args):
         for key in settings['agents']:
             register_entry(settings, registry, key, presets[key])
         settings.pop('owner_password_file', None)
+        onboarding_path = data / 'onboarding.json'
+        if not args.config and not current and not onboarding_path.exists():
+            save(onboarding_path, {'confirmed': [], 'select_agents': True})
         save(previous, settings)
         save(registry_path, registry)
         environment = compose_config(settings, data, registry)
@@ -657,26 +658,42 @@ def install(data, args):
         if settings['systemd']:
             from host_services import enable_services
             enable_services(settings)
+        if args.config and onboarding_path.exists():
+            state = load(onboarding_path)
+            if state.pop('select_agents', False):
+                state.pop('selection', None)
+                save(onboarding_path, state)
     print('Workspace deployed.')
-    for key, entry in registry['agents'].items():
-        if entry['placement'] == 'remote' and not entry['active']:
-            print(f'Agent {key} awaits remote setup.')
-    pending = pending_local_agents(registry)
-    command = workspace_command(data)
     if args.config or not interactive_terminal():
-        next_step = 'agent configure' if pending else 'setup-guide'
-        print(f'Continue setup from an interactive terminal.\n  {command} {next_step}')
+        print(f'Continue setup from an interactive terminal.\n  {workspace_command(data)} setup-guide')
         return
-    if pending:
-        try:
-            agent_sign_in(data)
-        except KeyboardInterrupt:
-            print(f'\nResume provider setup with {command} agent configure')
-            return
-        except (OSError, ValueError, subprocess.CalledProcessError):
-            print(f'Resume provider setup with {command} agent configure')
-            raise
     finalize_setup(data, passphrase=passphrase)
+
+
+def provision_selected_agents(data, settings, registry, selection, passphrase):
+    presets = load(PRESETS)
+    roster = normalized({**settings, 'agents': selection}, presets)
+    for key in selection:
+        if key not in registry['agents']:
+            register_entry(roster, registry, key, presets[key])
+    if selection:
+        # Publish config and start engines as a batch. Agent registration and Compose are safe to retry.
+        compose_config(roster, data, registry)
+        refresh_context(data)
+        rooms = load(data / 'rooms.json')
+        owner = login(roster['owner'], passphrase if passphrase is not None else password(roster))
+        try:
+            for key in selection:
+                prepare_agent_state(data, key, registry['agents'][key], rooms, owner['access_token'], roster)
+        finally:
+            request('POST', CLIENT + '/logout', {}, owner['access_token'])
+        prepare_images(roster, registry)
+        up(data, *(f'engine-{key}' for key in selection if registry['agents'][key]['placement'] == 'local'))
+        sync_workshop(roster, data, registry)
+        save(data / 'agents.json', registry)
+        publish_inventory(roster, data, registry)
+        configure_network(roster, data, settings)
+    save(data / 'settings.json', roster)
 
 
 def agent_add(data, args):
@@ -702,11 +719,13 @@ def pending_local_agents(registry):
             if entry['placement'] == 'local' and not entry['active']]
 
 
-def agent_sign_in(data, key=None):
+def agent_sign_in(data, key=None, *, selection=None):
     if key is not None:
         agent_activate(data, key)
         return
     pending = pending_local_agents(load(data / 'agents.json'))
+    if selection is not None:
+        pending = [key for key in pending if key in selection]
     if not pending:
         print('All local agents are already connected.')
     for number, key in enumerate(pending, start=1):
@@ -906,11 +925,15 @@ def main():
             agent_add(data, args)
         else:
             agent_sign_in(data, args.key)
-            if not pending_local_agents(load(data / 'agents.json')):
+            selected = load(data / 'settings.json')['agents']
+            if not set(selected).intersection(pending_local_agents(load(data / 'agents.json'))):
                 finalize_setup(data)
     elif args.command == 'remote':
         from remote import execute
         execute(data, args)
+        if args.action == 'confirm':
+            from onboarding import deliver_welcome
+            deliver_welcome(data, workspace_command(data))
     elif args.command in {'backup', 'restore-check'}:
         with operator_lock(data):
             open_existing(data)

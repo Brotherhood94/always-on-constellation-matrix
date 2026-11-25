@@ -119,9 +119,9 @@ On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup wi
 sudo ./constellation_matrix install
 ```
 
-Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** to confirm. Select Manager and at least one Office worker for a collaborative welcome. Enter and confirm your Matrix and Context Intelligence passwords when prompted.
+Choose your network and Matrix username, then enter and confirm your Matrix password. Choose your integrations and set a dedicated Context Intelligence password. The installer deploys the workspace and opens the setup pages for Element, the dashboard, Context Intelligence, and the integrations you selected.
 
-The installer deploys the workspace, then opens each local agent’s Amplifier provider setup. Complete its sign-in, pick a model, and choose **Done**. After the agents pass their checks, the terminal wizard walks through Element, the dashboard, Context Intelligence, and any selected integrations. On **Finish**, it opens **Hello Collaboration** in Office once all selected agents are ready.
+After those pages, use the arrow keys and Enter to select your agents and choose **Done**. The installer registers the roster and opens Amplifier provider setup for each local agent. After everyone is ready, Chief of Staff sends a private welcome when selected. Otherwise, an available Office agent sends the welcome in Office. The message links to both shortcuts pinned in **Agents → VPS Alerts**.
 
 If agent sign-in was interrupted, resume it from the same checkout.
 
@@ -129,11 +129,19 @@ If agent sign-in was interrupted, resume it from the same checkout.
 sudo ./constellation_matrix agent configure
 ```
 
-Run `sudo ./constellation_matrix setup-guide` to resume the wizard or add `--print` to see the full checklist. In Element, choose **Sign in → Account provider → Edit** and paste the printed homeserver in **Other account provider**. After sign-in, open **Agents → Office** to follow the welcome thread. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
+Run `sudo ./constellation_matrix setup-guide` to resume the wizard or append `--print` for the full checklist. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
+
+### Send your first task
+
+Manager is the entry point for coordinated Office tasks. Open **Agents → Office** in Element, select `@Manager` from the mention picker, and send “@Manager, coordinate a three-step checklist for getting started in Office and post the result in this thread.”
+
+If you enabled Dot, open a ChatGPT conversation with the **Constellation Office** plugin and ask “Dot, send this task to Office starting with Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” [Dot setup](docs/dot.md)
+
+If you skipped Manager, use the Office agent named in your welcome. If you skipped the Office roster, add a worker first. [Add a worker](docs/runbook.md#add-a-worker)
 
 **ChatGPT via Codex is the only provider tested with a live account.** Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
 
-For unattended provisioning, edit the example configuration, check it with `./constellation_matrix validate --config <file>`, and run `sudo ./constellation_matrix install --config <file>`. Run `agent configure` from an interactive terminal afterwards. [Example configuration](deploy/config.example.json)
+For unattended provisioning, edit the example configuration, check it with `./constellation_matrix validate --config <file>`, and run `sudo ./constellation_matrix install --config <file>`. Run `setup-guide` from an interactive terminal afterwards. [Example configuration](deploy/config.example.json)
 
 The installer enables startup at boot. Docker restarts application containers, Tailscale Serve serves the static dashboard, and systemd runs the host services, including the Dot tunnel once connected. [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 

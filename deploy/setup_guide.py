@@ -5,9 +5,9 @@ import sys
 
 
 TITLE = '✨ Finalize your Constellation setup'
-WELCOME_TITLE = '👋 Hello Collaboration'
-WELCOME_INSTRUCTIONS = ('  Select Finish after the selected agents have joined Matrix and completed setup.\n'
-                        '  With an Office agent ready, the wizard opens a welcome task and prints its thread link.')
+WELCOME_TITLE = '👋 Welcome to Constellation'
+WELCOME_INSTRUCTIONS = ('  After these setup pages, choose and configure the agents to install.\n'
+                        '  When they are ready, an agent sends a welcome in Element and the wizard prints its link.')
 
 
 def interactive_terminal():
@@ -35,7 +35,7 @@ def pages(settings, data, command):
 
     yield 'dashboard', '📊 Dashboard', f"""  • Open the resource and agent dashboard in your browser.
     {settings['dashboard_url']}
-  • Find this link and Context Intelligence in Agents → VPS Alerts → Pinned messages."""
+  • In Agents → VPS Alerts → Pinned messages, verify Open dashboard and Open Context Intelligence."""
 
     yield 'context', '🧠 Context Intelligence · Neo4j Browser', f"""  1. Open Neo4j Browser.
      {settings['context_url']}
@@ -61,7 +61,7 @@ def pages(settings, data, command):
      Suggested plugin name: Constellation Office
      Choose Tunnel, select the same tunnel ID, and choose No authentication.
      https://chatgpt.com/plugins
-  5. Verify Dot can open a small Office task and read its reply."""
+  5. Ask Dot to run list_agents using the plugin. An empty roster is expected before agent selection."""
         yield 'dot', '🔌 Dot · Secure MCP Tunnel', body + '\n  • Full instructions and connection test in docs/dot.md.'
 
     if settings['telegram']:

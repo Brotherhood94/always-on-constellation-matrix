@@ -7,7 +7,8 @@ import { createServer } from 'node:https';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer } from 'ws';
-import { openRoomClient } from './matrix-session.mjs';
+import { openRoomClient, sendEncrypted } from './matrix-session.mjs';
+import { mentionMessage } from './matrix-format.mjs';
 
 const url = 'http://synapse:8008';
 const domain = 'fixture.test';
@@ -50,7 +51,7 @@ async function eventually(check) {
   assert.fail('The operations service did not become ready');
 }
 
-async function welcomeFixture(office, ownerToken) {
+async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog) {
   const readerState = join(base, 'welcome-reader');
   await mkdir(readerState);
   await writeFile(join(readerState, 'matrix-token'), ownerToken);
@@ -58,7 +59,7 @@ async function welcomeFixture(office, ownerToken) {
     deviceId: 'PINREAD', name: 'Fixture Operator' });
   const messages = [];
   reader.on('room.message', (roomId, event) => {
-    if (roomId === office) messages.push(event);
+    if (roomId === office || roomId === chiefRoom) messages.push({ ...event, room_id: roomId });
   });
   reader.syncingTimeout = 0;
   let nextBatch;
@@ -92,7 +93,7 @@ async function welcomeFixture(office, ownerToken) {
       if (method === 'session/new') result = { sessionId: 'welcome-' + ++turn };
       if (method === 'session/prompt') {
         const prompt = params.prompt.map(entry => entry.text ?? '').join('\n');
-        assert.match(prompt, /Hello Collaboration/);
+        assert.match(prompt, /three-step checklist/i);
         const text = prompt.includes('You are Analyst') ? 'Fixture tip: mention an available agent.'
           : prompt.includes('Fixture tip: mention an available agent.') ?
             'TASK_OUTCOME: {"status":"completed","result":"Welcome to Office","verification":"Analyst shared a tip"}'
@@ -108,7 +109,6 @@ async function welcomeFixture(office, ownerToken) {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   try {
-    const catalog = join(base, 'welcome-roster.json');
     await writeFile(catalog, JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
       dynamicHandoffs: true, agents: [manager, analyst] }));
     for (const agent of [manager, analyst]) {
@@ -118,6 +118,7 @@ async function welcomeFixture(office, ownerToken) {
       await writeFile(join(agentState, 'matrix-password'), password);
       launch('/app/connector.mjs', { AGENT_STATE: agentState, AGENT_WORKSPACE: base, AGENT_NAME: agent.name,
         AGENT_USERNAME: agent.key, MATRIX_CATALOG_PATH: catalog,
+        MATRIX_PLANNER: '@dot:' + domain,
         INSTANCE_ACP_URL: 'wss://localhost:' + server.address().port + '/api/v1/acp' });
     }
     await eventually(async () => {
@@ -126,11 +127,7 @@ async function welcomeFixture(office, ownerToken) {
       } });
       return queried.device_keys[manager.id]?.MATRIXMANAGER && queried.device_keys[analyst.id]?.MATRIXANALYST;
     });
-    const device = 'CONSTELLATIONWELCOME';
-    const welcomeToken = await login('operator', device);
-    const payload = { token: welcomeToken, owner, device, room: office, transaction: 'fixture-welcome',
-      target: manager, peer: analyst };
-    async function publish() {
+    async function publish(payload) {
       const child = spawn(process.execPath, ['/app/welcome.mjs'], { stdio: ['pipe', 'pipe', 'inherit'] });
       const chunks = [];
       child.stdout.on('data', chunk => chunks.push(chunk));
@@ -139,24 +136,54 @@ async function welcomeFixture(office, ownerToken) {
       assert.equal(code, 0);
       return JSON.parse(Buffer.concat(chunks)).event;
     }
-    const event = await publish();
-    assert.equal(await publish(), event, 'A retry on the same device should return the original welcome event');
-    const raw = await api('/_matrix/client/v3/rooms/' + encodeURIComponent(office) + '/event/' + encodeURIComponent(event),
-      { token: ownerToken });
-    assert.equal(raw.type, 'm.room.encrypted');
-    assert.equal(raw.sender, owner);
-    const welcome = await eventually(() => findMessage(item => item.event_id === event));
-    assert.equal(welcome.sender, owner);
-    assert.deepEqual(welcome.content['m.mentions'].user_ids, [manager.id]);
-    assert.match(welcome.content.body, /Hello Collaboration/);
-    const inThread = item => item.content['m.relates_to']?.event_id === event;
-    await eventually(() => findMessage(item => inThread(item) && item.sender === analyst.id &&
-      item.content.body.includes('Fixture tip')));
-    await eventually(() => findMessage(item => inThread(item) && item.sender === manager.id &&
-      item.content['net.matrix_agents.task_outcome']?.status === 'completed'));
+    for (const variant of [
+      { key: 'chief-of-staff', name: 'Chief of Staff', room: chiefRoom, device: 'WELCOMECHIEF', example: manager, dot: true },
+      { key: 'analyst', name: 'Analyst', room: office, device: 'WELCOMEOFFICE', example: analyst, dot: false },
+    ]) {
+      const sender = '@' + variant.key + ':' + domain;
+      const token = await login(variant.key, variant.device);
+      const payload = { ...variant, token, sender, transaction: 'fixture-welcome', pins };
+      const event = await publish(payload);
+      assert.equal(await publish(payload), event, 'A retry on the same device should return the original welcome event');
+      await api('/_matrix/client/v3/logout', { method: 'POST', body: {}, token });
+      const raw = await api('/_matrix/client/v3/rooms/' + encodeURIComponent(variant.room) + '/event/' +
+        encodeURIComponent(event), { token: ownerToken });
+      assert.equal(raw.type, 'm.room.encrypted');
+      assert.equal(raw.sender, sender);
+      const welcome = await eventually(() => findMessage(item => item.event_id === event));
+      assert.equal(welcome.room_id, variant.room);
+      assert.deepEqual(welcome.content['m.mentions']?.user_ids ?? [], []);
+      assert.ok(welcome.content.body.includes('Hi! I’m ' + variant.name));
+      assert.ok(welcome.content.body.includes('VPS Alerts → Pinned messages'));
+      assert.ok(welcome.content.formatted_body.includes(pins.dashboard));
+      assert.ok(welcome.content.formatted_body.includes(pins.context));
+      assert.ok(welcome.content.body.includes('choose @' + variant.example.name + ' from Element’s mention picker'));
+      assert.equal(welcome.content.body.includes('Constellation Office plugin'), variant.dot);
+      assert.equal(welcome.content.body.includes('Manager is the entry point for coordinated Office tasks'), variant.dot);
+      if (variant.dot) assert.ok(welcome.content.body.includes('Dot, send this task to Office starting with Manager'));
+    }
+    assert.equal(turn, 0);
+
+    const task = 'Coordinate a three-step checklist for getting started in Office and post the result in this thread.';
+    const fromElement = await sendEncrypted(reader, office, 'fixture-first-element-task', mentionMessage(task, manager));
+    const { result } = await tool('publish_plan', {
+      task_id: 'fixture-first-dot-task', title: 'Getting started in Office', plan: task, first_agent: 'manager',
+    });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    const fromDot = decodeURIComponent(new URL(result.structuredContent.thread_url).hash.split('/').at(-1));
+    for (const event of [fromElement, fromDot]) {
+      const submitted = await eventually(() => findMessage(item => item.event_id === event));
+      assert.equal(submitted.room_id, office);
+      assert.deepEqual(submitted.content['m.mentions'].user_ids, [manager.id]);
+      const inThread = item => item.content['m.relates_to']?.event_id === event;
+      await eventually(() => findMessage(item => inThread(item) && item.sender === analyst.id &&
+        item.content.body.includes('Fixture tip')));
+      await eventually(() => findMessage(item => inThread(item) && item.sender === manager.id &&
+        item.content['net.matrix_agents.task_outcome']?.status === 'completed'));
+    }
     const identity = await api('/_matrix/client/v3/profile/' + encodeURIComponent(owner), { token: ownerToken });
     assert.equal(identity.displayname, 'Fixture Operator');
-    console.log('Hello Collaboration sent once as encrypted Office text, delegated to Analyst, and closed by Manager.');
+    console.log('Chief and Office welcomes stayed informational. Element and Dot both routed the example to Manager.');
   } finally {
     reader.crypto.engine.machine.close();
     for (const connection of ws.clients) connection.terminate();
@@ -205,10 +232,10 @@ try {
   await writeFile(join(dot, 'room-id'), office);
   await writeFile(join(dot, 'matrix-password'), password);
   await writeFile(join(dot, 'bridge-token'), bridgeSecret);
-  await writeFile(join(base, 'agents.json'), JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
-    dynamicHandoffs: true, agents: [{ key: 'analyst', id: '@analyst:' + domain, name: 'Analyst', role: 'worker',
-      limits: 'Fixture', status: 'Available', capabilities: [] }] }));
-  launch('/app/dot-bridge.mjs', { DOT_STATE: dot, MATRIX_CATALOG_PATH: join(base, 'agents.json') });
+  const catalog = join(base, 'agents.json');
+  const snapshot = { version: 1, time: Math.floor(Date.now() / 1000), dynamicHandoffs: true, agents: [] };
+  await writeFile(catalog, JSON.stringify(snapshot));
+  launch('/app/dot-bridge.mjs', { DOT_STATE: dot, MATRIX_CATALOG_PATH: catalog });
   const socketPath = join(dot, 'bridge.sock');
   await eventually(async () => (await stat(socketPath).catch(() => null))?.isSocket());
   let id = 0;
@@ -227,6 +254,14 @@ try {
     });
   }
   assert.equal((await tool('list_agents', {}, 'wrong-token')).status, 401);
+  const empty = await eventually(async () => {
+    const { result } = await tool('list_agents', {});
+    return result?.isError === true ? null : result?.structuredContent;
+  });
+  assert.deepEqual(empty, { agents: [] });
+  snapshot.agents.push({ key: 'analyst', id: '@analyst:' + domain, name: 'Analyst', role: 'worker',
+    limits: 'Fixture', status: 'Available', capabilities: [] });
+  await writeFile(catalog, JSON.stringify(snapshot));
   const ownTask = { task_id: 'fixture-task-01', title: 'Fixture plan', plan: 'Report the fixture result', first_agent: 'analyst' };
   const published = await eventually(async () => {
     const { result } = await tool('publish_plan', ownTask);
@@ -239,7 +274,10 @@ try {
   assert.equal(foreign.result.isError, true);
   assert.match(foreign.result.content[0].text, /No task with that ID/);
   console.log('Dot reused one encrypted task and rejected an unpublished task ID.');
-  await welcomeFixture(office, token);
+  const { entries } = JSON.parse(await readFile(join(monitor, 'shortcut-pins.json'), 'utf8'));
+  const pinLinks = Object.fromEntries(Object.entries(entries).map(([key, pin]) => [key,
+    'https://matrix.to/#/' + encodeURIComponent(alerts) + '/' + encodeURIComponent(pin.event)]));
+  await welcomeFixture(office, await room('chief-of-staff-dm'), token, pinLinks, tool, catalog);
 } finally {
   for (const child of children) child.kill();
 }

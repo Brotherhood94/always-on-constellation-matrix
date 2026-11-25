@@ -8,15 +8,15 @@ On Ubuntu 24.04, install standard Docker Engine with Compose V2, Python 3, curl,
 sudo ./constellation_matrix install
 ```
 
-Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, suggested model, capabilities, and limits. Press Enter to select or deselect the highlighted agent. Move to **Done** and press Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later.
-
 Choose the suggested Tailscale DNS name if available. On the next screen, type the Matrix username you want to use in Element and press Enter. When rerunning setup, press Enter with the field empty to keep the existing username. Terminals without full-screen support use line prompts.
 
 The workspace and integrations checklist opens with **Done** highlighted. On a fresh install, **Element workspace**, **Telegram**, and **Dot** are checked. Use the arrow keys and Enter to toggle Telegram or Dot, then choose **Done**. Element workspace is required. Reruns start with the integrations already saved for that workspace.
 
 Enter a Matrix operator password of at least 12 characters, then re-enter it on the confirmation screen. Both fields mask what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
 
-Installation starts the selected local Amplifier Instances together and opens their provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup or to start sign-in after unattended provisioning.
+After the workspace boots, complete the Element, dashboard, Context Intelligence, and enabled integration pages. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
+
+The installer starts the selected local Amplifier Instances together and opens provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.
 
 ```sh
 sudo ./constellation_matrix agent configure
@@ -26,7 +26,7 @@ Each agent runs Amplifier’s own provider manager. It offers Anthropic for Clau
 
 Check the agent name at the top of each page. **Add a provider** creates an additional connection for that agent. Choose **Done** to verify that agent and move to the next one in batch setup. Each agent can use a different provider and model.
 
-After the final local agent signs in, the installer opens the guided checklist. Use `sudo ./constellation_matrix setup-guide` to resume it or `setup-guide --print` to print every step. At **Finish**, the wizard checks the selected agents’ Matrix membership and starts one **Hello Collaboration** task in Office. Remote workers configure Amplifier during enrollment on their own host and must be confirmed before the welcome starts. [Guided setup](setup-guide.md)
+After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Chief of Staff uses its private chat when selected. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `sudo ./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the full checklist.
 
 Pass an agent ID to `agent configure` to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow.
 

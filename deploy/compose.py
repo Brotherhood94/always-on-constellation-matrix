@@ -16,7 +16,7 @@ def port(local, target):
     return f'127.0.0.1:{local}:{target}'
 
 
-def definition(settings, data, registry, secrets):
+def definition(settings, data, registry, secrets, *, workshop_internal=True):
     engine_image = ENGINE
     slice_name = {'cgroup_parent': 'matrix-workload.slice'} if settings['systemd'] else {}
     common = {'restart': 'unless-stopped', **slice_name,
@@ -139,13 +139,16 @@ def definition(settings, data, registry, secrets):
             worker['volumes'] += workspace
         services[key] = worker
     if registry['agents'] or settings['telegram']:
-        network['workshop-targets'] = {
-            'internal': not any(entry['placement'] == 'remote' for entry in registry['agents'].values())
-        }
+        network['workshop-targets'] = {'internal': workshop_internal}
+        workshop_networks = ['workshop-targets', *(name for name in network if name.startswith('acp-'))]
+        if workshop_internal and any(entry['placement'] == 'remote' for entry in registry['agents'].values()):
+            # Telegram may already be attached to workshop-targets when a remote worker is selected.
+            network['workshop-egress'] = {}
+            workshop_networks.append('workshop-egress')
         services['persona-workshop'] = {
             **restricted, 'image': 'constellation-persona-workshop:0.7.4',
             'build': str(SOURCE / 'integrations/chief-of-staff/persona'),
-            'networks': ['workshop-targets', *(name for name in network if name.startswith('acp-'))],
+            'networks': workshop_networks,
             'profiles': ['agents'], 'volumes': [volume(data / 'state/chief-of-staff/persona', '/data')],
             'healthcheck': health('persona-workshop', '--home', '/data', 'api', 'GET', '/api/v1/status'),
         }

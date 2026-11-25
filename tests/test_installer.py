@@ -21,7 +21,7 @@ from installer import (
 )
 from agent_catalog import document
 from compose import definition
-from onboarding import finish, guide
+from onboarding import finish, guide, verified_pins
 from remote import compose_remote
 from setup_guide import confirm_page
 
@@ -200,18 +200,25 @@ class InstallerTest(unittest.TestCase):
         prompt.assert_not_called()
 
     def test_interactive_installer_requests_username_directly(self):
+        passphrase = 'matrix-fixture-password'
         with patch('installer.choose_option', return_value='tailscale') as choose, \
-             patch('installer.select_integrations', return_value=['element', 'telegram', 'dot']) as integrations, \
-             patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
+             patch('installer.password', return_value=passphrase) as confirm, \
+             patch('installer.select_integrations') as integrations, \
              patch('agent_picker.terminal_picker', return_value=None), \
              patch('installer.tailscale_dns', return_value='fixture.test'), \
              patch('builtins.input', return_value='my-operator') as answer:
-            settings = normalized(interactive(self.presets, {}), self.presets)
+            def select(_):
+                confirm.assert_called_once_with({'owner': 'my-operator'}, confirm=True)
+                return ['element', 'telegram', 'dot']
+
+            integrations.side_effect = select
+            raw, entered = interactive(self.presets, {})
+            settings = normalized(raw, self.presets)
         self.assertEqual([call.args[0] for call in choose.call_args_list], ['🌐 Choose private access for Matrix and the dashboard'])
-        picker.assert_called_once_with(self.presets, ())
         integrations.assert_called_once_with(['telegram', 'dot'])
         answer.assert_called_once_with('👤 Matrix operator username: ')
-        self.assertEqual(settings['agents'], ['coder', 'reviewer'])
+        self.assertEqual(entered, passphrase)
+        self.assertEqual(settings['agents'], [])
         self.assertNotIn('connection', settings)
         self.assertNotIn('subscriptions', settings)
         self.assertEqual(settings['owner'], 'my-operator')
@@ -220,12 +227,14 @@ class InstallerTest(unittest.TestCase):
 
     def test_interactive_installer_supports_custom_proxy_and_operator(self):
         with patch('installer.choose_option', return_value='proxy') as choose, \
+             patch('installer.password'), \
              patch('installer.select_integrations', return_value=['element']), \
-             patch('installer.select_agents', return_value=[]), patch('installer.tailscale_dns', return_value=None), \
+             patch('installer.tailscale_dns', return_value=None), \
              patch('agent_picker.terminal_picker', return_value=None), \
              patch('builtins.input', side_effect=['invalid', 'matrix.example', '', 'Coder', 'coder', 'my-operator']) as answer, \
              redirect_stdout(StringIO()):
-            settings = normalized(interactive(self.presets, {}), self.presets)
+            raw, _ = interactive(self.presets, {})
+            settings = normalized(raw, self.presets)
         self.assertEqual(list(choose.call_args_list[0].args[1]), ['proxy'])
         self.assertEqual(answer.call_count, 6)
         self.assertEqual([call.args[0] for call in answer.call_args_list[:2]], ['🌐 Private Matrix DNS name: '] * 2)
@@ -235,14 +244,16 @@ class InstallerTest(unittest.TestCase):
 
     def test_interactive_rerun_keeps_the_existing_operator_username(self):
         with patch('installer.choose_option', return_value='tailscale'), \
+             patch('installer.password'), \
              patch('installer.select_integrations', return_value=['element', 'telegram']) as integrations, \
-             patch('installer.select_agents', return_value=[]), \
              patch('agent_picker.terminal_picker', return_value=None), \
              patch('installer.tailscale_dns', return_value='fixture.test'), \
              patch('builtins.input', side_effect=['different-operator', '']) as answer, redirect_stdout(StringIO()):
-            saved = {'owner': 'my-operator', 'telegram': True, 'dot': False}
-            settings = normalized(interactive(self.presets, saved), self.presets)
+            saved = {'owner': 'my-operator', 'telegram': True, 'dot': False, 'agents': ['coder']}
+            raw, _ = interactive(self.presets, saved)
+            settings = normalized(raw, self.presets)
         self.assertEqual(settings['owner'], 'my-operator')
+        self.assertEqual(settings['agents'], ['coder'])
         integrations.assert_called_once_with(['telegram'])
         self.assertTrue(settings['telegram'])
         self.assertFalse(settings['dot'])
@@ -383,26 +394,40 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue(all('[Continue]' in call.args[0] for call in answer.call_args_list))
 
     def test_wizard_resumes_at_first_unconfirmed_page(self):
-        settings = {**self.settings, 'agents': [], 'dot': False}
+        settings = {**self.settings, 'agents': []}
         with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
             data = Path(work)
-            save(data / 'agents.json', {'agents': {}})
+            registry = {'agents': {}}
+            save(data / 'settings.json', settings)
+            save(data / 'agents.json', registry)
+            save(data / 'onboarding.json', {'confirmed': [], 'select_agents': True})
             command = 'sudo ./constellation_matrix'
-            with patch('onboarding.confirm_page', side_effect=[True, False]) as confirm:
+            with patch('onboarding.confirm_page', side_effect=[True, False]) as confirm, \
+                 patch('onboarding.select_agents') as picker:
                 guide(data, settings, command, None)
+            picker.assert_not_called()
             self.assertEqual([call.args[0] for call in confirm.call_args_list], ['💬 Element Desktop', '📊 Dashboard'])
-            self.assertEqual(load(data / 'onboarding.json'), {'confirmed': ['element']})
+            self.assertEqual(load(data / 'onboarding.json'), {'confirmed': ['element'], 'select_agents': True})
             self.assertIn(f'{command} setup-guide', output.getvalue())
+
+            def pick(_):
+                self.assertEqual(load(data / 'onboarding.json')['confirmed'],
+                                 ['element', 'dashboard', 'context', 'dot', 'telegram'])
+                return []
+
             with patch('onboarding.confirm_page', return_value=True) as confirm, \
-                 patch('onboarding.finish', return_value={'room': '!office', 'event': '$welcome'}) as launch:
+                 patch('onboarding.select_agents', side_effect=pick) as picker, \
+                 patch('onboarding.open_existing', return_value=(settings, registry)), \
+                 patch('onboarding.provision_selected_agents') as provision:
+                guide(data, settings, command, None)
                 guide(data, settings, command, None)
             self.assertEqual([call.args[0] for call in confirm.call_args_list], [
                 '📊 Dashboard', '🧠 Context Intelligence · Neo4j Browser',
-                '✈️ Telegram · Bridge and drafting agent', '👋 Hello Collaboration',
+                '🔌 Dot · Secure MCP Tunnel', '✈️ Telegram · Bridge and drafting agent',
             ])
-            self.assertEqual(confirm.call_args.args[-1], 'Finish')
-            launch.assert_called_once_with(data, command, None)
-            self.assertIn('https://matrix.to/#/%21office/%24welcome', output.getvalue())
+            picker.assert_called_once()
+            provision.assert_called_once_with(data, settings, registry, [], None)
+            self.assertTrue(load(data / 'onboarding.json')['welcome']['skipped'])
             self.assertEqual((data / 'onboarding.json').stat().st_mode & 0o777, 0o600)
 
     def test_explicit_print_bypasses_the_wizard_in_a_terminal(self):
@@ -415,7 +440,7 @@ class InstallerTest(unittest.TestCase):
                 main()
             wizard.assert_not_called()
             self.assertIn('💬 Element Desktop', output.getvalue())
-            self.assertIn('👋 Hello Collaboration', output.getvalue())
+            self.assertIn('👋 Welcome to Constellation', output.getvalue())
             self.assertFalse((data / 'onboarding.json').exists())
 
     def test_graph_password_is_confirmed_and_kept_across_reruns(self):
@@ -459,53 +484,122 @@ class InstallerTest(unittest.TestCase):
                 prepare_graph_password(data, str(supplied), interactive=False)
             self.assertEqual((data / 'context/neo4j-password').read_text(), 'separate config password\n')
 
-    def test_welcome_waits_for_confirmations_active_agents_and_matrix_membership(self):
-        settings = {**self.settings, 'agents': ['coder', 'manager'], 'dot': False, 'telegram': False}
+    def test_roster_selection_is_saved_before_provisioning_and_resumed_after_failure(self):
+        settings = {**self.settings, 'agents': [], 'dot': False, 'telegram': False}
+        registry = {'agents': {}}
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()):
+            data = Path(work)
+            save(data / 'settings.json', settings)
+            state = data / 'onboarding.json'
+            save(state, {'confirmed': ['element', 'dashboard', 'context'], 'select_agents': True})
+
+            def enroll(directory, saved, previous, selection, passphrase):
+                self.assertEqual(load(state)['selection'], selection)
+                save(data / 'settings.json', {**saved, 'agents': selection})
+                for key in selection:
+                    register_entry(saved, previous, key, self.presets[key])
+                save(data / 'agents.json', previous)
+
+            with patch('onboarding.select_agents', return_value=['manager']) as pick, \
+                 patch('onboarding.open_existing', return_value=(settings, registry)), \
+                 patch('onboarding.provision_selected_agents', side_effect=[OSError('retry enrollment')]) as provision, \
+                 patch('onboarding.agent_sign_in') as sign_in, patch('onboarding.deliver_welcome') as welcome:
+                guide(data, settings, 'fixture', 'fixture-password')
+                self.assertEqual(load(state)['selection'], ['manager'])
+                sign_in.assert_not_called()
+                welcome.assert_not_called()
+                provision.side_effect = enroll
+                guide(data, settings, 'fixture', 'fixture-password')
+            pick.assert_called_once()
+            sign_in.assert_called_once_with(data, selection=['manager'])
+            welcome.assert_called_once_with(data, 'fixture')
+            self.assertFalse(load(state).get('select_agents'))
+
+    def test_welcome_waits_for_remote_readiness_membership_and_pins_then_keeps_its_sender(self):
+        settings = {**self.settings, 'agents': ['coder', 'manager', 'remote-worker'], 'dot': False, 'telegram': False}
+        register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
+        entries = self.registry['agents']
         with TemporaryDirectory() as work, patch('onboarding.open_existing', return_value=(settings, self.registry)), \
              patch('onboarding.session_token', return_value='fixture-token') as token, \
-             patch('onboarding.publish', return_value='$welcome') as publish, patch('onboarding.request') as request:
+             patch('onboarding.publish', side_effect=[OSError('lost response'), '$welcome']) as publish, \
+             patch('onboarding.verified_pins') as pins, patch('onboarding.request') as request, \
+             patch('onboarding.read_password_file'), patch('onboarding.choice', return_value='coder') as pick:
             data = Path(work)
-            save(data / 'rooms.json', {'office': '!office', 'owner': '@operator:fixture.test'})
-            self.assertIn('Confirm each', finish(data, 'fixture')['waiting'])
-            save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
-            self.assertIn('Coder', finish(data, 'fixture')['waiting'])
+            state = data / 'onboarding.json'
+            save(data / 'rooms.json', {'office': '!office', 'alerts': '!alerts', 'owner': '@operator:fixture.test'})
+            self.assertIn('Finish the workspace setup', finish(data, 'fixture')['waiting'])
+            save(state, {'confirmed': ['element', 'dashboard', 'context']})
+            entries['coder']['active'] = entries['manager']['active'] = True
+            self.assertIn('Remote Worker', finish(data, 'fixture')['waiting'])
             token.assert_not_called()
-            for agent in ('manager', 'coder'):
-                self.registry['agents'][agent]['active'] = True
-            request.return_value = {'joined': {'@manager:fixture.test': {}}}
+            entries['remote-worker']['active'] = True
+            members = {'@manager:fixture.test': {}, '@operator:fixture.test': {}}
+            request.return_value = {'joined': members}
             self.assertIn('join Office', finish(data, 'fixture')['waiting'])
+            members.update({'@coder:fixture.test': {}, '@remote-worker:fixture.test': {}})
+            pins.return_value = None
+            self.assertIn('Waiting for Open dashboard', finish(data, 'fixture')['waiting'])
             publish.assert_not_called()
-            request.return_value['joined']['@coder:fixture.test'] = {}
-            self.assertEqual(finish(data, 'fixture'), {'room': '!office', 'event': '$welcome'})
-            self.assertEqual(finish(data, 'fixture'), {'room': '!office', 'event': '$welcome'})
-            publish.assert_called_once()
-            self.assertEqual([agent['name'] for agent in publish.call_args.args[-2:]], ['Manager', 'Coder'])
+            pins.return_value = {'dashboard': 'https://matrix.to/dashboard', 'context': 'https://matrix.to/context'}
+            with self.assertRaisesRegex(OSError, 'lost response'):
+                finish(data, 'fixture')
+            attempt = load(state)['welcome_attempt']
+            self.assertEqual(attempt['sender'], '@coder:fixture.test')
+            self.assertEqual(attempt['room'], '!office')
+            pick.reset_mock()
+            receipt = {'sender': '@coder:fixture.test', 'room': '!office', 'event': '$welcome'}
+            self.assertEqual(finish(data, 'fixture'), receipt)
+            self.assertEqual(finish(data, 'fixture'), receipt)
+            pick.assert_not_called()
+            self.assertEqual(publish.call_args_list[0], publish.call_args_list[1])
+            self.assertEqual(publish.call_args.args[-1]['name'], 'Manager')
 
-    def test_welcome_uses_only_office_agents_for_solo_or_peer_handoffs(self):
-        register_entry(self.settings, self.registry, 'analyst', self.presets['analyst'])
-        for entry in self.registry['agents'].values():
-            entry['active'] = True
-        for selected, expected in (
-            (['analyst', 'coder', 'root'], ['Analyst', 'Coder']),
-            (['coder', 'root'], ['Coder', None]),
-            (['chief-of-staff', 'root'], []),
-        ):
-            with self.subTest(selected=selected), TemporaryDirectory() as work:
-                data = Path(work)
-                settings = {**self.settings, 'agents': selected, 'dot': False, 'telegram': False}
-                save(data / 'rooms.json', {'office': '!office', 'owner': '@operator:fixture.test'})
-                save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
-                members = {f'@{key}:fixture.test': {} for key in selected}
-                with patch('onboarding.open_existing', return_value=(settings, self.registry)), \
-                     patch('onboarding.session_token'), patch('onboarding.publish', return_value='$welcome') as publish, \
-                     patch('onboarding.request', return_value={'joined': members}):
-                    receipt = finish(data, 'fixture')
-                self.assertEqual('event' in receipt, bool(expected))
-                if expected:
-                    self.assertEqual([agent['name'] if agent else None for agent in publish.call_args.args[-2:]],
-                                     expected)
-                else:
-                    publish.assert_not_called()
+    def test_welcome_prefers_chief_of_staff_and_checks_the_private_chat(self):
+        settings = {**self.settings, 'agents': ['chief-of-staff', 'manager'], 'dot': False, 'telegram': False}
+        for key in settings['agents']:
+            self.registry['agents'][key]['active'] = True
+        with TemporaryDirectory() as work, patch('onboarding.open_existing', return_value=(settings, self.registry)), \
+             patch('onboarding.session_token'), patch('onboarding.read_password_file'), \
+             patch('onboarding.publish', return_value='$welcome') as publish, patch('onboarding.verified_pins'), \
+             patch('onboarding.request') as request, patch('onboarding.choice') as pick:
+            data = Path(work)
+            owner = '@operator:fixture.test'
+            chief = '@chief-of-staff:fixture.test'
+            save(data / 'rooms.json', {'office': '!office', 'alerts': '!alerts', 'owner': owner})
+            save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
+            matrix = data / 'state/chief-of-staff/matrix'
+            matrix.mkdir(parents=True)
+            save(matrix / 'room-id', '!chief')
+            members = {'joined': {owner: {}, chief: {}, '@manager:fixture.test': {}}}
+            rules = {'type': 'm.room.join_rules', 'content': {'join_rule': 'invite'}}
+            dm = [rules, *({'type': 'm.room.member', 'state_key': user, 'content': {'membership': 'join'}}
+                          for user in (owner, chief))]
+            extra = {'type': 'm.room.member', 'state_key': '@other:fixture.test', 'content': {'membership': 'invite'}}
+            request.side_effect = [members, [*dm, extra], members, dm]
+            with self.assertRaisesRegex(ValueError, 'requires the operator and Chief of Staff'):
+                finish(data, 'fixture')
+            publish.assert_not_called()
+            self.assertEqual(finish(data, 'fixture'), {'sender': chief, 'room': '!chief', 'event': '$welcome'})
+            pick.assert_not_called()
+
+    def test_verifies_both_current_encrypted_monitor_pins(self):
+        with TemporaryDirectory() as work, patch('onboarding.request') as request:
+            data = Path(work)
+            bot = data / 'bot'
+            bot.mkdir()
+            save(bot / 'token', 'fixture-monitor-token')
+            save(bot / 'shortcut-pins.json', {'entries': {
+                'dashboard': {'event': '$dash', 'body': f"Open dashboard — {self.settings['dashboard_url']}"},
+                'context': {'event': '$graph', 'body': f"Open Context Intelligence — {self.settings['context_url']}"},
+            }})
+            pinned = {'pinned': ['$dash', '$graph', '$unrelated']}
+            event = {'type': 'm.room.encrypted', 'sender': '@monitor:fixture.test'}
+            request.side_effect = [{'pinned': ['$dash']}, pinned, event, event]
+            self.assertIsNone(verified_pins(data, self.settings, '!alerts'))
+            self.assertEqual(verified_pins(data, self.settings, '!alerts'), {
+                'dashboard': 'https://matrix.to/#/%21alerts/%24dash',
+                'context': 'https://matrix.to/#/%21alerts/%24graph',
+            })
 
     def test_last_local_agent_configuration_prints_element_setup(self):
         self.registry['agents']['chief-of-staff']['active'] = True
@@ -546,8 +640,9 @@ class InstallerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalized({**raw, 'connection': 'unsupported'}, self.presets)
 
-    def test_interactive_install_deploys_local_instances_then_configures_them_before_the_wizard(self):
-        config = {**self.raw, 'systemd': False, 'agents': ['manager', 'coder', 'remote-worker']}
+    def test_interactive_install_deploys_the_workspace_before_choosing_agents(self):
+        config = {**self.raw, 'systemd': False, 'agents': []}
+        config.pop('subscriptions')
         with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
             data = Path(work) / 'fixture workspace'
             with patch.multiple(
@@ -557,31 +652,44 @@ class InstallerTest(unittest.TestCase):
                 sync_workshop=DEFAULT, publish_inventory=DEFAULT, configure_network=DEFAULT,
                 agent_sign_in=DEFAULT, choose_option=DEFAULT, finalize_setup=DEFAULT, prepare_graph_password=DEFAULT,
             ) as steps, patch('setup_guide.interactive_terminal', return_value=True):
-                steps['interactive'].return_value = config
+                steps['interactive'].return_value = (config, 'matrix-fixture-password')
                 steps['command_output'].return_value = '[]'
-                steps['password'].return_value = 'matrix-fixture-password'
 
-                def after_sign_in(path, *, passphrase):
+                def open_wizard(path, *, passphrase):
                     self.assertEqual(path, data)
                     self.assertEqual(passphrase, 'matrix-fixture-password')
-                    steps['agent_sign_in'].assert_called_once_with(data)
+                    steps['agent_sign_in'].assert_not_called()
 
-                steps['finalize_setup'].side_effect = after_sign_in
+                steps['finalize_setup'].side_effect = open_wizard
                 install(data, SimpleNamespace(config=None))
 
             groups = [args[1:] for args, _ in steps['up'].call_args_list if len(args) > 1]
             self.assertEqual(groups, [
                 ('postgres', 'synapse', 'context'),
-                ('monitor', 'private-edge', 'dot', 'engine-manager', 'engine-coder'),
+                ('monitor', 'private-edge', 'dot'),
             ])
             steps['choose_option'].assert_not_called()
-            steps['password'].assert_called_once_with(normalized(config, self.presets), confirm=True)
+            steps['password'].assert_not_called()
             steps['finalize_setup'].assert_called_once()
             steps['prepare_graph_password'].assert_called_once_with(data, None, interactive=True)
             registry = load(data / 'agents.json')
-            self.assertFalse(any(row['active'] for row in registry['agents'].values()))
-            rendered = output.getvalue()
-            self.assertIn('Agent remote-worker awaits remote setup.', rendered)
+            self.assertEqual(registry['agents'], {})
+            self.assertTrue(load(data / 'onboarding.json')['select_agents'])
+            self.assertIn('Workspace deployed.', output.getvalue())
+
+    def test_adding_a_remote_worker_keeps_the_telegram_workshop_network(self):
+        data = Path('/srv/fixture')
+        secrets = {'POSTGRES_PASSWORD': 'fixture'}
+        early = definition(self.settings, data, {'agents': {}}, secrets)
+        register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
+        later = definition(self.settings, data, self.registry, secrets)
+        self.assertEqual(early['networks']['workshop-targets'], later['networks']['workshop-targets'])
+        self.assertTrue(later['networks']['workshop-targets']['internal'])
+        self.assertIn('workshop-egress', later['services']['persona-workshop']['networks'])
+        self.assertNotIn('workshop-egress', later['services']['dot']['networks'])
+        legacy = definition(self.settings, data, self.registry, secrets, workshop_internal=False)
+        self.assertFalse(legacy['networks']['workshop-targets']['internal'])
+        self.assertNotIn('workshop-egress', legacy['networks'])
 
     def test_catalog_keeps_unconfigured_agents_pending_during_health_refresh(self):
         observed = [{'name': 'Coder', 'status': 'Available'}]

@@ -1,12 +1,10 @@
 # Finalize your Constellation setup
 
-The installer opens this wizard after the local agents finish sign-in. Press Enter on **Continue** after completing each page. Type Q and press Enter to pause. Run the following from the VPS checkout to resume, or append `--print` for the full checklist. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
+The installer opens this wizard after deploying the workspace. Press Enter on **Continue** after each page. Type Q and press Enter to pause. Resume from the VPS checkout with the command below, or append `--print` for the full checklist. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
 
 ```sh
 sudo ./constellation_matrix setup-guide
 ```
-
-If any local agents are still waiting for a provider, run `sudo ./constellation_matrix agent configure` and finish their Amplifier sign-in. [Agent setup](runbook.md#initial-setup)
 
 If someone is guiding the setup through computer use, take over for the password, API key, verification code, and QR steps marked below. Enter credentials directly in their destination app or private terminal.
 
@@ -19,7 +17,7 @@ If someone is guiding the setup through computer use, take over for the password
 
 ## 📊 Dashboard
 
-- **Browser.** Open the printed dashboard URL and confirm it shows the deployed services and agents. In Element, both the dashboard and Context Intelligence links also appear under **Agents → VPS Alerts → Pinned messages** once the operator has joined VPS Alerts and the monitor has published them.
+- **Browser and Element.** Open the printed dashboard URL. Then open **Agents → VPS Alerts → Pinned messages** in Element and verify **Open dashboard** and **Open Context Intelligence**. The roster can be empty before the agent selection step.
 
 ## 🧠 Context Intelligence
 
@@ -32,12 +30,23 @@ sudo cat -- /srv/constellation-matrix/context/neo4j-password
 
 ## 🔌 Dot · Secure MCP Tunnel
 
-If you selected Dot, create and associate a tunnel in OpenAI Platform, issue a restricted runtime key, and start the tunnel in the VPS terminal. The operator enters the key at the hidden prompt. Connect the same tunnel to a private ChatGPT plugin named **Constellation Office** and verify that it can read a reply to a task it opens. [Dot setup and test](dot.md)
+If you selected Dot, create and associate a tunnel in OpenAI Platform, issue a restricted runtime key, and start the tunnel in the VPS terminal. The operator enters the key at the hidden prompt. Connect the same tunnel to a private ChatGPT plugin named **Constellation Office** and ask Dot to run `list_agents`. An empty roster is expected before agent selection. [Dot setup and test](dot.md)
 
 ## ✈️ Telegram · Bridge and drafting agent
 
 If you selected Telegram, create or open a Telegram API application, save its two credentials in a private JSON file on the VPS, and start the bridge. The operator completes Telegram verification in the browser and scans the bridge login QR code on their phone. Allow one verified test chat. For drafting, complete the separate Codex device sign-in, bind that chat, and approve one test delivery in Element. [Telegram setup and test](telegram.md#get-the-telegram-api-credentials)
 
-## 👋 Hello Collaboration
+## 🤖 Select agents
 
-Select **Finish** after confirming the setup pages. Once the selected agents have joined Matrix and completed activation, the wizard posts a welcome task from your Matrix account and prints the Office thread link. If an agent is still pending, finish its setup and rerun `setup-guide`. The wizard reuses the same thread after a successful launch.
+After the workspace pages, use the arrow keys and Enter to select your roster. Choose **Done** to register the agents. Complete Amplifier sign-in for each selected local agent. If provider setup is interrupted, use `sudo ./constellation_matrix agent configure` to resume. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
+
+## 👋 Receive the welcome and send a task
+
+When all selected agents are ready, Chief of Staff sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery, and the message links to both pins in **VPS Alerts**.
+
+When Manager is installed, start with Manager for coordinated Office tasks.
+
+- **Element.** In **Agents → Office**, select `@Manager` with the mention picker and send “@Manager, coordinate a three-step checklist for getting started in Office and post the result in this thread.”
+- **Dot.** If enabled, open a ChatGPT conversation with **Constellation Office** and ask “Dot, send this task to Office starting with Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.”
+
+Use the Office agent named in your welcome if you skipped Manager. If your roster has no Office agents, add one before submitting a task. [Add a worker](runbook.md#add-a-worker)

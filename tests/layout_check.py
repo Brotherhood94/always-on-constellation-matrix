@@ -1,8 +1,13 @@
 """Exercise the actual room provisioning API against a disposable Synapse."""
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
+from installer import save
 from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded, room_route
+from onboarding import finish
 from provision import request
 
 
@@ -39,6 +44,39 @@ class LayoutTest(unittest.TestCase):
         state = request('GET', room_route(rooms['space']) + '/state', token=token)
         children = {event['state_key'] for event in state if event['type'] == 'm.space.child'}
         self.assertEqual(children, {rooms['office'], rooms['alerts'], dm})
+
+    def test_welcome_waits_for_remote_confirmation_and_real_office_membership(self):
+        server = os.environ['MATRIX_SERVER_NAME']
+        password = 'synthetic-test-passphrase-88'
+        owner, manager, remote = (login(account, password) for account in ('operator', 'manager', 'remote-worker'))
+        owner_token = owner['access_token']
+        rooms = create_layout(server, owner['user_id'], owner_token)
+        office = rooms['office']
+        invite(office, manager['user_id'], owner_token)
+        join(office, manager['user_id'], manager['access_token'])
+        settings = {'server_name': server, 'owner': 'operator', 'agents': ['manager', 'remote-worker'],
+                    'dot': False, 'telegram': False, 'tailscale': False, 'dashboard_url': 'https://fixture.test:8443',
+                    'context_url': 'https://fixture.test:8444/browser/'}
+        worker = {'name': 'Remote Worker', 'profile': {'role': 'worker'}, 'active': False}
+        registry = {'agents': {'manager': {'name': 'Manager', 'profile': {'role': 'coordinator'}, 'active': True},
+                               'remote-worker': worker}}
+        with TemporaryDirectory() as working, patch('onboarding.open_existing', return_value=(settings, registry)), \
+             patch('onboarding.choice', return_value='manager'), patch('onboarding.verified_pins', return_value={'ready': True}), \
+             patch('onboarding.session_token', return_value='fixture'), patch('onboarding.publish', return_value='$welcome') as publish:
+            data = Path(working)
+            matrix = data / 'state/manager/matrix'
+            matrix.mkdir(parents=True)
+            save(matrix / 'matrix-token', manager['access_token'])
+            save(data / 'rooms.json', rooms)
+            save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
+            self.assertIn('Waiting for agent setup in Element: Remote Worker', finish(data, 'fixture')['waiting'])
+            worker['active'] = True
+            invite(office, remote['user_id'], owner_token)
+            self.assertIn('Waiting for these agents to join Office in Element: Remote Worker', finish(data, 'fixture')['waiting'])
+            publish.assert_not_called()
+            join(office, remote['user_id'], remote['access_token'])
+            self.assertEqual(finish(data, 'fixture'), {'sender': manager['user_id'], 'room': office, 'event': '$welcome'})
+            publish.assert_called_once()
 
 
 if __name__ == '__main__':
