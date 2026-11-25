@@ -175,11 +175,12 @@ Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
 
 ## Planned features
 
+- Copy files from workspaces and approved folders to the shared desktop from local and remote agents. Chief of Staff and VPS Manager copies require operator approval. [Shared desktop copy plan](next_features_plans/plan.md#shared-desktop-file-copying)
 - Match natural-language requests in ChatGPT or Element to a verified Telegram chat, and ask when several registered chats match.
 - Show the full destination in Telegram Control for 10 seconds, then send without a separate approval.
 - Attach a named file from the VPS shared desktop to a Telegram message.
 
-[Telegram feature plan](next_features_plans/plan.md)
+[Telegram feature plan](next_features_plans/plan.md#send-telegram-messages-through-dot)
 
 ## Uninstall
 
