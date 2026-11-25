@@ -268,6 +268,31 @@ class InstallerTest(unittest.TestCase):
                 main()
             self.assertIn(f"sudo cat -- '{data}/context/neo4j-password'", output.getvalue())
             self.assertNotIn('synthetic-graph-password', output.getvalue())
+            invocation = f"sudo ./constellation_matrix --data-dir '{data}'"
+            self.assertIn(f'{invocation} dot-connect tunnel_REPLACE_WITH_YOUR_ID', output.getvalue())
+            self.assertIn(f'{invocation} telegram prepare /path/to/telegram-api.json', output.getvalue())
+
+    def test_setup_guide_shows_steps_for_selected_integrations(self):
+        for dot, telegram in ((False, False), (True, False), (False, True), (True, True)):
+            with self.subTest(dot=dot, telegram=telegram):
+                output = StringIO()
+                with redirect_stdout(output):
+                    show_element_setup({**self.settings, 'dot': dot, 'telegram': telegram})
+                rendered = output.getvalue()
+                self.assertEqual('docs/dot.md' in rendered, dot)
+                self.assertEqual('dot-connect tunnel_REPLACE_WITH_YOUR_ID' in rendered, dot)
+                self.assertEqual('docs/telegram.md' in rendered, telegram)
+                self.assertEqual('@telegrambot:fixture.test and send !tg login' in rendered, telegram)
+                self.assertEqual('telegram activate' in rendered, telegram)
+                for step in ('prepare-agent', 'sign-in', 'probe', 'start-agent'):
+                    self.assertEqual(f'telegram {step}' in rendered, telegram)
+
+    def test_setup_guide_explains_dot_systemd_requirement(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            show_element_setup({**self.settings, 'systemd': False})
+        self.assertIn('Enable systemd on the deployment to connect the Dot tunnel.', output.getvalue())
+        self.assertNotIn('dot-connect', output.getvalue())
 
     def test_setup_guide_uses_color_only_when_enabled(self):
         for environment, colored in [({'TERM': 'xterm'}, True), ({'TERM': 'dumb'}, False),

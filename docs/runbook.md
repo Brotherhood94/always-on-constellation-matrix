@@ -54,7 +54,11 @@ Open **Context Intelligence** from the dashboard or VPS Alerts to launch Neo4j B
 sudo cat -- /srv/constellation-matrix/context/neo4j-password
 ```
 
-Run `sudo ./constellation_matrix setup-guide` to see the sign-in links and password-file command for your deployment. Pass the same `--data-dir` used during installation if you changed the default.
+Run `sudo ./constellation_matrix setup-guide` to see the sign-in links, password-file command, and setup steps for the integrations you selected. Pass the same `--data-dir` used during installation if you changed the default.
+
+## Connect Dot and Telegram
+
+The installer prints separate setup steps for each selected integration. Set up Dot with an OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. For Telegram, prepare the bridge, sign in from its Element DM, and verify a chat. Follow the Telegram guide to bind that chat to the drafting agent for drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
 
 ## Boot and service placement
 

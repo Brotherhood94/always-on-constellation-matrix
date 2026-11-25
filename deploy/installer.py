@@ -524,6 +524,11 @@ def interactive(presets, saved):
     return raw
 
 
+def workspace_command(data):
+    target = '' if data == DATA else f' --data-dir {quote(str(data))}'
+    return f'sudo ./constellation_matrix{target}'
+
+
 def show_element_setup(settings, data=DATA):
     server = settings['server_name']
     color = sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and 'NO_COLOR' not in os.environ
@@ -550,7 +555,30 @@ def show_element_setup(settings, data=DATA):
     print('  Password: Run this command on the server and paste the result.')
     print(f"    sudo cat -- {quote(str(data / 'context/neo4j-password'))}")
     print('  Select Connect in Neo4j Browser.')
-    print('\n  Find both links in Agents → VPS Alerts → Pinned messages.\n')
+    print('\n  Find both links in Agents → VPS Alerts → Pinned messages.')
+    command = workspace_command(data)
+    if settings['dot']:
+        print(f'\n{accent}Dot · Secure MCP Tunnel{reset}')
+        if settings['systemd']:
+            print('  Create a Secure MCP Tunnel and runtime key in OpenAI Platform.')
+            print(f'    {command} dot-connect tunnel_REPLACE_WITH_YOUR_ID')
+            print('  Enter the runtime key at the hidden prompt.')
+            print('  In ChatGPT, connect the private Dot app with Tunnel and the same ID.')
+        else:
+            print('  Enable systemd on the deployment to connect the Dot tunnel.')
+        print('  Follow docs/dot.md for the full setup and connection test.')
+    if settings['telegram']:
+        print(f'\n{accent}Telegram · Bridge and drafting agent{reset}')
+        print('  Use a private telegram-api.json with your Telegram API ID and hash.')
+        print(f'    {command} telegram prepare /path/to/telegram-api.json')
+        print(f'    {command} telegram activate')
+        print(f'  In Element, open a DM with @telegrambot:{server} and send !tg login.')
+        print('  Follow docs/telegram.md to verify and allow a chat.')
+        print('  For drafts and updates, complete the drafting agent setup.')
+        for step in ('prepare-agent', 'sign-in', 'probe', 'start-agent'):
+            print(f'    {command} telegram {step}')
+        print('  Use docs/telegram.md to bind the verified chat and test delivery.')
+    print()
 
 
 def install(data, args):
@@ -616,8 +644,7 @@ def install(data, args):
     if pending:
         print('Local agents awaiting provider setup: ' + ', '.join(registry['agents'][key]['name'] for key in pending))
         print('When ready, open each agent’s Amplifier provider and model setup.')
-        target = '' if data == DATA else f' --data-dir {quote(str(data))}'
-        print(f'  sudo ./constellation_matrix{target} agent configure')
+        print(f'  {workspace_command(data)} agent configure')
     for key, entry in registry['agents'].items():
         if entry['placement'] == 'remote' and not entry['active']:
             print(f'Agent {key} awaits remote setup.')
@@ -802,7 +829,7 @@ def main():
     confirm.add_argument('--receipt', type=Path, required=True)
     status = commands.add_parser('status', help='Read the dashboard snapshots')
     status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services')
-    commands.add_parser('setup-guide', help='Show the Element, dashboard, and graph sign-in details')
+    commands.add_parser('setup-guide', help='Show workspace sign-in and integration setup')
     commands.add_parser('uninstall', help='Remove workspace services and retain deployment data')
     commands.add_parser('backup')
     commands.add_parser('restore-check')
