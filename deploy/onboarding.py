@@ -13,7 +13,7 @@ from installer import (CLIENT, CONNECTOR, PRESETS, RUNTIME_UID, SOURCE, agent_si
 from layout import room_route
 from provision import MatrixError
 from roster import enable_management
-from setup_guide import confirm_page, pages
+from setup_guide import confirm_element, element_page
 
 
 DEVICE = 'CONSTELLATIONWELCOME'
@@ -27,33 +27,20 @@ def progress(path):
     return load(path) if path.exists() else {'confirmed': []}
 
 
-def unconfirmed(settings, data, command, state):
-    return [page for page in pages(settings, data, command) if page[0] not in state['confirmed']]
-
-
 def guide(data, settings, command, passphrase):
     path = data / 'onboarding.json'
     try:
-        setup_pages = list(pages(settings, data, command))
-        confirmed = progress(path)['confirmed']
-        index = next((i for i, (key, _, _) in enumerate(setup_pages) if key not in confirmed), len(setup_pages))
-        while index < len(setup_pages):
-            key, title, body = setup_pages[index]
-            action = confirm_page(title, body, can_go_back=index > 0)
-            if action == 'back':
-                index -= 1
-                continue
-            if action is None:
+        if 'element' not in progress(path)['confirmed']:
+            if confirm_element(*element_page(settings)) is None:
                 print(f'\nResume setup with {command} setup-guide')
                 return
             with operator_lock(data):
                 current = progress(path)
-                if key not in current['confirmed']:
-                    current['confirmed'].append(key)
+                if 'element' not in current['confirmed']:
+                    current['confirmed'].append('element')
                     save(path, current)
-            index += 1
 
-        select_roster(data, path, command, passphrase)
+        select_roster(data, path, passphrase)
     except (OSError, MatrixError, ValueError, SubprocessError) as error:
         print(f'Agent registration could not be completed. {error}')
         print(f'Resume setup with {command} setup-guide')
@@ -83,7 +70,7 @@ def guide(data, settings, command, passphrase):
     deliver_welcome(data, command)
 
 
-def select_roster(data, path, command, passphrase):
+def select_roster(data, path, passphrase):
     current = progress(path)
     if not current.get('select_agents'):
         return
@@ -95,8 +82,8 @@ def select_roster(data, path, command, passphrase):
         if not current.get('select_agents'):
             return
         settings, registry = open_existing(data)
-        if unconfirmed(settings, data, command, current):
-            raise ValueError('Complete the updated workspace setup pages first')
+        if 'element' not in current['confirmed']:
+            raise ValueError('Confirm Element sign-in first')
         selection = current.setdefault('selection', selection)
         save(path, current)
         provision_selected_agents(data, settings, registry, selection, passphrase)
@@ -107,7 +94,7 @@ def select_roster(data, path, command, passphrase):
 
 def deliver_welcome(data, command):
     try:
-        result = finish(data, command)
+        result = finish(data)
     except (OSError, MatrixError, ValueError, SubprocessError) as error:
         print(f'The welcome could not be confirmed. {error}')
         print(f'Resume setup with {command} setup-guide')
@@ -138,7 +125,7 @@ def matrix_state(data, key):
     return data / 'state' / key / 'matrix'
 
 
-def finish(data, command):
+def finish(data):
     with operator_lock(data):
         settings, registry = open_existing(data)
         state_path = data / 'onboarding.json'
@@ -150,8 +137,8 @@ def finish(data, command):
             close_session(session)
             return state['welcome']
 
-        if state.get('select_agents') or unconfirmed(settings, data, command, state):
-            return {'waiting': 'Finish the workspace setup pages and agent selection before the welcome.'}
+        if state.get('select_agents') or 'element' not in state['confirmed']:
+            return {'waiting': 'Finish Element sign-in and agent selection before the welcome.'}
 
         entries = registry['agents']
         selected = settings['agents']

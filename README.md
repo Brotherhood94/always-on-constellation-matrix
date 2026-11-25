@@ -119,9 +119,9 @@ On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup wi
 sudo ./constellation_matrix install
 ```
 
-Choose your network and Matrix username, then enter and confirm your Matrix password. Choose your integrations and set a dedicated Context Intelligence password. The installer deploys the workspace and opens the setup pages for Element, Context Intelligence, the dashboard, and the integrations you selected.
+Choose your network and Matrix username, then enter and confirm your Matrix password. Choose your integrations and set a dedicated Context Intelligence password. The installer deploys the workspace and shows how to sign in to Element Desktop.
 
-After those pages, use the arrow keys and Enter to select your agents and choose **Done**. The installer registers the roster and opens Amplifier provider setup for each local agent. After everyone is ready, Chief of Staff sends a private welcome when selected. Otherwise, an available Office agent sends the welcome in Office. The welcome links to the **Workspace shortcuts** pin in **Agents → VPS Alerts**.
+After confirming Element sign-in, use the arrow keys and Enter to select your agents and choose **Done**. The installer registers the roster and opens Amplifier provider setup for each local agent. After everyone is ready, Chief of Staff sends a private welcome when selected. Otherwise, an available Office agent sends the welcome in Office. The welcome links to the **Workspace shortcuts** pin in **Agents → VPS Alerts**.
 
 On a standard systemd VPS, setup automatically enables Office roster management when you select and activate Chief of Staff. Each hire or retirement still requires your approval in its private chat. [Chief of Staff approval](docs/chief-of-staff.md#hire-or-retire-an-office-worker)
 
@@ -131,7 +131,12 @@ If agent sign-in was interrupted, resume it from the same checkout.
 sudo ./constellation_matrix agent configure
 ```
 
-Run `sudo ./constellation_matrix setup-guide` to resume the wizard or append `--print` for the full checklist. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
+Run `sudo ./constellation_matrix setup-guide` to resume or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
+
+### Finish in Element
+
+- **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
+- **Telegram → Telegram Control → Pinned messages.** If you enabled Telegram, accept both invitations and open **Set up Telegram**. **Telegram Bridge** and each verified chat appear in the separate Telegram Space as you connect them. [Telegram setup](docs/telegram.md)
 
 ### Send your first task
 

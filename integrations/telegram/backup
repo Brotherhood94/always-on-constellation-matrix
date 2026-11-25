@@ -16,7 +16,7 @@ stage=$(mktemp -d "$MATRIX_DATA/staging/telegram.XXXXXXXX")
 
 if [[ $operation == capture ]]; then
   running=()
-  for service in connector telegram-engine telegram-bridge; do
+  for service in connector telegram-engine telegram-bridge telegram-guide; do
     if [[ -n $("${compose[@]}" ps --status running --quiet "$service") ]]; then running+=("$service"); fi
   done
   stopped=false

@@ -1,6 +1,10 @@
 # Telegram integration
 
-This optional integration adds a Telegram Space, private portals, and an encrypted `Telegram Control` room. The Telegram connector is separate from `Agents` and attaches over scoped ACP to one persistent Constellation Instance running Amplifier. The integration is ready for an isolated deployment and requires live acceptance before operational use. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
+This optional integration adds a private, top-level **Telegram** Space with **Telegram Control**, the **Telegram Bridge** DM, and the private rooms for verified chats. The Telegram connector is separate from `Agents` and attaches over scoped ACP to one persistent Constellation Instance running Amplifier. The integration is ready for an isolated deployment and requires live acceptance before operational use. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
+
+Accept the **Telegram** and **Telegram Control** invitations in Element. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
+
+Already set up? [Add a contact or group](#add-a-telegram-contact-or-group) or [send a message](#write-to-a-contact-or-group).
 
 ## Get the Telegram API credentials
 
@@ -32,21 +36,29 @@ sudo ./constellation_matrix telegram activate
 sudo ./constellation_matrix telegram status
 ```
 
-1. **Element.** Start a private chat with the full bridge-bot ID from `setup-guide`, in the form `@telegrambot:<SERVER_NAME>`. Send `!tg login qr` to display a QR code.
+When activation prompts, enter your existing Matrix operator password to link the bridge DM. For unattended activation, pass a private `--owner-password-file`. If more than one verified private bridge DM exists, select the room you already use.
+
+1. **Element.** In the top-level **Telegram** Space, open **Telegram Bridge**, the private chat with `@telegrambot:<SERVER_NAME>`. Send `!tg login qr` to display a QR code.
 2. **Telegram mobile.** The operator opens **Settings → Devices → Link Desktop Device** and scans the code shown in Element. Wait for the bridge to confirm sign-in. If the code expires, request a new one in the same DM. [Bridge sign-in](https://docs.mau.fi/bridges/go/telegram/authentication.html)
 
-## Verify and allow one test chat
+## Add a Telegram contact or group
 
-1. **Element.** Send `!tg list-logins` in the bot DM and record the login ID for the account you just connected. Send `!tg resolve-identifier <login-id> <telegram-username>` to check a known contact before opening a portal. Record the returned Telegram peer ID and confirm that it matches the intended test DM.
-2. **VPS terminal.** Add the verified chat and login to the allowlist. Substitute the confirmed values in this command.
+Each connected Telegram conversation has its own Matrix room, called a portal. The portal appears under **Telegram** once you bind it. Your contact continues to use their existing Telegram chat. Start with one trusted contact for the first delivery test.
 
-```bash
-sudo ./constellation_matrix telegram allow '<peer-type>:<peer-id>' '<login-id>'
-```
+1. **Element.** In the bridge bot’s private chat, send `!tg list-logins` and copy the login ID for your connected Telegram account.
+2. **Element or Telegram.** Identify the conversation you want to connect.
 
-Use `user` for a DM, `chat` for a basic group, and `channel` for a verified supergroup. Use positive Telegram IDs. The bridge splits portals by receiving account.
+   - **Private chat.** In the bridge bot DM, send `!tg resolve-identifier <login-id> <telegram-username>` with the contact’s Telegram username. Check the resolved contact and use their peer ID in the form `user:1001`.
+   - **Group.** Confirm the group name and membership in Telegram. Use `chat:<peer-id>` for a basic group or `channel:<peer-id>` for a supergroup without topics. Use the positive Telegram peer ID. For a supergroup message link in the form `https://t.me/c/<peer-id>/<message-id>`, use the first number after `/c/`. [Telegram message links](https://core.telegram.org/api/links#message-links)
 
-3. **Telegram and Element.** Have the verified contact send a test message and open the resulting portal in Element. Check its membership and reply from the portal with a test message. Confirm the expected sender and destination in Telegram before enabling drafts. [Bridge configuration](https://docs.mau.fi/configs/mautrix-telegram/v26.11.html) · [Go bridge setup](https://docs.mau.fi/bridges/go/setup.html)
+3. **VPS terminal.** Allow the verified peer for the connected login. Replace the sample values with the peer and login you recorded.
+
+   ```bash
+   sudo ./constellation_matrix telegram allow 'user:1001' '2002'
+   ```
+
+4. **Telegram and Element.** Ask the contact or a group member to send a fresh test message in Telegram. Open the resulting portal in Element, accepting the room invitation if prompted. Check its name and membership, then send a short test reply in that room and confirm it arrives in the intended Telegram conversation. [Bridge configuration](https://docs.mau.fi/configs/mautrix-telegram/v26.11.html)
+5. **VPS terminal and Element.** If this is your first chat, [start the drafting agent](#start-the-drafting-agent). Then [bind the verified portal](#bind-verified-chats-to-the-telegram-space) to add it to **Telegram**. Repeat the allow and bind steps for each additional conversation.
 
 ## Start the drafting agent
 
@@ -61,8 +73,6 @@ sudo ./constellation_matrix telegram probe
 sudo ./constellation_matrix telegram start-agent
 ```
 
-When `prepare-agent` prompts, enter your existing Matrix operator password. The installer uses it to link **Telegram** under **Agents** in Element.
-
 **Operator handoff.** When `sign-in` prints a verification page and one-time code, open that page in your browser and complete device verification with the intended Codex account. Resume in the terminal after sign-in succeeds. The Instance saves its OAuth credentials in its own private persistent directory. The connector uses its own scoped ACP token. `probe` runs two synthetic turns and checks that the second turn resumes the Amplifier session before the connector can start.
 
 If an earlier setup stopped with `HTTP 400 M_UNKNOWN` while creating a Matrix v12 room, rerun `prepare-agent` with the updated installer. It reuses the connector identity and initialized rooms. If a failed request left an alias on an empty room owned by the connector, it recreates the room and assigns that alias to it.
@@ -71,7 +81,7 @@ The release pins mautrix Telegram `v26.11`, Constellation Instance `0.22.17`, Am
 
 The Telegram model uses a standalone Amplifier bundle. The connector records scoped delivery metadata in Context Intelligence. Dependencies are prepared when the engine image is built. If an older engine failed to activate `hook-context-intelligence`, rerun `prepare-agent` with the updated release and then rerun `probe`. A completed Codex sign-in is reused.
 
-## Bind the test chat and verify delivery
+## Bind verified chats to the Telegram Space
 
 **Element.** Accept the `Telegram` Space and `Telegram Control` invitations. Control is encrypted, invite-only, and non-federated. Its members are the operator, the connector, and the optional configured Dot account. In the verified portal, invite `@telegram-agent:<SERVER_NAME>` and enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins the portal during binding. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
@@ -89,21 +99,28 @@ Keep a private binding file for each selected chat. Use `mode: draft` and `trigg
 }
 ```
 
-**VPS terminal.** Replace the example peer, login, receiver, and Matrix room ID with the verified values. For a split DM portal, `receiver` is the same login ID. In Element, find **Internal Room ID** under **Room settings → Advanced**. Save the binding as a private file. [Element room settings](https://docs.element.io/latest/element-support/matrix-rooms/managing-a-room-room-settings/)
+**VPS terminal.** Give each chat a unique `id`, such as `sam-private` or `project-group`. Set `peer` to the value you allowed and use the connected Telegram login ID for both `login` and `receiver`. In the portal in Element, find its **Internal Room ID** under **Room settings → Advanced** and use that as `room`. Save the binding as a private file. [Element room settings](https://docs.element.io/latest/element-support/matrix-rooms/managing-a-room-room-settings/)
 
 ```bash
 sudo ./constellation_matrix telegram bind /path/to/pilot-dm.json
 ```
 
-Keep the connector running while binding. It completes a Matrix sync after joining a portal before the binding activates. A later sync gap or loss of membership pauses that binding. Use `report` to see the reason for a pause recorded by the connector.
+Keep the connector running while binding. It completes a Matrix sync after joining the portal before the binding activates. When the command succeeds, open **Telegram** in Element and look for the contact or group’s portal alongside **Telegram Control**. A later sync gap or loss of membership pauses that binding. Use `report` to see the reason for a pause recorded by the connector.
 
 **Telegram and Element.** Have the test contact send a new message. In `Telegram Control`, check that the draft cites the test portal and review its destination and text. The operator selects **Approve and send** on that draft. Confirm exactly one message arrives in the intended Telegram chat with the expected attribution.
 
-The operator may add a verified portal to the Space if that navigation step needs to be retried. For a group, identify and verify its type before preparing a binding. `manual` records no automatic work. `draft` sends a candidate only into Control. `auto` queues a reply only in an explicitly configured binding, within its trigger, expiry, quota, audience, and outbox checks. The pilot starts with draft mode.
+`manual` records no automatic work. `draft` sends a candidate only into Control. `auto` queues a reply only in an explicitly configured binding, within its trigger, expiry, quota, audience, and outbox checks. The pilot starts with draft mode.
 
 ## Operate in Element
 
-- Writing directly in a portal can publish to Telegram immediately. Use Control to request, approve, or reject drafts.
+### Write to a contact or group
+
+1. In Element, open **Telegram** and select the contact or group’s portal. Check the room name and the conversation before sending.
+2. Type a new message in that portal and press Enter. To respond to a specific message, choose **Reply** on it first. Messages sent from the portal can publish immediately to Telegram using the connected login.
+3. For a reviewed reply, switch to **Telegram Control** and follow the draft steps below. If Dot is enabled, you can also ask it to draft a new message to a connected chat, then approve it in Control.
+
+### Review and manage drafts
+
 - To request a draft for a group, send `telegram draft <binding-id> <source-event-id>` as a fresh message in Control. Use the latest admitted remote text from the intended portal.
 - Control shows the exact draft, source link, and expiry. In Element Desktop or Element X, read the draft and use **Approve and send** or **Reject** on the matching poll. The first valid choice by the operator closes that review. The draft's own `telegram approve <draft-id> <version>` and `telegram reject <draft-id> <version>` commands remain available as new messages in Control. A new human event, policy change, expiry, or audience change can make a draft stale.
 - `telegram pause <binding-id>` in Control pauses an individual binding. `telegram pause` there pauses all bindings. If Matrix is unavailable, use `telegram pause` from the VPS root console. The pause applies before a send enters the in-flight boundary.
@@ -121,6 +138,16 @@ When Dot is enabled, run `sudo ./constellation_matrix telegram dot-control enabl
 - After a global pause, verify destination, audience, and any in-flight effects. Run `arm-resume`, `resume`, and then `bind` for the selected conversations. A changed audience or endpoint requires pausing and `rotate` before rebinding. Remove the connector from the portal and remove its relay when revoking its ability to send.
 
 A Telegram relay uses the selected Telegram login with bridge attribution. Matrix encryption covers the Matrix side up to mautrix. Telegram uses the protections of the selected Telegram chat. [Bridge encryption](https://docs.mau.fi/bridges/general/end-to-bridge-encryption.html)
+
+## Repair an existing Telegram layout
+
+Run this from the updated checkout to move the existing Space, Control room, bridge DM, and verified chats to the top-level **Telegram** Space. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
+
+```sh
+sudo ./constellation_matrix telegram layout
+```
+
+If multiple verified bridge DMs match, choose the room you already use. For an unattended repair, pass a private `--owner-password-file` and, when needed, `--bridge-room` with the chosen Matrix room ID.
 
 ## Recovery and monitoring
 

@@ -1,12 +1,12 @@
 # Finalize your Constellation setup
 
-The installer opens this wizard after deploying the workspace. Press Enter or → for the next page and ← to go back. Press Ctrl+C to pause. Resume from the VPS checkout with the command below, or append `--print` for the full checklist. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
+The terminal opens the Element sign-in screen after deploying the workspace. Press Enter once you have signed in. Press Ctrl+C to pause. Resume from the VPS checkout or append `--print` to print the sign-in instructions and guide locations. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
 
 ```sh
 sudo ./constellation_matrix setup-guide
 ```
 
-If someone is guiding the setup through computer use, take over for the password, API key, verification code, and QR steps marked below. Enter credentials directly in their destination app or private terminal.
+Enter passwords, API keys, and verification codes in their destination app or private VPS terminal.
 
 ## 💬 Element Desktop
 
@@ -15,30 +15,17 @@ If someone is guiding the setup through computer use, take over for the password
 3. **Element.** Paste the HTTPS Matrix homeserver printed by `setup-guide` into **Other account provider** and select **Continue**.
 4. **Operator handoff.** Enter the printed Matrix username and the operator password you chose during installation. Select **Sign in**, then open **Agents → Office**. [Element onboarding](https://docs.element.io/latest/element-support/quick-start-guide/onboarding/)
 
-## 🧠 Context Intelligence
+## 📌 Finish in Element
 
-1. **Browser.** Open the printed Context Intelligence URL to launch Neo4j Browser.
-2. **Operator handoff.** Enter `neo4j` and the dedicated Context Intelligence password you chose. To recover a stored or generated password, use the command printed by the wizard. The default is shown below. Select **Connect** in Neo4j Browser.
+- **Agents → VPS Alerts → Pinned messages → Workspace shortcuts.** Open the dashboard to see resources and agent readiness. Open Context Intelligence to launch Neo4j Browser and sign in as `neo4j` with the dedicated password. The pin includes the command to retrieve the password privately on your VPS.
+- **Agents → VPS Alerts → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. An empty list is expected before you activate any Office agents. [Dot setup](dot.md)
+- **Telegram → Telegram Control → Pinned messages → Set up Telegram.** Accept the private Telegram Space and Control invitations, then use the pin to set up the bridge, verify a chat, and test draft delivery. Open **Telegram Bridge** in the same Space to scan the login QR code after activation. [Telegram setup](telegram.md)
 
-```sh
-sudo cat -- /srv/constellation-matrix/context/neo4j-password
-```
-
-## 📊 Dashboard
-
-- **Browser and Element.** Open the printed dashboard URL. Then open **Agents → VPS Alerts → Pinned messages** in Element and check both links in the **Workspace shortcuts** pin. The roster can be empty before the agent selection step.
-
-## 🔌 Dot · Secure MCP Tunnel
-
-If you selected Dot, create and associate a tunnel in OpenAI Platform, issue a restricted runtime key, and start the tunnel in the VPS terminal. The operator enters the key at the hidden prompt. Connect the same tunnel to a private ChatGPT plugin named **Constellation Office** and ask Dot to run `list_agents`. An empty roster is expected before agent selection. [Dot setup and test](dot.md)
-
-## ✈️ Telegram · Bridge and drafting agent
-
-If you selected Telegram, create or open a Telegram API application, save its two credentials in a private JSON file on the VPS, and start the bridge. The operator completes Telegram verification in the browser and scans the bridge login QR code on their phone. Allow one verified test chat. For drafting, complete the separate Codex device sign-in, bind that chat, and approve one test delivery in Element. [Telegram setup and test](telegram.md#get-the-telegram-api-credentials)
+The pins are published after you join the room and Element has registered your device’s encryption keys. You can finish these steps while the agents are being configured.
 
 ## 🤖 Select agents
 
-After the workspace pages, use the arrow keys and Enter to select your roster. Choose **Done** to register the agents. Complete Amplifier sign-in for each selected local agent. If provider setup is interrupted, use `sudo ./constellation_matrix agent configure` to resume. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
+After confirming Element sign-in, use the arrow keys and Enter to select your roster. Choose **Done** to register the agents. Complete Amplifier sign-in for each selected local agent. If provider setup is interrupted, use `sudo ./constellation_matrix agent configure` to resume. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
 
 ## 👋 Receive the welcome and send a task
 

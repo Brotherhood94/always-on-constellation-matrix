@@ -31,6 +31,10 @@ resolve_matrix_owner() {
 }
 
 case ${1:-} in
+  start-guide)
+    [[ $# == 1 && -s "$TELEGRAM_DATA/guide/token" && -s "$TELEGRAM_DATA/guide/room-id" ]]
+    "${compose[@]}" up -d --no-deps --build telegram-guide
+    ;;
   prepare)
     [[ $# == 2 ]] || { echo 'Use telegram prepare PRIVATE_API_CREDENTIALS_JSON' >&2; exit 2; }
     resolve_matrix_owner

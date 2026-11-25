@@ -14,7 +14,7 @@ The workspace and integrations checklist opens with **Done** highlighted. On a f
 
 Enter a Matrix operator password of at least 12 characters, then re-enter it on the confirmation screen. Both fields mask what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
 
-After the workspace boots, complete the Element, Context Intelligence, dashboard, and enabled integration pages. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
+After the workspace boots, sign in to Element and confirm sign-in in the terminal. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
 
 The installer starts the selected local Amplifier Instances together and opens provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.
 
@@ -26,7 +26,7 @@ Each agent runs Amplifier’s own provider manager. It offers Anthropic for Clau
 
 Check the agent name at the top of each page. **Add a provider** creates an additional connection for that agent. Choose **Done** to verify that agent and move to the next one in batch setup. Each agent can use a different provider and model.
 
-After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Chief of Staff uses its private chat when selected. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `sudo ./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the full checklist.
+After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Chief of Staff uses its private chat when selected. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `sudo ./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the sign-in instructions and guide locations.
 
 Pass an agent ID to `agent configure` to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow.
 
@@ -54,11 +54,11 @@ Open **Context Intelligence** from the dashboard or VPS Alerts to launch Neo4j B
 sudo cat -- /srv/constellation-matrix/context/neo4j-password
 ```
 
-Run `sudo ./constellation_matrix setup-guide --print` to see the deployment URLs and the actual password-file path. Pass the same `--data-dir` used during installation if you changed the default.
+Find the deployment URLs and the password retrieval command for your data directory in **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**.
 
 ## Connect Dot and Telegram
 
-The wizard opens a separate page for each selected integration. Set up Dot with an OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. For Telegram, prepare the bridge, sign in from its Element DM, and verify a chat. Follow the Telegram guide to bind that chat to the drafting agent for drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
+For enabled integrations, open **Agents → VPS Alerts → Pinned messages → Connect Dot** and **Telegram → Telegram Control → Pinned messages → Set up Telegram** in Element. Set up Dot with an OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. For Telegram, prepare the bridge, sign in from its Element DM, and verify a chat. Follow the Telegram guide to bind that chat to the drafting agent for drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
 
 ## Boot and service placement
 

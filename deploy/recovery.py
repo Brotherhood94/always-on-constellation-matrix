@@ -44,7 +44,7 @@ def backup(data, mode):
     compose = ('docker', 'compose', '--project-directory', str(data), '--profile', 'agents')
     running = services(data)
     telegram = tuple()
-    if (data / 'telegram/connector/config.json').exists():
+    if any((data / name).exists() for name in ('telegram/connector/config.json', 'telegram/guide/token')):
         source = Path(__file__).resolve().parents[1] / 'integrations/telegram/compose.yaml'
         settings = json.loads((data / 'settings.json').read_text())
         installed = data / 'host/telegram-compose.yaml'

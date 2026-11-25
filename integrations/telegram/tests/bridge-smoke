@@ -77,7 +77,9 @@ done
 docker exec "$postgres" pg_isready -h 127.0.0.1 -U synapse -d synapse >/dev/null
 docker run --rm --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" -B /src/bridge_config.py database-sql /state |
   docker exec -i "$postgres" psql -qX --set ON_ERROR_STOP=1 -U synapse -d postgres
-docker run -d --name "$synapse" --network "$network" --network-alias synapse -v "$state:/state" --entrypoint python "$syn" -m synapse.app.homeserver -c /state/synapse/homeserver.yaml >/dev/null
+docker run -d --name "$synapse" --network "$network" --network-alias synapse -v "$state:/state" \
+  -v "$src:/telegram:ro" -v "$src/../../deploy/matrix:/matrix:ro" --entrypoint python "$syn" \
+  -m synapse.app.homeserver -c /state/synapse/homeserver.yaml >/dev/null
 for i in $(seq 1 45); do
   if docker exec "$synapse" curl -fsS http://localhost:8008/_matrix/client/versions >/dev/null 2>&1; then break; fi
   sleep 1
@@ -96,6 +98,26 @@ if docker logs "$bridge" 2>&1 | rg -qi 'config validation failed|failed to start
   exit 1
 fi
 echo 'Pinned mautrix started against Synapse, migrated PostgreSQL, and exposed no portal with the empty allowlist.'
+docker exec -i -e MATRIX_LOCAL_PORT=8008 -e PYTHONPATH=/telegram:/matrix "$synapse" python -B - <<'PY'
+from time import sleep
+
+from layout import CLIENT, membership
+from provision import request
+from telegram_provision import bridge_dm
+
+owner = request('POST', CLIENT + '/register', {'username': 'operator', 'password': 'fixture-long-password',
+                                                 'auth': {'type': 'm.login.dummy'}})
+token = owner['access_token']
+room = bridge_dm('telegram.test', owner['user_id'], token, None, select=lambda _: None)
+for _ in range(30):
+    if membership(room, '@telegrambot:telegram.test', token) == 'join':
+        break
+    sleep(0.5)
+else:
+    raise AssertionError('mautrix did not join the encrypted management DM')
+assert bridge_dm('telegram.test', owner['user_id'], token, room, select=lambda _: None) == room
+print('Pinned mautrix joined the installer-created encrypted Telegram Bridge DM.')
+PY
 # Leave the AppService identity available, but isolate the following synthetic room from bridge automation.
 docker stop --timeout 3 "$bridge" >/dev/null
 docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gid=991,mode=0700 \

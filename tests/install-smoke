@@ -6,6 +6,14 @@ umask 077
 work=$(mktemp -d "${CONSTELLATION_TEST_TMP:-/tmp}/constellation-install.XXXXXXXX")
 data="$work/data"
 cleanup() {
+  if [[ -f "$data/.env" ]]; then
+    (
+      set -a
+      . "$data/.env"
+      docker compose -p "$TELEGRAM_PROJECT" -f "$src/integrations/telegram/compose.yaml" \
+        --profile agent down --volumes
+    ) >/dev/null 2>&1 || true
+  fi
   if [[ -f "$data/compose.yaml" ]]; then
     docker compose --project-directory "$data" --profile agents down --volumes >/dev/null 2>&1 || true
   fi
@@ -36,12 +44,18 @@ config = {
     'agents': [],
     'owner_password_file': str(work / 'password'),
     'neo4j_password_file': str(work / 'graph-password'),
-    'project': project, 'systemd': False, 'tailscale': False, **ports,
+    'project': project, 'systemd': False, 'tailscale': False, 'telegram': True, **ports,
 }
 (work / 'install.json').write_text(json.dumps(config))
 PYTHON
 "$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cp "$data/rooms.json" "$work/initial-rooms.json"
+cp "$data/telegram/layout.json" "$work/initial-telegram-layout.json"
+[[ -s "$data/telegram/guide/token" && ! -e "$data/telegram/database.json" ]]
+telegram_services=$(docker compose --env-file "$data/.env" -f "$src/integrations/telegram/compose.yaml" \
+  -p "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"] + "-telegram")' "$data/settings.json")" \
+  ps --services --status running)
+grep -Fxq telegram-guide <<< "$telegram_services"
 PYTHONPATH="$src/deploy" python3 -B - "$data" "$work" <<'PYTHON'
 from pathlib import Path
 import sys
@@ -53,9 +67,9 @@ data, work = map(Path, sys.argv[1:])
 assert load(data / 'agents.json')['agents'] == {}
 path = data / 'onboarding.json'
 selection = ['manager', 'coder']
-confirmed = ['element', 'dashboard', 'context']
+confirmed = ['element']
 save(path, {'confirmed': confirmed, 'select_agents': True, 'selection': selection})
-select_roster(data, path, 'fixture', (work / 'password').read_text().rstrip('\n'))
+select_roster(data, path, (work / 'password').read_text().rstrip('\n'))
 assert load(data / 'settings.json')['agents'] == selection
 assert load(path) == {'confirmed': confirmed}
 config = load(work / 'install.json')
@@ -64,6 +78,7 @@ PYTHON
 printf '%s\n' 'Provisioned the workspace first, then registered the saved agent roster.'
 "$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cmp "$work/initial-rooms.json" "$data/rooms.json"
+cmp "$work/initial-telegram-layout.json" "$data/telegram/layout.json"
 cmp "$work/graph-password" "$data/context/neo4j-password"
 ! grep -q 'neo4j_password' "$data/settings.json"
 docker compose --project-directory "$data" exec -T neo4j sh -ec '

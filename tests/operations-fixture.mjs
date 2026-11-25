@@ -55,6 +55,16 @@ async function eventually(check) {
   assert.fail('The operations service did not become ready');
 }
 
+async function readState(path) {
+  try {
+    return JSON.parse(await readFile(path, 'utf8'));
+  } catch (error) {
+    // The SDK can briefly truncate its sync file while writing a new token.
+    if (error.code !== 'ENOENT' && !(error instanceof SyntaxError)) throw error;
+    return {};
+  }
+}
+
 async function rosterFixture(chiefRoom, catalog, apply) {
   const db = new DatabaseSync(':memory:');
   const chiefId = '@chief-of-staff:' + domain;
@@ -351,6 +361,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
 try {
   const alerts = await room('vps-alerts');
   const office = await room('office');
+  const telegramControl = await room('telegram-control');
   const token = await login('operator', 'PINREAD');
   const preexisting = await api('/_matrix/client/v3/rooms/' + encodeURIComponent(alerts) + '/send/m.room.message/operator-pin',
     { method: 'PUT', token, body: { msgtype: 'm.text', body: 'Existing fixture pin' } });
@@ -378,10 +389,23 @@ try {
   }
   legacy.crypto.engine.machine.close();
   const oldPins = [preexisting.event_id, ...Object.values(entries).map(({ event }) => event)];
-  const monitorEnv = { STATE_DIR: monitor, DATA_DIR: monitorFiles, WORKSPACE_LINKS: join(base, 'links.json') };
+  const monitorEnv = { STATE_DIR: monitor, DATA_DIR: monitorFiles, WORKSPACE_LINKS: join(base, 'links.json'),
+    DOT_ENABLED: 'true', SYSTEMD_ENABLED: 'true', GUIDE_COMMAND: 'sudo ./constellation_matrix',
+    GRAPH_PASSWORD_COMMAND: "sudo cat -- '/srv/fixture workspace/context/neo4j-password'" };
   const freshMonitor = launch('/app/ops/monitor.mjs', monitorEnv);
-  await eventually(async () => JSON.parse(await readFile(join(monitor, 'sync.json'), 'utf8')).syncToken);
+  await eventually(async () => (await readState(join(monitor, 'sync.json'))).syncToken);
   assert.deepEqual((await api(pinState, { token })).pinned, [preexisting.event_id]);
+  const telegramGuide = join(base, 'telegram-guide');
+  await mkdir(telegramGuide);
+  // The layout fixture created the rooms and device with no Telegram credentials or Amplifier session.
+  const telegramAgentToken = await login('telegram-agent', 'TELEGRAM_SETUP');
+  await writeFile(join(telegramGuide, 'token'), telegramAgentToken);
+  await writeFile(join(telegramGuide, 'room-id'), telegramControl);
+  await writeFile(join(telegramGuide, 'command'), 'sudo ./constellation_matrix');
+  launch('/app/ops/monitor.mjs', { STATE_DIR: telegramGuide, TELEGRAM_GUIDE: 'true' });
+  await eventually(async () => (await readState(join(telegramGuide, 'sync.json'))).syncToken);
+  const telegramPins = state(telegramControl, 'm.room.pinned_events');
+  await assert.rejects(api(telegramPins, { token }), /HTTP 404/);
 
   const pinReaderState = join(base, 'pin-reader');
   await mkdir(pinReaderState);
@@ -391,15 +415,15 @@ try {
     deviceId: 'PINDEVICE', name: 'Fixture Operator', token: pinReaderToken });
   pinReader.syncingTimeout = 0;
   let cursor;
-  async function readShortcut(event) {
+  async function readShortcut(event, target = alerts) {
     const batch = await pinReader.doSync(cursor);
     cursor = batch.next_batch;
     await pinReader.crypto.updateSyncData(batch.to_device?.events || [], batch.device_one_time_keys_count || {},
       batch.device_unused_fallback_key_types || [], batch.device_lists?.changed || [], batch.device_lists?.left || []);
-    const raw = await pinReader.getRawEvent(alerts, event);
+    const raw = await pinReader.getRawEvent(target, event);
     assert.equal(raw.type, 'm.room.encrypted');
     try {
-      return (await pinReader.crypto.decryptRoomEvent(new matrix.EncryptedRoomEvent(raw), alerts)).raw.content;
+      return (await pinReader.crypto.decryptRoomEvent(new matrix.EncryptedRoomEvent(raw), target)).raw.content;
     } catch (error) {
       if (error.code !== 'GenericFailure') throw error;
       return null;
@@ -408,7 +432,10 @@ try {
   async function managedShortcut(exclude) {
     return eventually(async () => {
       const { pinned } = await api(pinState, { token });
-      return pinned.length === 2 && pinned[0] === preexisting.event_id && !exclude.includes(pinned[1]) && pinned[1];
+      const { entries = {} } = await readState(join(monitor, 'shortcut-pins.json'));
+      const event = entries.dashboard?.event;
+      return pinned.length === 3 && pinned[0] === preexisting.event_id && pinned.includes(event) &&
+        pinned.includes(entries['dot-setup']?.event) && !exclude.includes(event) && event;
     });
   }
   async function verifyShortcut(event, expected) {
@@ -416,9 +443,22 @@ try {
     assert.match(content.body, /^Workspace shortcuts\n/u);
     assert.ok(content.formatted_body.includes(`<a href="${expected.dashboard}">Open dashboard</a>`));
     assert.ok(content.formatted_body.includes(`<a href="${expected.context}">Open Context Intelligence</a>`));
+    assert.ok(content.body.includes(monitorEnv.GRAPH_PASSWORD_COMMAND));
   }
   const fresh = await managedShortcut(oldPins);
   await verifyShortcut(fresh, links);
+  const { entries: freshPins } = JSON.parse(await readFile(join(monitor, 'shortcut-pins.json'), 'utf8'));
+  const dotSetup = await eventually(() => readShortcut(freshPins['dot-setup'].event));
+  assert.match(dotSetup.body, /^Connect Dot\n/u);
+  assert.match(dotSetup.body, /list_agents/u);
+  const telegramSetup = await eventually(async () => (await api(telegramPins, { token }).catch(error => {
+    if (!error.message.endsWith('HTTP 404')) throw error;
+    return { pinned: [] };
+  })).pinned[0]);
+  const telegramInstructions = await eventually(() => readShortcut(telegramSetup, telegramControl));
+  assert.match(telegramInstructions.body, /^Set up Telegram\n/u);
+  assert.match(telegramInstructions.body, /Approve and send/u);
+  assert.match(telegramInstructions.body, /REPLACE_WITH_YOUR_API_HASH/u);
   console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');
 
   assert.equal(await readShortcut(oldPins[1]), null, 'A new device cannot decrypt the original shortcut');

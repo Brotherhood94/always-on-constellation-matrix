@@ -1,21 +1,87 @@
 """Exercise the actual room provisioning API against a disposable Synapse."""
 import os
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 from time import sleep
 import unittest
 from unittest.mock import patch
 
 from installer import save
-from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded, room_route
+from layout import CLIENT, create_layout, direct_room, invite, join, link_child, login, encoded, room_route
 from onboarding import finish
 from provision import MatrixError, request
 from roster import deactivate_worker, invitation_ready, office_inviter, prepare_management
 from roster_broker import verify
+from telegram_provision import reconcile_layout
 from vps_migration import revoke_legacy
 
 
 class LayoutTest(unittest.TestCase):
+    def test_telegram_layout_migrates_only_known_links_and_reuses_private_rooms(self):
+        domain = os.environ['MATRIX_SERVER_NAME']
+        password = 'synthetic-test-passphrase-88'
+        owner, bot = (login(account, password) for account in ('operator', 'telegrambot'))
+        token = owner['access_token']
+        rooms = create_layout(domain, owner['user_id'], token)
+        agents = rooms['space']
+
+        def children(room):
+            return {event['state_key'] for event in request('GET', room_route(room) + '/state', token=token)
+                    if event['type'] == 'm.space.child' and event['content'].get('via')}
+
+        with TemporaryDirectory() as working:
+            root = Path(working)
+            (root / 'connector').mkdir()
+            (root / 'guide').mkdir()
+            save(root / 'matrix-password', password + '\n')
+            args = (root, domain, owner['user_id'], token, agents)
+            fresh = reconcile_layout(*args, bridge_active=False, select=lambda _: self.fail('No bridge DM'))
+            self.assertFalse((root / 'database.json').exists())
+            self.assertFalse((root / 'connector/config.json').exists())
+            space, control = fresh['space'], fresh['control']
+            join(space, owner['user_id'], token)
+            join(control, owner['user_id'], token)
+            self.assertEqual(children(space), {control})
+            self.assertNotIn(space, children(agents))
+
+            def direct(key):
+                return direct_room(domain, agents, key, 'Fixture bridge chat', owner['user_id'], token,
+                                   bot['user_id'], bot['access_token'])
+
+            bridge = direct('legacy-telegram-bridge')
+            other = direct('other-telegram-bridge')
+            portal = request('POST', CLIENT + '/createRoom', {'preset': 'private_chat'}, token)['room_id']
+            with sqlite3.connect(root / 'connector/telegram.sqlite3') as connection:
+                connection.execute('CREATE TABLE binding (id TEXT, room TEXT)')
+                connection.execute('INSERT INTO binding VALUES (?, ?)', ('test', portal))
+            save(root / 'connector/config.json', {'space': space, 'controlRoom': control})
+            for room in (space, control, portal):
+                link_child(agents, room, domain, token)
+            event = request('PUT', room_route(bridge) + '/send/m.room.message/layout-history',
+                            {'msgtype': 'm.text', 'body': 'Fixture history'}, token)['event_id']
+            selected = []
+
+            def select(candidates):
+                selected.append(set(candidates))
+                return bridge
+
+            migrated = reconcile_layout(*args, bridge_active=True, select=select)
+            self.assertEqual(migrated, {**fresh, 'bridge': bridge})
+            alias = CLIENT + '/directory/room/' + encoded(f'#telegram-control:{domain}')
+            guide_token = (root / 'guide/token').read_text().strip()
+            request('DELETE', alias, token=guide_token)
+            self.assertEqual(reconcile_layout(*args, bridge_active=True, select=select), migrated)
+            self.assertEqual(request('GET', alias, token=token)['room_id'], control)
+            self.assertEqual(selected, [{bridge, other}])
+            self.assertEqual(children(space), {control, bridge, portal})
+            self.assertFalse({space, control, bridge, portal} & children(agents))
+            self.assertTrue({rooms['office'], rooms['alerts'], other} <= children(agents))
+            self.assertEqual(request('GET', room_route(bridge) + '/event/' + encoded(event), token=token)
+                             ['content']['body'], 'Fixture history')
+            self.assertEqual(set(request('GET', room_route(control) + '/joined_members', token=token)['joined']),
+                             {owner['user_id'], f'@telegram-agent:{domain}'})
+
     def test_idempotent_space_direct_chats_and_pin_power(self):
         server = os.environ['MATRIX_SERVER_NAME']
         password = 'synthetic-test-passphrase-88'
@@ -73,13 +139,13 @@ class LayoutTest(unittest.TestCase):
             save(matrix / 'matrix-token', manager['access_token'])
             save(data / 'rooms.json', rooms)
             save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
-            self.assertIn('Waiting for agent setup in Element: Remote Worker', finish(data, 'fixture')['waiting'])
+            self.assertIn('Waiting for agent setup in Element: Remote Worker', finish(data)['waiting'])
             worker['active'] = True
             invite(office, remote['user_id'], owner_token)
-            self.assertIn('Waiting for these agents to join Office in Element: Remote Worker', finish(data, 'fixture')['waiting'])
+            self.assertIn('Waiting for these agents to join Office in Element: Remote Worker', finish(data)['waiting'])
             publish.assert_not_called()
             join(office, remote['user_id'], remote['access_token'])
-            self.assertEqual(finish(data, 'fixture'), {'sender': manager['user_id'], 'room': office, 'event': '$welcome'})
+            self.assertEqual(finish(data), {'sender': manager['user_id'], 'room': office, 'event': '$welcome'})
             publish.assert_called_once()
 
     def test_vps_manager_replaces_root_in_the_same_private_chat(self):

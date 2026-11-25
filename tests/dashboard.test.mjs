@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshness, historyWithin, httpsLink } from '../dashboard/dashboard.mjs';
-import { reconcilePins, shortcutRecipientKey } from '../deploy/matrix/bot/pins.mjs';
+import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from '../deploy/matrix/bot/pins.mjs';
 
 test('dashboard accepts the graph link, filters history, and reports stale or missing data', () => {
   assert.equal(httpsLink('https://matrix.example:8444/browser/'), 'https://matrix.example:8444/browser/');
@@ -74,4 +74,49 @@ test('shortcut recipients use stable public device keys', () => {
   assert.equal(shortcutRecipientKey(owner, { A: { ...first, user_id: '@unrelated:fixture.test' }, B: {} }), null);
   assert.notEqual(shortcutRecipientKey(owner, { A: first }), shortcutRecipientKey(owner, { A: first, B: second }));
   assert.equal(shortcutRecipientKey(owner, { B: second, A: first }), shortcutRecipientKey(owner, { A: first, B: second }));
+});
+
+test('Element guides include copyable commands and manage optional pins independently', async () => {
+  const links = { dashboard: 'https://matrix.example:8443/', context: 'https://matrix.example:8444/browser/' };
+  const command = "sudo ./constellation_matrix --data-dir '/srv/test & workspace'";
+  const graphPassword = "sudo cat -- '/srv/test & workspace/context/neo4j-password'";
+  const state = { entries: {}, replaced: [] };
+  const telegramState = { entries: {}, replaced: [] };
+  const messages = new Map();
+  let pinned = ['$operator'];
+  const matrix = {
+    recipientKey: async () => 'device-key', getPinned: async () => pinned,
+    send: async (txn, content) => { messages.set('$' + txn, content); return '$' + txn; },
+    setPinned: async events => { pinned = events; }, save: async () => {},
+  };
+  await reconcilePins(matrix, links, state, { command, graphPassword, dot: true, systemd: true });
+  const workspace = messages.get(state.entries.dashboard.event);
+  assert.match(workspace.body, /Sign in as neo4j/);
+  assert.ok(workspace.body.includes(graphPassword));
+  assert.ok(workspace.formatted_body.includes('test &amp; workspace'));
+  assert.equal(state.entries.dashboard.event, state.entries.context.event);
+  const dot = messages.get(state.entries['dot-setup'].event);
+  assert.match(dot.body, /Tunnels Read \+ Manage/);
+  assert.match(dot.body, /Tunnels Read \+ Use/);
+  assert.match(dot.body, /https:\/\/platform\.openai\.com\/settings\/organization\/tunnels/);
+  assert.match(dot.body, /https:\/\/chatgpt\.com\/plugins/);
+  assert.match(dot.body, /list_agents/);
+  assert.ok(dot.body.includes(`${command} dot-connect tunnel_REPLACE_WITH_YOUR_ID`));
+  assert.equal(pinned.length, 3);
+  await reconcilePins(matrix, links, state, { command, graphPassword, dot: false });
+  assert.deepEqual(pinned, ['$operator', state.entries.dashboard.event]);
+  assert.equal(messages.size, 2);
+
+  pinned = ['$telegram-operator'];
+  await reconcileTelegramPin(matrix, telegramState, command);
+  const guide = messages.get(telegramState.entries['telegram-setup'].event);
+  assert.match(guide.body, /https:\/\/my\.telegram\.org\/apps/);
+  assert.match(guide.body, /Telegram mobile.*\n.*!tg login qr/);
+  assert.match(guide.body, /Approve and send/);
+  assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
+  assert.ok(guide.body.includes(`${command} telegram activate`));
+  assert.match(guide.formatted_body, /&lt;login-id&gt;/);
+  await reconcileTelegramPin(matrix, telegramState, command);
+  assert.equal(messages.size, 3);
+  assert.deepEqual(pinned, ['$telegram-operator', telegramState.entries['telegram-setup'].event]);
 });

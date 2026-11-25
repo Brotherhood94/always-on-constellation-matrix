@@ -24,7 +24,7 @@ from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
 from agent_catalog import KEY, profile
 from configure import write_config
-from layout import CLIENT, create_layout, direct_room, invite, join, link_child, login, missing, encoded
+from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded
 from provision import MatrixError, request
 
 DATA = Path('/srv/constellation-matrix')
@@ -435,7 +435,7 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
         directory(layout / 'execution')
 
 
-def provision_layout(settings, data, registry, passphrase):
+def provision_layout(settings, data, registry, passphrase, *, unattended=False):
     from roster import prepare_management
 
     own = login(settings['owner'], passphrase)
@@ -450,9 +450,7 @@ def provision_layout(settings, data, registry, passphrase):
         if settings['dot']:
             prepare_agent_state(data, 'dot', {'name': 'Dot'}, rooms, token, settings)
         if settings['telegram']:
-            space = missing(f"{CLIENT}/directory/room/{encoded('#telegram:' + settings['server_name'])}", token)
-            if space:
-                link_child(rooms['space'], space['room_id'], settings['server_name'], token)
+            provision_telegram_layout(settings, data, rooms, token, unattended=unattended)
         save(data / 'rooms.json', rooms)
         prepare_management(data, settings, registry, token)
     finally:
@@ -600,7 +598,7 @@ def workspace_command(data):
 
 def show_element_setup(settings, data=DATA):
     from setup_guide import show_printable
-    show_printable(settings, data, workspace_command(data))
+    show_printable(settings, workspace_command(data))
 
 
 def finalize_setup(data, *, print_only=False, passphrase=None):
@@ -673,7 +671,7 @@ def install(data, args):
             refresh_context(data)
         else:
             up(data, 'postgres', 'synapse', 'context')
-        provision_layout(settings, data, registry, passphrase)
+        provision_layout(settings, data, registry, passphrase, unattended=bool(args.config))
         compose(data, 'build', 'monitor')
         prepare_images(settings, registry)
         local_agents = [key for key, entry in registry['agents'].items() if entry['placement'] == 'local']
@@ -682,6 +680,8 @@ def install(data, args):
             services.append('dot')
         services.extend(f'engine-{key}' for key in local_agents)
         up(data, *services)
+        if settings['telegram']:
+            run_telegram(data, 'start-guide')
         sync_workshop(settings, data, registry)
         up(data, *(key for key in local_agents if registry['agents'][key]['active']))
         publish_inventory(settings, data, registry)
@@ -842,25 +842,73 @@ def agent_activate(data, key, *, pending_only=False):
         publish_inventory(settings, data, registry)
 
 
+def run_telegram(data, *args):
+    env = {**os.environ, 'TELEGRAM_STACK_DIR': str(data), 'PYTHONPATH': str(SOURCE / 'deploy/matrix')}
+    run('bash', str(SOURCE / 'integrations/telegram/telegram'), *args, env=env)
+
+
+def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *, unattended=False):
+    sys.path.insert(0, str(SOURCE / 'integrations/telegram'))
+    try:
+        from telegram_provision import reconcile_layout
+    finally:
+        sys.path.pop(0)
+    root = data / 'telegram'
+    directory(root, 0o711)
+    for name in ('connector', 'guide'):
+        directory(root / name, uid=RUNTIME_UID)
+    save(root / 'guide/command', workspace_command(data) + '\n', uid=RUNTIME_UID)
+    active = '/data/telegram-appservice.yaml' in load(data / 'synapse/homeserver.yaml').get('app_service_config_files', [])
+
+    def select(candidates):
+        if bridge_room in candidates:
+            return bridge_room
+        if unattended:
+            print(f'More than one Telegram Bridge DM matches. To finish the Telegram layout later, run:\n'
+                  f'  {workspace_command(data)} telegram layout')
+            return None
+        if bridge_room or not sys.stdin.isatty():
+            raise ValueError('Multiple private Telegram Bridge DMs match. Run telegram layout --bridge-room with one of: '
+                             + ', '.join(candidates))
+        return choose_option('✈️ Choose the Telegram Bridge chat to keep', {room: room for room in candidates})
+
+    return reconcile_layout(root, settings['server_name'], rooms['owner'], token, rooms['space'],
+                            bridge_active=active, select=select)
+
+
 def telegram(data, args, owner_password_file=None):
     settings, registry = open_existing(data)
     if not settings['telegram']:
         raise ValueError('Select Telegram in the installer first')
+    if not args:
+        raise ValueError('Specify a Telegram command. See docs/telegram.md.')
     if args == ['enable-operations']:
         from host_services import enable_telegram_units
         with operator_lock(data):
             enable_telegram_units(settings, data)
         return
-    env = {**os.environ, 'TELEGRAM_STACK_DIR': str(data), 'PYTHONPATH': str(SOURCE / 'deploy/matrix')}
-    run('bash', str(SOURCE / 'integrations/telegram/telegram'), *args, env=env)
+    if args[0] in {'layout', 'activate'}:
+        action = args[0]
+        parser = argparse.ArgumentParser(prog=f'constellation_matrix telegram {action}', allow_abbrev=False)
+        parser.add_argument('--owner-password-file', type=Path)
+        parser.add_argument('--bridge-room', help='Room ID to use when multiple private bridge DMs match')
+        options = parser.parse_args(args[1:])
+        with operator_lock(data):
+            owner = login(settings['owner'], password(settings, options.owner_password_file or owner_password_file))
+            token = owner['access_token']
+            try:
+                if action == 'activate':
+                    run_telegram(data, action)
+                rooms = provision_telegram_layout(settings, data, load(data / 'rooms.json'), token, options.bridge_room)
+                run_telegram(data, 'start-guide')
+            finally:
+                request('POST', CLIENT + '/logout', {}, token)
+        print('In Element, accept the invitations and open Telegram → Telegram Control → Pinned messages.')
+        if rooms['bridge']:
+            print('Telegram Bridge is linked under Telegram.')
+        return
+    run_telegram(data, *args)
     if args[0] == 'prepare-agent':
-        rooms = load(data / 'rooms.json')
-        owner = login(settings['owner'], password(settings, owner_password_file))
-        try:
-            control = load(data / 'telegram/connector/config.json')
-            link_child(rooms['space'], control['space'], settings['server_name'], owner['access_token'])
-        finally:
-            request('POST', CLIENT + '/logout', {}, owner['access_token'])
         sync_workshop(settings, data, registry)
     if args[0] == 'dot-control' and settings['dot']:
         compose(data, 'restart', 'dot')
@@ -949,7 +997,7 @@ def main():
     status = commands.add_parser('status', help='Read the dashboard snapshots')
     status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services')
     setup = commands.add_parser('setup-guide', help='Resume workspace onboarding')
-    setup.add_argument('--print', dest='print_only', action='store_true', help='Print the full setup guide')
+    setup.add_argument('--print', dest='print_only', action='store_true', help='Print Element sign-in and guide locations')
     removal = commands.add_parser('uninstall', help='Remove workspace services, with optional data deletion')
     removal.add_argument('--data-dir', type=Path, default=argparse.SUPPRESS,
                          help='Deployment data directory, defaults to /srv/constellation-matrix.')

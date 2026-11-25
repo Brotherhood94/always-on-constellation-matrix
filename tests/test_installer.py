@@ -17,14 +17,14 @@ from agent_picker import agent_checklist, choose_option, menu, select_agents, se
 from installer import (
     PRESETS, agent_activate, agent_sign_in, context_config, install, interactive, load, main,
     normalized, password, prepare_graph_password, prepare_storage, provision_layout, register_entry, save,
-    show_element_setup, tailscale_dns,
+    show_element_setup, tailscale_dns, telegram,
 )
 from agent_catalog import document
 from compose import definition
 from dot import connect as connect_dot
 from onboarding import finish, guide, verified_pins
 from remote import compose_remote
-from setup_guide import confirm_page
+from setup_guide import confirm_element
 
 
 class InstallerTest(unittest.TestCase):
@@ -303,10 +303,9 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('Agents → Office', rendered)
         self.assertIn('Tailscale', rendered)
         self.assertIn('Agents → VPS Alerts → Pinned messages', rendered)
-        self.assertIn(self.settings['dashboard_url'], rendered)
-        self.assertIn(self.settings['context_url'], rendered)
-        self.assertIn('Enter neo4j as the username.', rendered)
-        self.assertIn('sudo cat -- /srv/constellation-matrix/context/neo4j-password', rendered)
+        self.assertIn('Pinned messages → Workspace shortcuts', rendered)
+        self.assertNotIn(self.settings['dashboard_url'], rendered)
+        self.assertNotIn(self.settings['context_url'], rendered)
         self.assertNotIn('Keep the full setup checklist handy', rendered)
         self.assertIn('sudo ./constellation_matrix setup-guide', rendered)
         output = StringIO()
@@ -332,12 +331,12 @@ class InstallerTest(unittest.TestCase):
                 main()
             rendered = output.getvalue()
             lines = [line.strip() for line in rendered.splitlines()]
-            self.assertIn(f"sudo cat -- '{data}/context/neo4j-password'", lines)
             for secret in secrets.values():
                 self.assertNotIn(secret, rendered)
             invocation = f"sudo ./constellation_matrix --data-dir '{data}'"
-            self.assertIn(f'{invocation} dot-connect tunnel_REPLACE_WITH_YOUR_ID', lines)
-            self.assertIn(f'{invocation} telegram prepare "$HOME/telegram-api.json"', lines)
+            self.assertNotIn('dot-connect', rendered)
+            self.assertNotIn('telegram prepare', rendered)
+            self.assertNotIn('neo4j-password', rendered)
             self.assertIn(f'{invocation} setup-guide', lines)
 
     def test_setup_guide_shows_steps_for_selected_integrations(self):
@@ -347,51 +346,11 @@ class InstallerTest(unittest.TestCase):
                 with redirect_stdout(output):
                     show_element_setup({**self.settings, 'dot': dot, 'telegram': telegram})
                 rendered = output.getvalue()
-                headings = ['💬 Element Desktop', '🧠 Context Intelligence · Neo4j Browser', '📊 Dashboard']
-                if dot:
-                    headings.append('🔌 Dot · Secure MCP Tunnel')
-                if telegram:
-                    headings.append('✈️ Telegram · Bridge and drafting agent')
-                positions = [rendered.index(heading) for heading in headings]
-                self.assertEqual(positions, sorted(positions))
-                self.assertEqual('docs/dot.md' in rendered, dot)
-                self.assertEqual('dot-connect tunnel_REPLACE_WITH_YOUR_ID' in rendered, dot)
-                self.assertEqual('https://platform.openai.com/settings/organization/tunnels' in rendered, dot)
-                self.assertEqual('https://platform.openai.com/settings/organization/api-keys' in rendered, dot)
-                self.assertEqual('https://chatgpt.com/plugins' in rendered, dot)
-                self.assertEqual('Suggested plugin name: Constellation Office' in rendered, dot)
-                self.assertEqual('docs/telegram.md' in rendered, telegram)
-                self.assertEqual('https://my.telegram.org/apps' in rendered, telegram)
-                self.assertEqual('@telegrambot:fixture.test' in rendered, telegram)
-                self.assertEqual('!tg login qr' in rendered, telegram)
-                self.assertEqual('telegram activate' in rendered, telegram)
-                for step in ('prepare-agent', 'sign-in', 'probe', 'start-agent'):
-                    self.assertEqual(f'telegram {step}' in rendered, telegram)
-                self.assertEqual('Enter your existing Matrix operator password when prompted.' in rendered, telegram)
-
-    def test_setup_guide_explains_how_to_create_integration_credentials(self):
-        output = StringIO()
-        with redirect_stdout(output):
-            show_element_setup(self.settings)
-        rendered = output.getvalue()
-        for instruction in ('Read + Manage', 'Restricted runtime API key with Tunnels Read + Use',
-                            'hidden prompt', 'No authentication', 'App api_id and App api_hash',
-                            'Link Desktop Device'):
-            self.assertIn(instruction, rendered)
-        lines = [line.strip() for line in rendered.splitlines()]
-        self.assertIn('chmod 600 "$HOME/telegram-api.json"', lines)
-        example = next(line for line in lines if line.startswith('{"api_id":'))
-        self.assertEqual(json.loads(example), {
-            'api_id': 1234567,
-            'api_hash': 'REPLACE_WITH_YOUR_API_HASH',
-        })
-
-    def test_setup_guide_explains_dot_systemd_requirement(self):
-        output = StringIO()
-        with redirect_stdout(output):
-            show_element_setup({**self.settings, 'systemd': False})
-        self.assertIn('Enable systemd on the deployment to connect the Dot tunnel.', output.getvalue())
-        self.assertNotIn('dot-connect', output.getvalue())
+                self.assertEqual('Pinned messages → Connect Dot' in rendered, dot)
+                self.assertEqual('Telegram → Telegram Control → Pinned messages' in rendered, telegram)
+                self.assertEqual(rendered.count('💬 Element Desktop'), 1)
+                self.assertNotIn('🔌 Dot · Secure MCP Tunnel', rendered)
+                self.assertNotIn('✈️ Telegram · Bridge and drafting agent', rendered)
 
     def test_setup_guide_uses_color_only_when_enabled(self):
         for environment, colored in [({'TERM': 'xterm'}, True), ({'TERM': 'dumb'}, False),
@@ -403,28 +362,20 @@ class InstallerTest(unittest.TestCase):
                     show_element_setup(self.settings)
                 self.assertEqual('\x1b[1;36m' in output.getvalue(), colored)
 
-    def test_setup_page_handles_enter_arrows_and_pause(self):
+    def test_element_page_handles_enter_right_arrow_and_pause(self):
         output = StringIO()
         with redirect_stdout(output), patch('sys.stdin.fileno', return_value=10), \
                 patch('setup_guide.termios.tcgetattr'), patch('setup_guide.tty.setcbreak'), \
                 patch('setup_guide.termios.tcsetattr') as restore, \
                 patch('setup_guide.select', return_value=([10], [], [])), \
-                patch('setup_guide.os.read', side_effect=[
-                    b'\x1b', b'[', b'D', b'\n', b'\x1b', b'O', b'D',
-                    b'\x1b', b'[', b'C', KeyboardInterrupt,
-                ]):
-            self.assertEqual(confirm_page('Element', 'Install Element.'), 'next')
-            self.assertEqual(confirm_page('Context Intelligence', 'Open Neo4j.', can_go_back=True), 'back')
-            self.assertEqual(confirm_page('Dashboard', 'Open the dashboard.', can_go_back=True), 'next')
-            self.assertIsNone(confirm_page('Dashboard', 'Open the dashboard.', can_go_back=True))
-        screens = output.getvalue().split('\x1b[2J\x1b[H')[1:]
-        self.assertEqual(len(screens), 4)
-        self.assertNotIn('← Back', screens[0])
-        self.assertIn('← Back    → Next (Enter)', screens[1])
-        self.assertNotIn('Q then Enter', output.getvalue())
-        self.assertEqual(restore.call_count, 4)
+                patch('setup_guide.os.read', side_effect=[b'\n', b'\x1b', b'[', b'C', KeyboardInterrupt]):
+            self.assertEqual(confirm_element('Element', 'Install Element.'), 'next')
+            self.assertEqual(confirm_element('Element', 'Install Element.'), 'next')
+            self.assertIsNone(confirm_element('Element', 'Install Element.'))
+        self.assertEqual(restore.call_count, 3)
+        self.assertIn('→ I’m signed in (Enter)', output.getvalue())
 
-    def test_wizard_resumes_at_first_unconfirmed_page(self):
+    def test_wizard_resumes_element_and_immediately_opens_agent_selection(self):
         settings = {**self.settings, 'agents': []}
         with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
             data = Path(work)
@@ -433,52 +384,44 @@ class InstallerTest(unittest.TestCase):
             save(data / 'agents.json', registry)
             save(data / 'onboarding.json', {'confirmed': [], 'select_agents': True})
             command = 'sudo ./constellation_matrix'
-            with patch('onboarding.confirm_page', side_effect=['next', None]) as confirm, \
+            with patch('onboarding.confirm_element', return_value=None) as confirm, \
                  patch('onboarding.select_agents') as picker:
                 guide(data, settings, command, None)
             picker.assert_not_called()
-            self.assertEqual([call.args[0] for call in confirm.call_args_list],
-                             ['💬 Element Desktop', '🧠 Context Intelligence · Neo4j Browser'])
-            self.assertEqual(load(data / 'onboarding.json'), {'confirmed': ['element'], 'select_agents': True})
+            self.assertEqual(confirm.call_args.args[0], '💬 Element Desktop')
+            self.assertEqual(load(data / 'onboarding.json'), {'confirmed': [], 'select_agents': True})
             self.assertIn(f'{command} setup-guide', output.getvalue())
 
             def pick(_):
-                self.assertEqual(load(data / 'onboarding.json')['confirmed'],
-                                 ['element', 'context', 'dashboard', 'dot', 'telegram'])
+                self.assertEqual(load(data / 'onboarding.json')['confirmed'], ['element'])
                 return []
 
-            with patch('onboarding.confirm_page', return_value='next') as confirm, \
+            with patch('onboarding.confirm_element', return_value='next') as confirm, \
                  patch('onboarding.select_agents', side_effect=pick) as picker, \
                  patch('onboarding.open_existing', return_value=(settings, registry)), \
                  patch('onboarding.provision_selected_agents') as provision:
                 guide(data, settings, command, None)
                 guide(data, settings, command, None)
-            self.assertEqual([call.args[0] for call in confirm.call_args_list], [
-                '🧠 Context Intelligence · Neo4j Browser', '📊 Dashboard',
-                '🔌 Dot · Secure MCP Tunnel', '✈️ Telegram · Bridge and drafting agent',
-            ])
+            confirm.assert_called_once()
             picker.assert_called_once()
             provision.assert_called_once_with(data, settings, registry, [], None)
             self.assertTrue(load(data / 'onboarding.json')['welcome']['skipped'])
             self.assertEqual((data / 'onboarding.json').stat().st_mode & 0o777, 0o600)
 
-    def test_wizard_can_revisit_confirmed_pages_after_resume(self):
-        settings = {**self.settings, 'agents': [], 'dot': False, 'telegram': False}
+    def test_legacy_element_confirmation_and_welcome_receipt_survive(self):
+        settings = {**self.settings, 'agents': []}
         with TemporaryDirectory() as work, redirect_stdout(StringIO()):
             data = Path(work)
             save(data / 'settings.json', settings)
             save(data / 'agents.json', {'agents': {}})
             state = data / 'onboarding.json'
-            save(state, {'confirmed': ['element', 'context']})
-            with patch('onboarding.confirm_page', side_effect=['back', 'back', 'next', 'next', 'next']) as confirm, \
+            receipt = {'confirmed': ['element', 'context'], 'welcome': {'event': '$existing'}}
+            save(state, receipt)
+            with patch('onboarding.confirm_element') as confirm, \
                     patch('onboarding.deliver_welcome') as welcome:
                 guide(data, settings, 'fixture', None)
-            self.assertEqual([(call.args[0], call.kwargs['can_go_back']) for call in confirm.call_args_list], [
-                ('📊 Dashboard', True), ('🧠 Context Intelligence · Neo4j Browser', True),
-                ('💬 Element Desktop', False), ('🧠 Context Intelligence · Neo4j Browser', True),
-                ('📊 Dashboard', True),
-            ])
-            self.assertEqual(load(state)['confirmed'], ['element', 'context', 'dashboard'])
+            confirm.assert_not_called()
+            self.assertEqual(load(state), receipt)
             welcome.assert_called_once_with(data, 'fixture')
 
     def test_explicit_print_bypasses_the_wizard_in_a_terminal(self):
@@ -620,29 +563,29 @@ class InstallerTest(unittest.TestCase):
             data = Path(work)
             state = data / 'onboarding.json'
             save(data / 'rooms.json', {'office': '!office', 'alerts': '!alerts', 'owner': '@operator:fixture.test'})
-            self.assertIn('Finish the workspace setup', finish(data, 'fixture')['waiting'])
+            self.assertIn('Finish Element sign-in and agent selection', finish(data)['waiting'])
             save(state, {'confirmed': ['element', 'dashboard', 'context']})
             entries['coder']['active'] = entries['manager']['active'] = True
-            self.assertIn('Remote Worker', finish(data, 'fixture')['waiting'])
+            self.assertIn('Remote Worker', finish(data)['waiting'])
             token.assert_not_called()
             entries['remote-worker']['active'] = True
             members = {'@manager:fixture.test': {}, '@operator:fixture.test': {}}
             request.return_value = {'joined': members}
-            self.assertIn('join Office', finish(data, 'fixture')['waiting'])
+            self.assertIn('join Office', finish(data)['waiting'])
             members.update({'@coder:fixture.test': {}, '@remote-worker:fixture.test': {}})
             pins.return_value = None
-            self.assertIn('Waiting for Open dashboard', finish(data, 'fixture')['waiting'])
+            self.assertIn('Waiting for Open dashboard', finish(data)['waiting'])
             publish.assert_not_called()
             pins.return_value = {'dashboard': 'https://matrix.to/dashboard', 'context': 'https://matrix.to/context'}
             with self.assertRaisesRegex(OSError, 'lost response'):
-                finish(data, 'fixture')
+                finish(data)
             attempt = load(state)['welcome_attempt']
             self.assertEqual(attempt['sender'], '@coder:fixture.test')
             self.assertEqual(attempt['room'], '!office')
             pick.reset_mock()
             receipt = {'sender': '@coder:fixture.test', 'room': '!office', 'event': '$welcome'}
-            self.assertEqual(finish(data, 'fixture'), receipt)
-            self.assertEqual(finish(data, 'fixture'), receipt)
+            self.assertEqual(finish(data), receipt)
+            self.assertEqual(finish(data), receipt)
             pick.assert_not_called()
             self.assertEqual(publish.call_args_list[0], publish.call_args_list[1])
             self.assertEqual(publish.call_args.args[-1]['name'], 'Manager')
@@ -670,9 +613,9 @@ class InstallerTest(unittest.TestCase):
             extra = {'type': 'm.room.member', 'state_key': '@other:fixture.test', 'content': {'membership': 'invite'}}
             request.side_effect = [members, [*dm, extra], members, dm]
             with self.assertRaisesRegex(ValueError, 'requires the operator and Chief of Staff'):
-                finish(data, 'fixture')
+                finish(data)
             publish.assert_not_called()
-            self.assertEqual(finish(data, 'fixture'), {'sender': chief, 'room': '!chief', 'event': '$welcome'})
+            self.assertEqual(finish(data), {'sender': chief, 'room': '!chief', 'event': '$welcome'})
             pick.assert_not_called()
 
     def test_verifies_both_links_in_one_encrypted_monitor_pin(self):
@@ -747,7 +690,7 @@ class InstallerTest(unittest.TestCase):
                 with patch('sys.argv', [*command, 'coder']), redirect_stdout(final):
                     main()
                 self.assertIn('Finalize your Constellation setup', final.getvalue())
-                self.assertIn(f'{data}/context/neo4j-password', final.getvalue())
+                self.assertIn('Workspace shortcuts', final.getvalue())
 
     def test_legacy_connection_config_preserves_existing_agent_identity(self):
         raw = dict(self.raw)
@@ -769,7 +712,7 @@ class InstallerTest(unittest.TestCase):
                 command_output=DEFAULT, compose_config=DEFAULT, compose=DEFAULT, service_units=DEFAULT,
                 write_config=DEFAULT, up=DEFAULT, provision_layout=DEFAULT, prepare_images=DEFAULT,
                 sync_workshop=DEFAULT, publish_inventory=DEFAULT, configure_network=DEFAULT,
-                agent_sign_in=DEFAULT, choose_option=DEFAULT, finalize_setup=DEFAULT, prepare_graph_password=DEFAULT,
+                agent_sign_in=DEFAULT, choose_option=DEFAULT, finalize_setup=DEFAULT, prepare_graph_password=DEFAULT, run_telegram=DEFAULT,
             ) as steps, patch('setup_guide.interactive_terminal', return_value=True):
                 steps['interactive'].return_value = (config, 'matrix-fixture-password')
                 steps['command_output'].return_value = '[]'
@@ -799,7 +742,51 @@ class InstallerTest(unittest.TestCase):
             registry = load(data / 'agents.json')
             self.assertEqual(registry['agents'], {})
             self.assertTrue(load(data / 'onboarding.json')['select_agents'])
+            steps['run_telegram'].assert_called_once_with(data, 'start-guide')
             self.assertIn('Workspace deployed.', output.getvalue())
+
+    def test_config_install_provisions_the_declared_roster_without_opening_element(self):
+        config = {**self.raw, 'systemd': False, 'agents': ['manager'], 'owner_password_file': '/unused/password'}
+        config.pop('subscriptions')
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()):
+            path = Path(work)
+            data, settings_file = path / 'workspace', path / 'install.json'
+            save(settings_file, config)
+            with patch.multiple(
+                'installer', interactive=DEFAULT, password=DEFAULT, prepare_storage=DEFAULT,
+                command_output=DEFAULT, compose_config=DEFAULT, compose=DEFAULT, service_units=DEFAULT,
+                write_config=DEFAULT, up=DEFAULT, provision_layout=DEFAULT, prepare_images=DEFAULT,
+                sync_workshop=DEFAULT, publish_inventory=DEFAULT, configure_network=DEFAULT,
+                finalize_setup=DEFAULT, prepare_graph_password=DEFAULT, run_telegram=DEFAULT,
+            ) as steps, patch('setup_guide.interactive_terminal', return_value=True):
+                steps['password'].return_value = 'fixture-matrix-password'
+                steps['command_output'].return_value = '[]'
+                install(data, SimpleNamespace(config=settings_file))
+            steps['interactive'].assert_not_called()
+            steps['finalize_setup'].assert_not_called()
+            self.assertEqual(list(load(data / 'agents.json')['agents']), ['manager'])
+            self.assertTrue(steps['provision_layout'].call_args.kwargs['unattended'])
+            steps['run_telegram'].assert_called_once_with(data, 'start-guide')
+
+    def test_telegram_activation_and_layout_repair_share_the_linking_flow(self):
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()):
+            data = Path(work)
+            rooms = {'space': '!agents:fixture.test', 'owner': '@operator:fixture.test'}
+            save(data / 'rooms.json', rooms)
+            for action in ('activate', 'layout'):
+                with self.subTest(action=action), patch.multiple(
+                    'installer', open_existing=DEFAULT, password=DEFAULT, login=DEFAULT, request=DEFAULT,
+                    run_telegram=DEFAULT, provision_telegram_layout=DEFAULT, sync_workshop=DEFAULT,
+                ) as steps:
+                    steps['open_existing'].return_value = (self.settings, self.registry)
+                    steps['login'].return_value = {'access_token': 'fixture-token'}
+                    steps['provision_telegram_layout'].return_value = {'bridge': '!bridge:fixture.test'}
+                    telegram(data, [action, '--owner-password-file', '/fixture/matrix-pass'])
+                steps['password'].assert_called_once_with(self.settings, Path('/fixture/matrix-pass'))
+                steps['provision_telegram_layout'].assert_called_once_with(self.settings, data, rooms, 'fixture-token', None)
+                expected = ['activate', 'start-guide'] if action == 'activate' else ['start-guide']
+                self.assertEqual([call.args[1] for call in steps['run_telegram'].call_args_list], expected)
+                steps['sync_workshop'].assert_not_called()
 
     def test_adding_a_remote_worker_keeps_the_telegram_workshop_network(self):
         data = Path('/srv/fixture')

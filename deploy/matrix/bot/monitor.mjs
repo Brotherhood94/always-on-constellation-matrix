@@ -3,18 +3,18 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import matrix from '@vector-im/matrix-bot-sdk';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
-import { reconcilePins, shortcutRecipientKey } from './pins.mjs';
+import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from './pins.mjs';
 
 const {
   LogService, LogLevel, MatrixClient, RustSdkCryptoStorageProvider,
   SimpleFsStorageProvider,
 } = matrix;
 
-const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, STATE_DIR, DATA_DIR, WORKSPACE_LINKS } = process.env;
-const deviceId = 'VPSMONITOR';
-const userId = '@monitor:' + MATRIX_SERVER_NAME;
-const pending = join(DATA_DIR, 'outbox');
-const acknowledgements = join(DATA_DIR, 'acks');
+const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, STATE_DIR, DATA_DIR, WORKSPACE_LINKS,
+  TELEGRAM_GUIDE, GUIDE_COMMAND, GRAPH_PASSWORD_COMMAND, DOT_ENABLED, SYSTEMD_ENABLED } = process.env;
+const telegram = TELEGRAM_GUIDE === 'true';
+const deviceId = telegram ? 'TELEGRAM_SETUP' : 'VPSMONITOR';
+const userId = `@${telegram ? 'telegram-agent' : 'monitor'}:${MATRIX_SERVER_NAME}`;
 LogService.setLevel(LogLevel.WARN);
 
 async function readOptional(path) {
@@ -43,6 +43,7 @@ async function accessToken() {
   const path = join(STATE_DIR, 'token');
   const token = await readOptional(path);
   if (token) return token.trim();
+  if (telegram) throw new Error('The Telegram setup device has not been provisioned');
   const password = (await readFile(join(STATE_DIR, 'password'), 'utf8')).trim();
   const response = await fetch(MATRIX_URL + '/_matrix/client/v3/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -75,11 +76,11 @@ async function initialize() {
   if (!(await client.getJoinedRooms()).includes(roomId)) await client.joinRoom(roomId);
   const encryption = await client.getRoomStateEventContent(roomId, 'm.room.encryption', '');
   if (encryption.algorithm !== 'm.megolm.v1.aes-sha2') {
-    throw new Error('The alerts room requires Matrix encryption');
+    throw new Error('The guide room requires Matrix encryption');
   }
   await client.crypto.prepare();
-  await client.setDisplayName('Monitor');
-  if (!(await client.crypto.isRecoveryAvailable())) {
+  if (!telegram) await client.setDisplayName('Monitor');
+  if (!telegram && !(await client.crypto.isRecoveryAvailable())) {
     const key = await client.crypto.createIdentity();
     await writeAtomic(join(STATE_DIR, 'bot-recovery-key'), key);
   }
@@ -91,6 +92,8 @@ async function initialize() {
 }
 
 async function deliver({ client, roomId }) {
+  const pending = join(DATA_DIR, 'outbox');
+  const acknowledgements = join(DATA_DIR, 'acks');
   const queue = [];
   for (const name of await readdir(pending)) {
     if (!/^[a-f0-9]{32}\.json$/.test(name)) continue;
@@ -116,14 +119,21 @@ async function deliver({ client, roomId }) {
 }
 
 async function shortcuts({ client, roomId }) {
-  if (!WORKSPACE_LINKS) return;
-  const links = JSON.parse(await readFile(WORKSPACE_LINKS, 'utf8'));
+  if (!WORKSPACE_LINKS && !telegram) return;
   const file = join(STATE_DIR, 'shortcut-pins.json');
   const state = JSON.parse(await readOptional(file) ?? '{"entries":{},"replaced":[]}');
   const route = '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId);
-  await reconcilePins({
+  const pinRoom = {
     recipientKey: async () => {
       if (!(await client.getJoinedRoomMembers(roomId)).includes(MATRIX_OWNER)) return null;
+      if (telegram) {
+        const state = await client.getRoomState(roomId);
+        const allowed = new Set([MATRIX_OWNER, userId, `@dot:${MATRIX_SERVER_NAME}`]);
+        const find = type => state.find(event => event.type === type && event.state_key === '')?.content;
+        if (find('m.room.join_rules')?.join_rule !== 'invite' || find('m.room.create')?.['m.federate'] !== false ||
+            find('m.room.tombstone') || state.some(event => event.type === 'm.room.member' &&
+              ['join', 'invite'].includes(event.content?.membership) && !allowed.has(event.state_key))) return null;
+      }
       const machine = client.crypto.engine.machine;
       const query = machine.queryKeysForUsers([new crypto.UserId(MATRIX_OWNER)]);
       const result = await client.doRequest('POST', '/_matrix/client/v3/keys/query', null, JSON.parse(query.body), 15000);
@@ -145,7 +155,15 @@ async function shortcuts({ client, roomId }) {
     },
     setPinned: pinned => client.doRequest('PUT', route + '/state/m.room.pinned_events', null, { pinned }, 15000),
     save: current => writeAtomic(file, JSON.stringify(current)),
-  }, links, state);
+  };
+  if (telegram) {
+    const command = (await readFile(join(STATE_DIR, 'command'), 'utf8')).trim();
+    await reconcileTelegramPin(pinRoom, state, command);
+  } else {
+    const links = JSON.parse(await readFile(WORKSPACE_LINKS, 'utf8'));
+    await reconcilePins(pinRoom, links, state, { command: GUIDE_COMMAND, graphPassword: GRAPH_PASSWORD_COMMAND,
+      dot: DOT_ENABLED === 'true', systemd: SYSTEMD_ENABLED === 'true' });
+  }
 }
 
 let sender;
@@ -153,7 +171,7 @@ let wait = 5000;
 while (true) {
   try {
     sender ??= await initialize();
-    await deliver(sender);
+    if (!telegram) await deliver(sender);
     await shortcuts(sender);
     wait = 5000;
   } catch (error) {
