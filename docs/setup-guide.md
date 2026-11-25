@@ -26,7 +26,7 @@ sudo cat -- /srv/constellation-matrix/context/neo4j-password
 
 ## 📊 Dashboard
 
-- **Browser and Element.** Open the printed dashboard URL. Then open **Agents → VPS Alerts → Pinned messages** in Element and verify **Open dashboard** and **Open Context Intelligence**. The roster can be empty before the agent selection step.
+- **Browser and Element.** Open the printed dashboard URL. Then open **Agents → VPS Alerts → Pinned messages** in Element and check both links in the **Workspace shortcuts** pin. The roster can be empty before the agent selection step.
 
 ## 🔌 Dot · Secure MCP Tunnel
 
@@ -42,7 +42,7 @@ After the workspace pages, use the arrow keys and Enter to select your roster. C
 
 ## 👋 Receive the welcome and send a task
 
-When all selected agents are ready, Chief of Staff sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery, and the message links to both pins in **VPS Alerts**.
+When all selected agents are ready, Chief of Staff sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery. The welcome links to the **Workspace shortcuts** pin in **VPS Alerts**.
 
 On a systemd VPS, Chief of Staff can propose hires and retirements as soon as setup finishes. Review each exact operation in its private chat. [Manage Office workers](chief-of-staff.md#hire-or-retire-an-office-worker)
 

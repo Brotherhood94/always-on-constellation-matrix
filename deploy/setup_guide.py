@@ -46,7 +46,7 @@ def pages(settings, data, command):
 
     yield 'dashboard', '📊 Dashboard', f"""  • Open the resource and agent dashboard in your browser.
     {settings['dashboard_url']}
-  • In Agents → VPS Alerts → Pinned messages, verify Open dashboard and Open Context Intelligence."""
+  • In Agents → VPS Alerts → Pinned messages, open Workspace shortcuts and verify both links."""
 
     if settings['dot']:
         body = '  • Enable systemd on the deployment to connect the Dot tunnel.'

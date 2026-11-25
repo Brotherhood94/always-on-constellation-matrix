@@ -42,7 +42,7 @@ The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 
 2. Open Element Desktop and choose **Sign in** on the welcome screen. Under **Account provider**, find the current server (usually `matrix.org`) and click **Edit** to its right, above **Continue**.
 3. In **Choose your account provider**, paste the installer’s HTTPS Matrix homeserver URL into **Other account provider** and select **Continue**.
 4. Back on the sign-in page, confirm **Account provider** matches your homeserver. Enter your Matrix operator credentials in **Username** and **Password**, then select **Sign in**. [Element onboarding](https://docs.element.io/latest/element-support/quick-start-guide/onboarding/)
-5. In the left sidebar, open **Agents → Office**. The Space also links VPS Alerts and the private agent chats you selected. Open **Agents → VPS Alerts → Pinned messages** for the dashboard and Context Intelligence shortcuts. The monitor publishes them after the operator joins VPS Alerts and Element registers its encryption keys. It refreshes the shortcuts when the operator’s devices change.
+5. In the left sidebar, open **Agents → Office**. The Space also links VPS Alerts and the private agent chats you selected. Open **Agents → VPS Alerts → Pinned messages** and look for **Workspace shortcuts**, which contains both links. The monitor publishes it after the operator joins VPS Alerts and Element registers its encryption keys. It refreshes the pin when the operator’s devices change.
 
 In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view.
 

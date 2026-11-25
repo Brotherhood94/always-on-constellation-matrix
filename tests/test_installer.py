@@ -21,6 +21,7 @@ from installer import (
 )
 from agent_catalog import document
 from compose import definition
+from dot import connect as connect_dot
 from onboarding import finish, guide, verified_pins
 from remote import compose_remote
 from setup_guide import confirm_page
@@ -657,24 +658,50 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(finish(data, 'fixture'), {'sender': chief, 'room': '!chief', 'event': '$welcome'})
             pick.assert_not_called()
 
-    def test_verifies_both_current_encrypted_monitor_pins(self):
+    def test_verifies_both_links_in_one_encrypted_monitor_pin(self):
         with TemporaryDirectory() as work, patch('onboarding.request') as request:
             data = Path(work)
             bot = data / 'bot'
             bot.mkdir()
             save(bot / 'token', 'fixture-monitor-token')
             save(bot / 'shortcut-pins.json', {'entries': {
-                'dashboard': {'event': '$dash', 'body': f"Open dashboard — {self.settings['dashboard_url']}"},
-                'context': {'event': '$graph', 'body': f"Open Context Intelligence — {self.settings['context_url']}"},
+                'dashboard': {'event': '$shortcuts', 'body': f"Open dashboard — {self.settings['dashboard_url']}"},
+                'context': {'event': '$shortcuts', 'body': f"Open Context Intelligence — {self.settings['context_url']}"},
             }})
-            pinned = {'pinned': ['$dash', '$graph', '$unrelated']}
+            pinned = {'pinned': ['$shortcuts', '$unrelated']}
             event = {'type': 'm.room.encrypted', 'sender': '@monitor:fixture.test'}
-            request.side_effect = [{'pinned': ['$dash']}, pinned, event, event]
+            request.side_effect = [{'pinned': ['$unrelated']}, pinned, event]
             self.assertIsNone(verified_pins(data, self.settings, '!alerts'))
             self.assertEqual(verified_pins(data, self.settings, '!alerts'), {
-                'dashboard': 'https://matrix.to/#/%21alerts/%24dash',
-                'context': 'https://matrix.to/#/%21alerts/%24graph',
+                'dashboard': 'https://matrix.to/#/%21alerts/%24shortcuts',
+                'context': 'https://matrix.to/#/%21alerts/%24shortcuts',
             })
+
+    def test_dot_startup_retries_quietly_and_explains_persistent_failure(self):
+        with TemporaryDirectory() as work, patch('dot.Path.is_socket', return_value=True), \
+             patch('dot.unit'), patch('dot.run') as run:
+            data = Path(work).resolve()
+            (data / 'dot').mkdir()
+            (data / 'dot/tunnel-client').touch()
+            save(data / 'dot/runtime-key', 'synthetic-key')
+            tunnel = 'tunnel_' + 'a' * 32
+            output = StringIO()
+            with redirect_stdout(output):
+                connect_dot(self.settings, data, tunnel)
+            curl = run.call_args.args
+            self.assertEqual(curl[0], 'curl')
+            self.assertIn('--silent', curl)
+            self.assertIn('--retry-all-errors', curl)
+            self.assertNotIn('--show-error', curl)
+            self.assertEqual(output.getvalue().splitlines(), [
+                'Waiting for the Dot tunnel to connect…', 'Dot tunnel is ready.',
+            ])
+
+            run.side_effect = [None, None, None, CalledProcessError(7, curl)]
+            output = StringIO()
+            with redirect_stdout(output), self.assertRaisesRegex(ValueError, 'Dot tunnel did not become ready.*journalctl'):
+                connect_dot(self.settings, data, tunnel)
+            self.assertNotIn('Dot tunnel is ready.', output.getvalue())
 
     def test_last_local_agent_configuration_prints_element_setup(self):
         self.registry['agents']['chief-of-staff']['active'] = True
@@ -730,11 +757,16 @@ class InstallerTest(unittest.TestCase):
                 steps['interactive'].return_value = (config, 'matrix-fixture-password')
                 steps['command_output'].return_value = '[]'
 
+                def start_services(path, *services):
+                    if 'monitor' in services:
+                        steps['compose'].assert_any_call(path, 'build', 'monitor')
+
                 def open_wizard(path, *, passphrase):
                     self.assertEqual(path, data)
                     self.assertEqual(passphrase, 'matrix-fixture-password')
                     steps['agent_sign_in'].assert_not_called()
 
+                steps['up'].side_effect = start_services
                 steps['finalize_setup'].side_effect = open_wizard
                 install(data, SimpleNamespace(config=None))
 

@@ -671,6 +671,7 @@ def install(data, args):
         else:
             up(data, 'postgres', 'synapse', 'context')
         provision_layout(settings, data, registry, passphrase)
+        compose(data, 'build', 'monitor')
         prepare_images(settings, registry)
         local_agents = [key for key, entry in registry['agents'].items() if entry['placement'] == 'local']
         services = ['monitor', 'private-edge']

@@ -42,6 +42,7 @@ const environment = { ...process.env, MATRIX_URL: url, MATRIX_SERVER_NAME: domai
 function launch(script, env) {
   const child = spawn(process.execPath, [script], { env: { ...environment, ...env }, stdio: 'inherit' });
   children.push(child);
+  return child;
 }
 
 async function eventually(check) {
@@ -261,8 +262,9 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       assert.deepEqual(welcome.content['m.mentions']?.user_ids ?? [], []);
       assert.ok(welcome.content.body.includes('Hi! I’m ' + variant.name));
       assert.ok(welcome.content.body.includes('VPS Alerts → Pinned messages'));
-      assert.ok(welcome.content.formatted_body.includes(pins.dashboard));
-      assert.ok(welcome.content.formatted_body.includes(pins.context));
+      assert.equal(pins.dashboard, pins.context);
+      assert.ok(welcome.content.formatted_body.includes('Open workspace shortcuts'));
+      assert.equal(welcome.content.formatted_body.split(pins.dashboard).length - 1, 1);
       assert.ok(welcome.content.body.includes('choose @' + variant.example.name + ' from Element’s mention picker'));
       assert.equal(welcome.content.body.includes('Constellation Office plugin'), variant.dot);
       assert.equal(welcome.content.body.includes('Manager is the entry point for coordinated Office tasks'), variant.dot);
@@ -376,8 +378,10 @@ try {
   }
   legacy.crypto.engine.machine.close();
   const oldPins = [preexisting.event_id, ...Object.values(entries).map(({ event }) => event)];
-  await api(pinState, { method: 'PUT', token, body: { pinned: oldPins } });
-  await writeFile(join(monitor, 'shortcut-pins.json'), JSON.stringify({ entries, replaced: [] }));
+  const monitorEnv = { STATE_DIR: monitor, DATA_DIR: monitorFiles, WORKSPACE_LINKS: join(base, 'links.json') };
+  const freshMonitor = launch('/app/ops/monitor.mjs', monitorEnv);
+  await eventually(async () => JSON.parse(await readFile(join(monitor, 'sync.json'), 'utf8')).syncToken);
+  assert.deepEqual((await api(pinState, { token })).pinned, [preexisting.event_id]);
 
   const pinReaderState = join(base, 'pin-reader');
   await mkdir(pinReaderState);
@@ -401,26 +405,38 @@ try {
       return null;
     }
   }
-  assert.equal(await readShortcut(oldPins[1]), null, 'A new device cannot decrypt the original shortcut');
-  launch('/app/ops/monitor.mjs', { STATE_DIR: monitor, DATA_DIR: monitorFiles, WORKSPACE_LINKS: join(base, 'links.json') });
-  const first = await eventually(async () => {
-    const pins = await api(pinState, { token });
-    return pins.pinned.length === 3 && pins.pinned.slice(1).every(id => !oldPins.includes(id)) && pins.pinned;
-  });
-  assert.equal(first[0], preexisting.event_id);
-  for (const [index, expected] of Object.values(links).entries()) {
-    const content = await eventually(() => readShortcut(first[index + 1]));
-    assert.ok(content.body.endsWith(expected));
-    assert.ok(content.formatted_body.includes(`href="${expected}"`));
+  async function managedShortcut(exclude) {
+    return eventually(async () => {
+      const { pinned } = await api(pinState, { token });
+      return pinned.length === 2 && pinned[0] === preexisting.event_id && !exclude.includes(pinned[1]) && pinned[1];
+    });
   }
-  await writeFile(join(base, 'links.json'), JSON.stringify({ ...links, dashboard: 'https://fixture.test:9443/' }));
-  const changed = await eventually(async () => {
-    const pins = await api(pinState, { token });
-    return pins.pinned.some(item => !first.includes(item)) && pins.pinned;
-  });
-  assert.deepEqual(changed.slice(0, 2), [first[0], first[2]]);
+  async function verifyShortcut(event, expected) {
+    const content = await eventually(() => readShortcut(event));
+    assert.match(content.body, /^Workspace shortcuts\n/u);
+    assert.ok(content.formatted_body.includes(`<a href="${expected.dashboard}">Open dashboard</a>`));
+    assert.ok(content.formatted_body.includes(`<a href="${expected.context}">Open Context Intelligence</a>`));
+  }
+  const fresh = await managedShortcut(oldPins);
+  await verifyShortcut(fresh, links);
+  console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');
+
+  assert.equal(await readShortcut(oldPins[1]), null, 'A new device cannot decrypt the original shortcut');
+  const stopped = once(freshMonitor, 'exit');
+  freshMonitor.kill();
+  await stopped;
+  children.splice(children.indexOf(freshMonitor), 1);
+  await api(pinState, { method: 'PUT', token, body: { pinned: oldPins } });
+  await writeFile(join(monitor, 'shortcut-pins.json'), JSON.stringify({ entries, replaced: [] }));
+  launch('/app/ops/monitor.mjs', monitorEnv);
+  const first = await managedShortcut([...oldPins, fresh]);
+  await verifyShortcut(first, links);
+  const updated = { ...links, dashboard: 'https://fixture.test:9443/' };
+  await writeFile(join(base, 'links.json'), JSON.stringify(updated));
+  const changed = await managedShortcut([first]);
+  await verifyShortcut(changed, updated);
   pinReader.crypto.engine.machine.close();
-  console.log('A new operator device decrypted both repaired VPS Alerts pins. The operator pin was retained.');
+  console.log('VPS Alerts replaced both legacy pins with one readable shortcut and retained the operator pin.');
 
   const dot = join(base, 'dot');
   const bridgeSecret = 'synthetic-private-bridge-token-0123456789';

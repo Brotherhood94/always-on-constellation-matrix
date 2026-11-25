@@ -245,7 +245,7 @@ def verified_pins(data, settings, alerts):
                     or comparable_url(body.removeprefix(prefix)) != comparable_url(settings[setting])):
                 return None
             events[key] = event
-        for event in events.values():
+        for event in dict.fromkeys(events.values()):
             raw = request('GET', f'{path}/event/{encoded(event)}', token=token)
             if (raw.get('type') != 'm.room.encrypted' or raw.get('sender') != f"@monitor:{settings['server_name']}"
                     or raw.get('unsigned', {}).get('redacted_because')):

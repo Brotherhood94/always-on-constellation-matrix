@@ -23,7 +23,9 @@ if (encryption.algorithm !== 'm.megolm.v1.aes-sha2') {
 }
 const intro = 'Hi! I’m ' + name + '. Welcome to Constellation.';
 const shortcuts = 'In Element, open Agents → VPS Alerts → Pinned messages for these shortcuts.';
-const links = [['Open dashboard', pins.dashboard], ['Open Context Intelligence', pins.context]];
+const links = pins.dashboard === pins.context
+  ? [['Open workspace shortcuts', pins.dashboard]]
+  : [['Open dashboard', pins.dashboard], ['Open Context Intelligence', pins.context]];
 const next = [];
 if (example) {
   const coordinated = example.role === 'coordinator';

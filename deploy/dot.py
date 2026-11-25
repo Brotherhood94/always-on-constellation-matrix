@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 import platform
 import re
+from subprocess import CalledProcessError
 from urllib.request import urlopen
 from zipfile import ZipFile
 
@@ -76,6 +77,10 @@ WantedBy=multi-user.target
     run('systemctl', 'daemon-reload')
     run('systemctl', 'enable', '--now', name)
     run('systemctl', 'restart', name)
-    run('curl', '--fail', '--silent', '--show-error', '--retry', '10', '--retry-all-errors',
-        '--max-time', '4', 'http://127.0.0.1:18786/readyz', '-o', '/dev/null')
+    print('Waiting for the Dot tunnel to connect…', flush=True)
+    try:
+        run('curl', '--fail', '--silent', '--retry', '10', '--retry-all-errors',
+            '--max-time', '4', 'http://127.0.0.1:18786/readyz', '-o', '/dev/null')
+    except CalledProcessError:
+        raise ValueError(f'Dot tunnel did not become ready. Check sudo journalctl -u {name} -n 20 --no-pager.') from None
     print('Dot tunnel is ready.')
