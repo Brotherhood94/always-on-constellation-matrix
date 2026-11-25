@@ -111,7 +111,9 @@ test('Element guides include copyable commands and manage optional pins independ
   await reconcileTelegramPin(matrix, telegramState, command);
   const guide = messages.get(telegramState.entries['telegram-setup'].event);
   assert.match(guide.body, /https:\/\/my\.telegram\.org\/apps/);
-  assert.match(guide.body, /Telegram mobile.*\n.*!tg login qr/);
+  assert.match(guide.body, /message box in Telegram Bridge.*\n!tg login qr\nTelegram Bridge replies.*QR code/u);
+  assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
+  assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
   assert.match(guide.body, /Approve and send/);
   assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
   assert.ok(guide.body.includes(`${command} telegram activate`));

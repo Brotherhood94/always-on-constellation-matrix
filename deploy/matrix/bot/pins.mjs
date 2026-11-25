@@ -71,8 +71,11 @@ function telegramGuide(command) {
       { code: `${command} telegram prepare "$HOME/telegram-api.json"\n${command} telegram activate` },
       'Enter your existing Matrix operator password if prompted to link the bridge chat.',
     ]],
-    ['3. Element and Telegram mobile · Sign in to Telegram', [
-      'Open Telegram → Telegram Bridge and send !tg login qr. On your phone, open Telegram → Settings → Devices → Link Desktop Device and scan the QR code.',
+    ['3. Element and Telegram mobile · Link your Telegram account', [
+      'In Element, open Telegram → Telegram Bridge. Copy the line below, paste it into the message box in Telegram Bridge, and press Enter to send it.',
+      { code: '!tg login qr' },
+      'Telegram Bridge replies in that chat with a QR code. On your phone, open Telegram → Settings → Devices → Link Desktop Device and scan the code.',
+      'Wait for the bridge to confirm sign-in. If the code expires, send the same command again in Telegram Bridge.',
     ]],
     ['4. Element and VPS terminal · Verify a contact or group', [
       'In Telegram Bridge, send !tg list-logins. For a contact, send !tg resolve-identifier <login-id> <telegram-username>. Verify the name and peer ID. For a group, confirm its membership and peer ID.',

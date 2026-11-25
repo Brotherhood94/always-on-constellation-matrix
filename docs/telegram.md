@@ -38,7 +38,12 @@ sudo ./constellation_matrix telegram status
 
 When activation prompts, enter your existing Matrix operator password to link the bridge DM. For unattended activation, pass a private `--owner-password-file`. If more than one verified private bridge DM exists, select the room you already use.
 
-1. **Element.** In the top-level **Telegram** Space, open **Telegram Bridge**, the private chat with `@telegrambot:<SERVER_NAME>`. Send `!tg login qr` to display a QR code.
+1. **Element.** In the top-level **Telegram** Space, open **Telegram Bridge**, the private chat with `@telegrambot:<SERVER_NAME>`. Copy this line, paste it into that chat’s message box, and press Enter. The bridge replies in the same chat with a QR code.
+
+   ```text
+   !tg login qr
+   ```
+
 2. **Telegram mobile.** The operator opens **Settings → Devices → Link Desktop Device** and scans the code shown in Element. Wait for the bridge to confirm sign-in. If the code expires, request a new one in the same DM. [Bridge sign-in](https://docs.mau.fi/bridges/go/telegram/authentication.html)
 
 ## Add a Telegram contact or group
