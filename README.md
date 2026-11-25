@@ -150,6 +150,21 @@ The installer enables startup at boot. Docker restarts application containers, T
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
-| Uninstall | Run `sudo ./uninstall.sh` to remove workspace services and keep the data. Use `--purge` for a fresh setup. [Uninstall](docs/runbook.md#uninstall) |
+
+## Uninstall
+
+From the repository on the VPS, remove the workspace services and keep your data and backups.
+
+```sh
+sudo ./uninstall.sh
+```
+
+For a fresh install, purge the workspace. This permanently deletes its data, backups, and Docker volumes.
+
+```sh
+sudo ./uninstall.sh --purge
+```
+
+See the runbook for custom data directories and remote workers. [Uninstall options](docs/runbook.md#uninstall)
 
 Built on [Microsoft Constellation](https://github.com/microsoft/amplifier-constellation) and [Amplifier](https://github.com/microsoft/amplifier).
