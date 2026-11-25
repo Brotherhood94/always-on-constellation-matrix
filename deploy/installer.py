@@ -260,10 +260,13 @@ def password_error(value):
 def password(settings, file=None, *, confirm=False):
     path = file or settings.get('owner_password_file')
     if not path:
-        value = prompt_text(
-            '🔐 Matrix operator password', password_error, masked=True,
-            notice='Save this password in a password manager before continuing. You need it to sign in to Element.',
-        )
+        if confirm:
+            title = '🔐 Matrix operator password'
+            notice = 'Save this password in a password manager before continuing. You need it to sign in to Element.'
+        else:
+            title = '🔐 Enter your existing Matrix operator password'
+            notice = 'Use the same password you use to sign in to Element.'
+        value = prompt_text(title, password_error, masked=True, notice=notice)
         if confirm:
             confirm_password('Matrix operator password', value)
         return value

@@ -61,6 +61,8 @@ sudo ./constellation_matrix telegram probe
 sudo ./constellation_matrix telegram start-agent
 ```
 
+When `prepare-agent` prompts, enter your existing Matrix operator password. The installer uses it to link **Telegram** under **Agents** in Element.
+
 **Operator handoff.** When `sign-in` prints a verification page and one-time code, open that page in your browser and complete device verification with the intended Codex account. Resume in the terminal after sign-in succeeds. The Instance saves its OAuth credentials in its own private persistent directory. The connector uses its own scoped ACP token. `probe` runs two synthetic turns and checks that the second turn resumes the Amplifier session before the connector can start.
 
 If an earlier setup stopped with `HTTP 400 M_UNKNOWN` while creating a Matrix v12 room, rerun `prepare-agent` with the updated installer. It reuses the connector identity and initialized rooms. If a failed request left an alias on an empty room owned by the connector, it recreates the room and assigns that alias to it.

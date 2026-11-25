@@ -87,6 +87,7 @@ def pages(settings, data, command):
   5. Verify and allow one test chat using docs/telegram.md.
   6. VPS terminal · For drafts and updates, run these commands in order.
      {command} telegram prepare-agent
+     Enter your existing Matrix operator password when prompted.
      {command} telegram sign-in
      {command} telegram probe
      {command} telegram start-agent

@@ -165,15 +165,31 @@ class InstallerTest(unittest.TestCase):
         self.assertNotIn('mismatch', rendered)
         self.assertNotIn('synthetic', rendered)
 
-    def test_password_fallback_uses_getpass(self):
+    def test_existing_matrix_password_screen_asks_for_element_password(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        fixture = 'synthetic-password'
+        screen.get_wch.side_effect = [*fixture, '\n']
+        with patch('agent_picker.terminal_picker', side_effect=lambda render, *args, **kwargs:
+                   render(screen, *args, **kwargs)):
+            self.assertEqual(password({}), fixture)
+        rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
+        self.assertIn('🔐 Enter your existing Matrix operator password', rendered)
+        self.assertIn('Use the same password you use to sign in to Element.', rendered)
+        self.assertIn('*' * len(fixture), rendered)
+        self.assertNotIn('Save this password', rendered)
+        self.assertNotIn(fixture, rendered)
+
+    def test_existing_matrix_password_fallback_uses_getpass(self):
         fixture = '  synthetic-password  '
         with patch('agent_picker.terminal_picker', return_value=None), \
              patch('agent_picker.getpass', return_value=fixture) as getpass, \
              patch('builtins.input') as line_input, redirect_stdout(StringIO()) as output:
             self.assertEqual(password({}), fixture)
-        getpass.assert_called_once_with('🔐 Matrix operator password: ')
+        getpass.assert_called_once_with('🔐 Enter your existing Matrix operator password: ')
         line_input.assert_not_called()
-        self.assertIn('Save this password in a password manager before continuing.', output.getvalue())
+        self.assertIn('Use the same password you use to sign in to Element.', output.getvalue())
+        self.assertNotIn('Save this password', output.getvalue())
 
     def test_install_password_confirmation_also_uses_getpass_without_a_full_screen_terminal(self):
         fixture = 'synthetic-password'
@@ -351,6 +367,7 @@ class InstallerTest(unittest.TestCase):
                 self.assertEqual('telegram activate' in rendered, telegram)
                 for step in ('prepare-agent', 'sign-in', 'probe', 'start-agent'):
                     self.assertEqual(f'telegram {step}' in rendered, telegram)
+                self.assertEqual('Enter your existing Matrix operator password when prompted.' in rendered, telegram)
 
     def test_setup_guide_explains_how_to_create_integration_credentials(self):
         output = StringIO()
