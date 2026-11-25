@@ -104,6 +104,11 @@ def validated_url(url):
     return url
 
 
+def valid_operator_username(owner, presets):
+    return (isinstance(owner, str) and OWNER.fullmatch(owner) is not None
+            and owner not in (RESERVED | presets.keys()))
+
+
 def normalized(raw, presets):
     if raw.get('rootless'):
         raise ValueError('Use standard Docker Engine for this deployment')
@@ -113,7 +118,7 @@ def normalized(raw, presets):
         raise ValueError('Configure the provider in each agent’s Amplifier home')
     if not SERVER.fullmatch(settings.get('server_name', '')) or not PROJECT.fullmatch(settings['project']):
         raise ValueError('Use a DNS name and a lowercase Compose project name')
-    if not OWNER.fullmatch(settings.get('owner', '')) or settings['owner'] in (RESERVED | presets.keys()):
+    if not valid_operator_username(settings.get('owner'), presets):
         raise ValueError('Use a valid operator username distinct from the agents')
     chosen = settings.get('agents')
     if not isinstance(chosen, list) or len(chosen) != len(set(chosen)) or any(key not in presets for key in chosen):
@@ -493,13 +498,17 @@ def interactive(presets, saved):
     if not server:
         server = input('Private Matrix DNS name: ').strip()
 
-    owner = saved.get('owner', 'operator')
-    account = choose_option('Choose the Matrix operator account', {
-        'suggested': f'Use {owner}',
-        'custom': 'Enter a custom username',
-    })
-    if account == 'custom':
-        owner = input('Matrix operator username: ').strip()
+    saved_owner = saved.get('owner', '')
+    default = f' [{saved_owner}]' if saved_owner else ''
+    while True:
+        owner = input(f'Matrix operator username{default}: ').strip() or saved_owner
+        if saved_owner and owner != saved_owner:
+            print('Use the existing Matrix operator username for this workspace.')
+        elif valid_operator_username(owner, presets):
+            break
+        else:
+            print('Use up to 64 lowercase letters, digits, periods, underscores, and hyphens. '
+                  'Start with a letter or digit and choose a name distinct from the agents and services.')
 
     integrations = {
         (False, False): 'Workspace only',

@@ -85,32 +85,45 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(choose_option('Choose', options), 'second')
             self.assertEqual(choose_option('Choose', options, 'second'), 'second')
 
-    def test_interactive_installer_selects_roster_without_provider_or_text_input(self):
-        choices = ['tailscale', 'suggested', (True, True)]
+    def test_interactive_installer_requests_username_directly(self):
+        choices = ['tailscale', (True, True)]
+        options = ['Choose private access for Matrix and the dashboard', 'Choose optional integrations']
         with patch('installer.choose_option', side_effect=choices) as choose, \
              patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
-             patch('installer.tailscale_dns', return_value='fixture.test'), patch('builtins.input') as answer:
+             patch('installer.tailscale_dns', return_value='fixture.test'), \
+             patch('builtins.input', return_value='my-operator') as answer:
             settings = normalized(interactive(self.presets, {}), self.presets)
-        self.assertEqual(choose.call_args_list[0].args[0], 'Choose private access for Matrix and the dashboard')
+        self.assertEqual([call.args[0] for call in choose.call_args_list], options)
         picker.assert_called_once_with(self.presets, ())
-        answer.assert_not_called()
+        answer.assert_called_once_with('Matrix operator username: ')
         self.assertEqual(settings['agents'], ['coder', 'reviewer'])
         self.assertNotIn('connection', settings)
         self.assertNotIn('subscriptions', settings)
-        self.assertEqual(settings['owner'], 'operator')
+        self.assertEqual(settings['owner'], 'my-operator')
         self.assertEqual(settings['server_name'], 'fixture.test')
         self.assertTrue(settings['tailscale'] and settings['dot'] and settings['telegram'])
 
     def test_interactive_installer_supports_custom_proxy_and_operator(self):
-        choices = ['proxy', 'custom', (False, False)]
+        choices = ['proxy', (False, False)]
         with patch('installer.choose_option', side_effect=choices) as choose, \
              patch('installer.select_agents', return_value=[]), patch('installer.tailscale_dns', return_value=None), \
-             patch('builtins.input', side_effect=['matrix.example', 'my-operator']):
+             patch('builtins.input', side_effect=['matrix.example', '', 'Coder', 'coder', 'my-operator']) as answer, \
+             redirect_stdout(StringIO()):
             settings = normalized(interactive(self.presets, {}), self.presets)
         self.assertEqual(list(choose.call_args_list[0].args[1]), ['proxy'])
+        self.assertEqual(answer.call_count, 5)
         self.assertFalse(settings['tailscale'])
         self.assertEqual(settings['server_name'], 'matrix.example')
         self.assertEqual(settings['owner'], 'my-operator')
+
+    def test_interactive_rerun_keeps_the_existing_operator_username(self):
+        with patch('installer.choose_option', side_effect=['tailscale', (False, False)]), \
+             patch('installer.select_agents', return_value=[]), \
+             patch('installer.tailscale_dns', return_value='fixture.test'), \
+             patch('builtins.input', side_effect=['different-operator', '']) as answer, redirect_stdout(StringIO()):
+            settings = normalized(interactive(self.presets, {'owner': 'my-operator'}), self.presets)
+        self.assertEqual(settings['owner'], 'my-operator')
+        self.assertEqual([call.args[0] for call in answer.call_args_list], ['Matrix operator username [my-operator]: '] * 2)
 
     def test_tailnet_suggestion_requires_a_running_https_node(self):
         status = {'BackendState': 'Running', 'Self': {'DNSName': 'fixture.test.'}, 'CertDomains': ['fixture.test']}
