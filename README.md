@@ -121,7 +121,7 @@ sudo ./constellation_matrix agent configure
 ./constellation_matrix status
 ```
 
-1. Browse the agent checklist with the arrow keys, press Space to select, and press Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above.
+1. Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** and press Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above.
 2. Choose **Open Amplifier provider setup** when the workspace is ready, or run `sudo ./constellation_matrix agent configure` later. In each agent’s Amplifier menu, add a provider, complete its login, pick its model, and choose **Done**.
 3. Sign in to Element, open **Agents → Office**, and use the mention picker. Try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.”
 

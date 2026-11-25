@@ -38,8 +38,9 @@ class InstallerTest(unittest.TestCase):
         screen = Mock()
         screen.getmaxyx.return_value = (24, 80)
         screen.getch.side_effect = [
-            curses.KEY_DOWN, ord(' '), curses.KEY_DOWN, ord(' '),
-            curses.KEY_UP, ord(' '), curses.KEY_DOWN, curses.KEY_DOWN, ord(' '), ord('\n'),
+            ord(' '), curses.KEY_DOWN, ord('\n'), curses.KEY_DOWN, ord('\n'),
+            curses.KEY_UP, ord('\n'), curses.KEY_DOWN, curses.KEY_DOWN, ord('\n'),
+            *([curses.KEY_DOWN] * 4), ord('\n'),
         ]
         self.assertEqual(checklist(screen, self.presets), ['reviewer', 'manager'])
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
@@ -47,11 +48,15 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('Implement and test code changes.', rendered)
         self.assertIn('Role: coordinator', rendered)
         self.assertIn('Suggested model: gpt-6.2-astra  |  Reasoning: high', rendered)
+        self.assertIn('>     Done', rendered)
 
     def test_agent_checklist_scrolls_and_can_confirm_an_empty_roster(self):
         screen = Mock()
         screen.getmaxyx.return_value = (20, 65)
-        screen.getch.side_effect = [curses.KEY_DOWN] * 5 + [ord(' '), ord(' '), curses.KEY_ENTER]
+        screen.getch.side_effect = [curses.KEY_DOWN] * 7 + [
+            curses.KEY_UP, curses.KEY_UP, curses.KEY_ENTER, curses.KEY_ENTER,
+            curses.KEY_DOWN, curses.KEY_DOWN, curses.KEY_ENTER,
+        ]
         self.assertEqual(checklist(screen, self.presets), [])
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
         self.assertIn('[x] Remote Worker', rendered)

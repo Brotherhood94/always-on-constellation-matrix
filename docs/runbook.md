@@ -10,7 +10,7 @@ sudo ./constellation_matrix agent configure
 ./constellation_matrix status
 ```
 
-Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, suggested model, capabilities, and limits. Press Space to toggle an agent and Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later.
+Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, suggested model, capabilities, and limits. Press Enter to select or deselect the highlighted agent. Move to **Done** and press Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later.
 
 Choose the suggested Matrix operator account and Tailscale DNS name if available. The wizard asks you to type a username or DNS name when you choose a custom one. Enter the Matrix operator password when prompted. Terminals without checklist support offer numbered menus and accept comma-separated agent IDs.
 

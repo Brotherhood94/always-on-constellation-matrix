@@ -86,6 +86,7 @@ def profile_lines(key, preset, width):
 
 def checklist(screen, presets, initial=()):
     keys = list(presets)
+    rows = [*keys, None]
     selected = set(keys).intersection(initial)
     focused = 0
     start = 0
@@ -99,40 +100,44 @@ def checklist(screen, presets, initial=()):
             continue
 
         screen.addnstr(0, 0, 'Select agents to install', width - 1, curses.A_BOLD)
-        screen.addnstr(1, 0, 'Up/Down: move   Space: toggle   Enter: done', width - 1)
+        screen.addnstr(1, 0, 'Up/Down: move   Enter: toggle or confirm', width - 1)
         screen.addnstr(2, 0, f'{len(selected)} of {len(keys)} selected', width - 1)
         # Reserve the rest of the screen for the focused agent's profile.
-        visible = min(len(keys), max(1, height - 16))
-        start = max(0, min(start, focused, len(keys) - visible), focused - visible + 1)
+        visible = min(len(rows), max(1, height - 16))
+        start = max(0, min(start, focused, len(rows) - visible), focused - visible + 1)
         for index in range(start, start + visible):
-            key = keys[index]
-            checkbox = '[x]' if key in selected else '[ ]'
+            key = rows[index]
+            label = '    Done'
+            if key is not None:
+                checkbox = '[x]' if key in selected else '[ ]'
+                label = f'{checkbox} {presets[key]["name"]}'
             active = index == focused
-            row = f"{'>' if active else ' '} {checkbox} {presets[key]['name']}"
+            row = f"{'>' if active else ' '} {label}"
             screen.addnstr(4 + index - start, 0, row, width - 1, curses.A_REVERSE if active else 0)
 
-        detail_row = 5 + visible
-        details = profile_lines(keys[focused], presets[keys[focused]], width - 1)
-        available = height - detail_row
-        if len(details) > available:
-            details = details[:available - 1] + ['Enlarge the terminal for the full profile.']
-        for offset, line in enumerate(details):
-            screen.addnstr(detail_row + offset, 0, line, width - 1, curses.A_BOLD if offset == 0 else 0)
+        key = rows[focused]
+        if key is not None:
+            detail_row = 5 + visible
+            details = profile_lines(key, presets[key], width - 1)
+            available = height - detail_row
+            if len(details) > available:
+                details = details[:available - 1] + ['Enlarge the terminal for the full profile.']
+            for offset, line in enumerate(details):
+                screen.addnstr(detail_row + offset, 0, line, width - 1, curses.A_BOLD if offset == 0 else 0)
 
         screen.refresh()
         keypress = screen.getch()
         if keypress == curses.KEY_UP:
             focused = max(0, focused - 1)
         elif keypress == curses.KEY_DOWN:
-            focused = min(len(keys) - 1, focused + 1)
-        elif keypress == ord(' '):
-            key = keys[focused]
+            focused = min(len(rows) - 1, focused + 1)
+        elif keypress in ENTER:
+            if key is None:
+                return [key for key in keys if key in selected]
             if key in selected:
                 selected.remove(key)
             else:
                 selected.add(key)
-        elif keypress in ENTER:
-            return [key for key in keys if key in selected]
 
 
 def select_agents(presets, initial=()):
