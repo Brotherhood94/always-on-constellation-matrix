@@ -136,7 +136,7 @@ Run `sudo ./constellation_matrix setup-guide` to resume or append `--print` for 
 ### Finish in Element
 
 - **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Telegram Control → Pinned messages.** If you enabled Telegram, accept both invitations and open **Set up Telegram**. **Telegram Bridge** and each verified chat appear in the separate Telegram Space as you connect them. [Telegram setup](docs/telegram.md)
+- **Telegram → Telegram Control → Pinned messages.** If you enabled Telegram, the installer joins your account to both the Space and Control. Open **Set up Telegram**. **Telegram Bridge** and each verified chat appear in this Space as you connect them. [Telegram setup](docs/telegram.md)
 
 ### Send your first task
 

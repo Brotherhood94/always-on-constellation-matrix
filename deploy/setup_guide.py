@@ -28,8 +28,7 @@ def element_locations(settings):
     if settings['dot']:
         lines.append('  • Agents → VPS Alerts → Pinned messages → Connect Dot has the tunnel setup.')
     if settings['telegram']:
-        lines.append('  • Accept the Telegram Space and Telegram Control invitations.\n'
-                     '    Open Telegram → Telegram Control → Pinned messages → Set up Telegram.')
+        lines.append('  • Open Telegram → Telegram Control → Pinned messages → Set up Telegram.')
     return '\n'.join(lines)
 
 

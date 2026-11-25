@@ -25,6 +25,8 @@ class LayoutTest(unittest.TestCase):
         token = owner['access_token']
         rooms = create_layout(domain, owner['user_id'], token)
         agents = rooms['space']
+        unrelated = request('POST', CLIENT + '/createRoom', {'preset': 'private_chat', 'invite': [owner['user_id']]},
+                            bot['access_token'])['room_id']
 
         def children(room):
             return {event['state_key'] for event in request('GET', room_route(room) + '/state', token=token)
@@ -40,8 +42,9 @@ class LayoutTest(unittest.TestCase):
             self.assertFalse((root / 'database.json').exists())
             self.assertFalse((root / 'connector/config.json').exists())
             space, control = fresh['space'], fresh['control']
-            join(space, owner['user_id'], token)
-            join(control, owner['user_id'], token)
+            joined = request('GET', CLIENT + '/joined_rooms', token=token)['joined_rooms']
+            self.assertTrue({space, control} <= set(joined), 'The operator must join both Telegram rooms during setup')
+            self.assertNotIn(unrelated, joined)
             self.assertEqual(children(space), {control})
             self.assertNotIn(space, children(agents))
 
@@ -58,6 +61,9 @@ class LayoutTest(unittest.TestCase):
             save(root / 'connector/config.json', {'space': space, 'controlRoom': control})
             for room in (space, control, portal):
                 link_child(agents, room, domain, token)
+            guide_token = (root / 'guide/token').read_text().strip()
+            request('POST', room_route(control) + '/leave', {}, token)
+            invite(control, owner['user_id'], guide_token)
             event = request('PUT', room_route(bridge) + '/send/m.room.message/layout-history',
                             {'msgtype': 'm.text', 'body': 'Fixture history'}, token)['event_id']
             selected = []
@@ -69,7 +75,6 @@ class LayoutTest(unittest.TestCase):
             migrated = reconcile_layout(*args, bridge_active=True, select=select)
             self.assertEqual(migrated, {**fresh, 'bridge': bridge})
             alias = CLIENT + '/directory/room/' + encoded(f'#telegram-control:{domain}')
-            guide_token = (root / 'guide/token').read_text().strip()
             request('DELETE', alias, token=guide_token)
             self.assertEqual(reconcile_layout(*args, bridge_active=True, select=select), migrated)
             self.assertEqual(request('GET', alias, token=token)['room_id'], control)

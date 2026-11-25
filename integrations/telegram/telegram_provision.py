@@ -9,7 +9,7 @@ import sys
 from urllib.parse import quote
 
 from bridge_config import database_uri, load, write
-from layout import CLIENT, direct_account_data, encoded, ensure_room, invite, missing, room_route
+from layout import CLIENT, direct_account_data, encoded, ensure_room, invite, join, missing, room_route
 from provision import MatrixError, register, request
 
 
@@ -160,7 +160,6 @@ def bootstrap(root):
                    bridgeBot=f'@telegrambot:{domain}', controlRoom=control, space=space, model=model,
                    auditDatabase=database_uri(root, 'matrix_telegram_audit'), engine=engine)
     write(out, current, uid=991)
-    print('Telegram and Telegram Control are ready. Accept both invitations in Element.')
 
 
 def space_child(space, room, token, domain):
@@ -229,6 +228,8 @@ def reconcile_layout(root, domain, owner, operator, agents, *, bridge_active, se
     previous = load(path) if path.exists() else {}
     if previous.get('space', space) != space or previous.get('control', control) != control:
         raise ValueError('The saved Telegram rooms do not match the Matrix layout.')
+    join(space, owner, operator)
+    join(control, owner, operator)
     guide = root / 'guide'
     device_token(root, guide / 'token', domain, 'TELEGRAM_SETUP', 'Telegram Setup Guide')
     write(guide / 'room-id', (control + '\n').encode(), uid=991)

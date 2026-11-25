@@ -2,7 +2,7 @@
 
 This optional integration adds a private, top-level **Telegram** Space with **Telegram Control**, the **Telegram Bridge** DM, and the private rooms for verified chats. The Telegram connector is separate from `Agents` and attaches over scoped ACP to one persistent Constellation Instance running Amplifier. The integration is ready for an isolated deployment and requires live acceptance before operational use. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
 
-Accept the **Telegram** and **Telegram Control** invitations in Element. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
+The installer joins your Matrix account to **Telegram** and **Telegram Control**. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
 
 Already set up? [Add a contact or group](#add-a-telegram-contact-or-group) or [send a message](#write-to-a-contact-or-group).
 
@@ -83,7 +83,7 @@ The Telegram model uses a standalone Amplifier bundle. The connector records sco
 
 ## Bind verified chats to the Telegram Space
 
-**Element.** Accept the `Telegram` Space and `Telegram Control` invitations. Control is encrypted, invite-only, and non-federated. Its members are the operator, the connector, and the optional configured Dot account. In the verified portal, invite `@telegram-agent:<SERVER_NAME>` and enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins the portal during binding. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
+**Element.** Telegram Control is encrypted, invite-only, and non-federated. Its members are the operator, the connector, and the optional configured Dot account. In the verified portal, invite `@telegram-agent:<SERVER_NAME>` and enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins the portal during binding. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
 Keep a private binding file for each selected chat. Use `mode: draft` and `trigger: inbound` for the first DM. Use `mode: draft` and `trigger: request` for an eligible group. A basic group and a supergroup without topics are supported by the admission policy. A forum or broadcast channel needs its own mapping and acceptance.
 

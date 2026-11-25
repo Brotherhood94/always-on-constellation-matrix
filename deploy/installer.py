@@ -903,7 +903,7 @@ def telegram(data, args, owner_password_file=None):
                 run_telegram(data, 'start-guide')
             finally:
                 request('POST', CLIENT + '/logout', {}, token)
-        print('In Element, accept the invitations and open Telegram → Telegram Control → Pinned messages.')
+        print('In Element, open Telegram → Telegram Control → Pinned messages.')
         if rooms['bridge']:
             print('Telegram Bridge is linked under Telegram.')
         return
