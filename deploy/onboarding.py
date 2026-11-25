@@ -34,8 +34,16 @@ def unconfirmed(settings, data, command, state):
 def guide(data, settings, command, passphrase):
     path = data / 'onboarding.json'
     try:
-        for key, title, body in unconfirmed(settings, data, command, progress(path)):
-            if not confirm_page(title, body):
+        setup_pages = list(pages(settings, data, command))
+        confirmed = progress(path)['confirmed']
+        index = next((i for i, (key, _, _) in enumerate(setup_pages) if key not in confirmed), len(setup_pages))
+        while index < len(setup_pages):
+            key, title, body = setup_pages[index]
+            action = confirm_page(title, body, can_go_back=index > 0)
+            if action == 'back':
+                index -= 1
+                continue
+            if action is None:
                 print(f'\nResume setup with {command} setup-guide')
                 return
             with operator_lock(data):
@@ -43,6 +51,7 @@ def guide(data, settings, command, passphrase):
                 if key not in current['confirmed']:
                     current['confirmed'].append(key)
                     save(path, current)
+            index += 1
 
         select_roster(data, path, command, passphrase)
     except (OSError, MatrixError, ValueError, SubprocessError) as error:

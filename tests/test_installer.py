@@ -330,7 +330,7 @@ class InstallerTest(unittest.TestCase):
                 with redirect_stdout(output):
                     show_element_setup({**self.settings, 'dot': dot, 'telegram': telegram})
                 rendered = output.getvalue()
-                headings = ['💬 Element Desktop', '📊 Dashboard', '🧠 Context Intelligence · Neo4j Browser']
+                headings = ['💬 Element Desktop', '🧠 Context Intelligence · Neo4j Browser', '📊 Dashboard']
                 if dot:
                     headings.append('🔌 Dot · Secure MCP Tunnel')
                 if telegram:
@@ -385,13 +385,26 @@ class InstallerTest(unittest.TestCase):
                     show_element_setup(self.settings)
                 self.assertEqual('\x1b[1;36m' in output.getvalue(), colored)
 
-    def test_setup_page_clears_terminal_and_accepts_enter_or_pause(self):
+    def test_setup_page_handles_enter_arrows_and_pause(self):
         output = StringIO()
-        with redirect_stdout(output), patch('builtins.input', side_effect=['later', '', 'q']) as answer:
-            self.assertTrue(confirm_page('Element', 'Install Element.'))
-            self.assertFalse(confirm_page('Dashboard', 'Open the dashboard.'))
-        self.assertEqual(output.getvalue().count('\x1b[2J\x1b[H'), 2)
-        self.assertTrue(all('[Continue]' in call.args[0] for call in answer.call_args_list))
+        with redirect_stdout(output), patch('sys.stdin.fileno', return_value=10), \
+                patch('setup_guide.termios.tcgetattr'), patch('setup_guide.tty.setcbreak'), \
+                patch('setup_guide.termios.tcsetattr') as restore, \
+                patch('setup_guide.select', return_value=([10], [], [])), \
+                patch('setup_guide.os.read', side_effect=[
+                    b'\x1b', b'[', b'D', b'\n', b'\x1b', b'O', b'D',
+                    b'\x1b', b'[', b'C', KeyboardInterrupt,
+                ]):
+            self.assertEqual(confirm_page('Element', 'Install Element.'), 'next')
+            self.assertEqual(confirm_page('Context Intelligence', 'Open Neo4j.', can_go_back=True), 'back')
+            self.assertEqual(confirm_page('Dashboard', 'Open the dashboard.', can_go_back=True), 'next')
+            self.assertIsNone(confirm_page('Dashboard', 'Open the dashboard.', can_go_back=True))
+        screens = output.getvalue().split('\x1b[2J\x1b[H')[1:]
+        self.assertEqual(len(screens), 4)
+        self.assertNotIn('← Back', screens[0])
+        self.assertIn('← Back    → Next (Enter)', screens[1])
+        self.assertNotIn('Q then Enter', output.getvalue())
+        self.assertEqual(restore.call_count, 4)
 
     def test_wizard_resumes_at_first_unconfirmed_page(self):
         settings = {**self.settings, 'agents': []}
@@ -402,33 +415,53 @@ class InstallerTest(unittest.TestCase):
             save(data / 'agents.json', registry)
             save(data / 'onboarding.json', {'confirmed': [], 'select_agents': True})
             command = 'sudo ./constellation_matrix'
-            with patch('onboarding.confirm_page', side_effect=[True, False]) as confirm, \
+            with patch('onboarding.confirm_page', side_effect=['next', None]) as confirm, \
                  patch('onboarding.select_agents') as picker:
                 guide(data, settings, command, None)
             picker.assert_not_called()
-            self.assertEqual([call.args[0] for call in confirm.call_args_list], ['💬 Element Desktop', '📊 Dashboard'])
+            self.assertEqual([call.args[0] for call in confirm.call_args_list],
+                             ['💬 Element Desktop', '🧠 Context Intelligence · Neo4j Browser'])
             self.assertEqual(load(data / 'onboarding.json'), {'confirmed': ['element'], 'select_agents': True})
             self.assertIn(f'{command} setup-guide', output.getvalue())
 
             def pick(_):
                 self.assertEqual(load(data / 'onboarding.json')['confirmed'],
-                                 ['element', 'dashboard', 'context', 'dot', 'telegram'])
+                                 ['element', 'context', 'dashboard', 'dot', 'telegram'])
                 return []
 
-            with patch('onboarding.confirm_page', return_value=True) as confirm, \
+            with patch('onboarding.confirm_page', return_value='next') as confirm, \
                  patch('onboarding.select_agents', side_effect=pick) as picker, \
                  patch('onboarding.open_existing', return_value=(settings, registry)), \
                  patch('onboarding.provision_selected_agents') as provision:
                 guide(data, settings, command, None)
                 guide(data, settings, command, None)
             self.assertEqual([call.args[0] for call in confirm.call_args_list], [
-                '📊 Dashboard', '🧠 Context Intelligence · Neo4j Browser',
+                '🧠 Context Intelligence · Neo4j Browser', '📊 Dashboard',
                 '🔌 Dot · Secure MCP Tunnel', '✈️ Telegram · Bridge and drafting agent',
             ])
             picker.assert_called_once()
             provision.assert_called_once_with(data, settings, registry, [], None)
             self.assertTrue(load(data / 'onboarding.json')['welcome']['skipped'])
             self.assertEqual((data / 'onboarding.json').stat().st_mode & 0o777, 0o600)
+
+    def test_wizard_can_revisit_confirmed_pages_after_resume(self):
+        settings = {**self.settings, 'agents': [], 'dot': False, 'telegram': False}
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()):
+            data = Path(work)
+            save(data / 'settings.json', settings)
+            save(data / 'agents.json', {'agents': {}})
+            state = data / 'onboarding.json'
+            save(state, {'confirmed': ['element', 'context']})
+            with patch('onboarding.confirm_page', side_effect=['back', 'back', 'next', 'next', 'next']) as confirm, \
+                    patch('onboarding.deliver_welcome') as welcome:
+                guide(data, settings, 'fixture', None)
+            self.assertEqual([(call.args[0], call.kwargs['can_go_back']) for call in confirm.call_args_list], [
+                ('📊 Dashboard', True), ('🧠 Context Intelligence · Neo4j Browser', True),
+                ('💬 Element Desktop', False), ('🧠 Context Intelligence · Neo4j Browser', True),
+                ('📊 Dashboard', True),
+            ])
+            self.assertEqual(load(state)['confirmed'], ['element', 'context', 'dashboard'])
+            welcome.assert_called_once_with(data, 'fixture')
 
     def test_explicit_print_bypasses_the_wizard_in_a_terminal(self):
         with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:

@@ -1,6 +1,6 @@
 # Finalize your Constellation setup
 
-The installer opens this wizard after deploying the workspace. Press Enter on **Continue** after each page. Type Q and press Enter to pause. Resume from the VPS checkout with the command below, or append `--print` for the full checklist. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
+The installer opens this wizard after deploying the workspace. Press Enter or → for the next page and ← to go back. Press Ctrl+C to pause. Resume from the VPS checkout with the command below, or append `--print` for the full checklist. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
 
 ```sh
 sudo ./constellation_matrix setup-guide
@@ -15,18 +15,18 @@ If someone is guiding the setup through computer use, take over for the password
 3. **Element.** Paste the HTTPS Matrix homeserver printed by `setup-guide` into **Other account provider** and select **Continue**.
 4. **Operator handoff.** Enter the printed Matrix username and the operator password you chose during installation. Select **Sign in**, then open **Agents → Office**. [Element onboarding](https://docs.element.io/latest/element-support/quick-start-guide/onboarding/)
 
-## 📊 Dashboard
-
-- **Browser and Element.** Open the printed dashboard URL. Then open **Agents → VPS Alerts → Pinned messages** in Element and verify **Open dashboard** and **Open Context Intelligence**. The roster can be empty before the agent selection step.
-
 ## 🧠 Context Intelligence
 
-1. **Browser.** Open the printed Context Intelligence URL or use **Open Context Intelligence** in the dashboard. Both open Neo4j Browser.
+1. **Browser.** Open the printed Context Intelligence URL to launch Neo4j Browser.
 2. **Operator handoff.** Enter `neo4j` and the dedicated Context Intelligence password you chose. To recover a stored or generated password, use the command printed by the wizard. The default is shown below. Select **Connect** in Neo4j Browser.
 
 ```sh
 sudo cat -- /srv/constellation-matrix/context/neo4j-password
 ```
+
+## 📊 Dashboard
+
+- **Browser and Element.** Open the printed dashboard URL. Then open **Agents → VPS Alerts → Pinned messages** in Element and verify **Open dashboard** and **Open Context Intelligence**. The roster can be empty before the agent selection step.
 
 ## 🔌 Dot · Secure MCP Tunnel
 

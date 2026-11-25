@@ -1,7 +1,10 @@
 """Copyable setup instructions shared by the wizard and printable guide."""
 import os
+from select import select
 from shlex import quote
 import sys
+import termios
+import tty
 
 
 TITLE = '✨ Finalize your Constellation setup'
@@ -33,10 +36,6 @@ def pages(settings, data, command):
      Username: {settings['owner']}
      Password: Your Matrix operator password from setup"""
 
-    yield 'dashboard', '📊 Dashboard', f"""  • Open the resource and agent dashboard in your browser.
-    {settings['dashboard_url']}
-  • In Agents → VPS Alerts → Pinned messages, verify Open dashboard and Open Context Intelligence."""
-
     yield 'context', '🧠 Context Intelligence · Neo4j Browser', f"""  1. Open Neo4j Browser.
      {settings['context_url']}
   2. Enter neo4j as the username.
@@ -44,6 +43,10 @@ def pages(settings, data, command):
      To retrieve the stored password, run this command privately on the VPS.
      sudo cat -- {quote(str(data / 'context/neo4j-password'))}
   3. Select Connect."""
+
+    yield 'dashboard', '📊 Dashboard', f"""  • Open the resource and agent dashboard in your browser.
+    {settings['dashboard_url']}
+  • In Agents → VPS Alerts → Pinned messages, verify Open dashboard and Open Context Intelligence."""
 
     if settings['dot']:
         body = '  • Enable systemd on the deployment to connect the Dot tunnel.'
@@ -101,12 +104,33 @@ def show_printable(settings, data, command):
     print(f'\n  • Resume the guided setup from an interactive terminal.\n    {command} setup-guide\n')
 
 
-def confirm_page(title, body, action='Continue'):
-    print(f'\x1b[2J\x1b[H{heading(TITLE)}\n\n{heading(title)}\n{body}\n')
+def read_page_key(fd):
+    key = os.read(fd, 1)
+    if key != b'\x1b' or not select([fd], [], [], 0.1)[0]:
+        return key
+    key += os.read(fd, 1)
+    if key in (b'\x1b[', b'\x1bO') and select([fd], [], [], 0.1)[0]:
+        key += os.read(fd, 1)
+    return key
+
+
+def confirm_page(title, body, *, can_go_back=False):
+    back = '← Back    ' if can_go_back else ''
+    fd = sys.stdin.fileno()
+    original = termios.tcgetattr(fd)
     try:
+        tty.setcbreak(fd, termios.TCSANOW)
+        print(f'\x1b[2J\x1b[H{heading(TITLE)}\n\n{heading(title)}\n{body}\n\n'
+              f'  {back}→ Next (Enter)', flush=True)
         while True:
-            response = input(f'  [{action}] Enter · Q then Enter to pause: ').strip().lower()
-            if response in ('', 'q'):
-                return response == ''
-    except (EOFError, KeyboardInterrupt):
-        return False
+            key = read_page_key(fd)
+            if key in (b'\r', b'\n', b'\x1b[C', b'\x1bOC'):
+                return 'next'
+            if can_go_back and key in (b'\x1b[D', b'\x1bOD'):
+                return 'back'
+            if key in (b'', b'\x04'):
+                return None
+    except KeyboardInterrupt:
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, original)

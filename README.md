@@ -119,7 +119,7 @@ On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup wi
 sudo ./constellation_matrix install
 ```
 
-Choose your network and Matrix username, then enter and confirm your Matrix password. Choose your integrations and set a dedicated Context Intelligence password. The installer deploys the workspace and opens the setup pages for Element, the dashboard, Context Intelligence, and the integrations you selected.
+Choose your network and Matrix username, then enter and confirm your Matrix password. Choose your integrations and set a dedicated Context Intelligence password. The installer deploys the workspace and opens the setup pages for Element, Context Intelligence, the dashboard, and the integrations you selected.
 
 After those pages, use the arrow keys and Enter to select your agents and choose **Done**. The installer registers the roster and opens Amplifier provider setup for each local agent. After everyone is ready, Chief of Staff sends a private welcome when selected. Otherwise, an available Office agent sends the welcome in Office. The message links to both shortcuts pinned in **Agents → VPS Alerts**.
 

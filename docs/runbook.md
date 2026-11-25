@@ -14,7 +14,7 @@ The workspace and integrations checklist opens with **Done** highlighted. On a f
 
 Enter a Matrix operator password of at least 12 characters, then re-enter it on the confirmation screen. Both fields mask what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
 
-After the workspace boots, complete the Element, dashboard, Context Intelligence, and enabled integration pages. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
+After the workspace boots, complete the Element, Context Intelligence, dashboard, and enabled integration pages. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
 
 The installer starts the selected local Amplifier Instances together and opens provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.
 
