@@ -14,7 +14,7 @@ from compose import definition
 data = Path(sys.argv[1])
 settings = normalized({
     'server_name': 'fixture.test', 'owner': 'operator',
-    'agents': ['manager', 'coder', 'root', 'chief-of-staff', 'remote-worker'],
+    'agents': ['manager', 'coder', 'vps-manager', 'chief-of-staff', 'remote-worker'],
     'subscriptions': {'default': 'Fixture'}, 'dot': True, 'telegram': True, 'systemd': False, 'tailscale': False,
 }, load(PRESETS))
 registry = {'local_server': 'fixture.test', 'dynamic_handoffs': True, 'agents': {}}

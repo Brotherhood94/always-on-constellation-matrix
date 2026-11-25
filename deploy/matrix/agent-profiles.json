@@ -123,17 +123,17 @@
       ]
     }
   },
-  "root": {
-    "name": "Root",
+  "vps-manager": {
+    "name": "VPS Manager",
     "model": "gpt-6.2-sol",
     "effort": "xhigh",
     "profile": {
       "role": "worker",
-      "limits": "Proposes maintenance. The operator must approve the exact operation in Root Operations.",
+      "limits": "Plans maintenance on the deployment VPS. The operator approves every exact privileged operation in Root Operations.",
       "capabilities": [
         {
           "code": "host-administration",
-          "description": "Propose reviewed maintenance for the deployment host.",
+          "description": "Inspect, edit and verify files and services on the deployment VPS with operator approval.",
           "resources": [
             "host:local",
             "service:matrix-stack",

@@ -244,7 +244,7 @@ WantedBy=timers.target
     if broker:
         shutil.copyfile(SOURCE / 'integrations/root/broker.py', host / 'root-broker.py')
         name = project + '-root'
-        root = deployment + '/state/root'
+        root = deployment + '/state/vps-manager'
         unit(name + '.socket', f'''[Unit]
 Description=Private socket for approved Root operations
 [Socket]

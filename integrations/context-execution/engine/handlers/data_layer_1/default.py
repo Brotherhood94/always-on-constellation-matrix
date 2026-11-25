@@ -20,7 +20,7 @@ from context_intelligence_server.handlers.data_layer_1.field_lifters import (
     UniversalLifter,
 )
 from context_intelligence_server.protocol import HookResult
-from context_intelligence_server.execution_timeline import attach_execution, execution_ids
+from context_intelligence_server.execution_timeline import attach_execution, attach_office_step, execution_ids, office_step
 from context_intelligence_server.services import HookStateService
 from context_intelligence_server.utils import make_node_id
 
@@ -145,6 +145,15 @@ class DefaultHandler:
             sender = evidence.get("sender")
             if isinstance(sender, str) and len(sender) <= 512:
                 node_props["performed_by"] = sender
+        if (event.startswith("root:") and self.services.graph.workspace == "root-operations"
+                and self.services.graph.created_by == "vps-manager-ops"):
+            operation = data.get("operation")
+            receipt = operation.get("id") if isinstance(operation, dict) else None
+            if isinstance(receipt, str) and re.fullmatch(r"[a-f0-9]{32}", receipt):
+                node_props["vps_operation_id"] = receipt
+        office = office_step(event, evidence, scope, self.services.graph)
+        if office:
+            node_props.update(office)
         await self.services.graph.upsert_node(event_node_id, node_props)
 
         # Stage 5: HAS_EVENT edge — (Session)-[:HAS_EVENT {occurred_at}]->(Event)
@@ -155,6 +164,8 @@ class DefaultHandler:
         )
         if scope:
             await attach_execution(self.services.graph, event_node_id, scope)
+            if office:
+                await attach_office_step(self.services.graph, scope[1], event_node_id, office)
 
         return HookResult(action="continue")
 

@@ -1,3 +1,4 @@
+import { mentionMessage, turnKey } from '../../agents/connector/matrix-routing.mjs';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
@@ -22,7 +23,7 @@ async function api(path, body, token) {
 async function register(name, device) {
   return { ...await api('/register', {username: name, password: 'fixture-password', device_id: device, auth: {type:'m.login.dummy'}}), device };
 }
-const [root, owner, dot] = await Promise.all([register('root', 'ROOTOPS2'), register('operator', 'FIXTUREOWNER'), register('dot', 'FIXTUREDOT')]);
+const [root, owner, manager] = await Promise.all([register('vps-manager', 'VPSMANAGER'), register('operator', 'FIXTUREOWNER'), register('manager', 'FIXTUREMANAGER')]);
 async function privateRoom(invite) {
   return (await api('/createRoom', {preset:'private_chat', visibility:'private', creation_content:{'m.federate':false},
     invite, initial_state:[
@@ -31,12 +32,19 @@ async function privateRoom(invite) {
     ]}, root.access_token)).room_id;
 }
 const audit = await privateRoom([owner.user_id]);
-const agents = await privateRoom([owner.user_id, dot.user_id]);
+const agents = await privateRoom([owner.user_id, manager.user_id]);
 await api('/join/' + encodeURIComponent(audit), {}, owner.access_token);
 await api('/join/' + encodeURIComponent(agents), {}, owner.access_token);
-await api('/join/' + encodeURIComponent(agents), {}, dot.access_token);
-await writeFile('/config.json', JSON.stringify({url, agents, audit, owner:owner.user_id, dot:dot.user_id, root:root.user_id}));
+await api('/join/' + encodeURIComponent(agents), {}, manager.access_token);
+await writeFile('/config.json', JSON.stringify({url, agents, audit, owner:owner.user_id, root:root.user_id}));
 await writeFile('/context-token', 'fixture');
+await writeFile('/office-token', 'office-fixture');
+await writeFile('/state/agents.json', JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
+  dynamicHandoffs: true, agents: [
+    { key: 'manager', id: manager.user_id, name: 'Manager', role: 'coordinator', limits: 'Fixture', status: 'Available', capabilities: [] },
+    { key: 'vps-manager', id: root.user_id, name: 'VPS Manager', role: 'worker', limits: 'Fixture', status: 'Available', capabilities: [] },
+  ],
+}));
 await writeFile('/state/model-ready', 'ready');
 await mkdir('/credentials');
 await writeFile('/credentials/matrix-token', root.access_token);
@@ -46,14 +54,14 @@ const reader = await openRoomClient({
   url, state:'/tmp/root-owner-fixture', userId:owner.user_id, deviceId:owner.device, roomId:audit, name:'Fixture Owner',
 });
 await mkdir('/tmp/dot-owner-fixture');
-const dotClient = await openRoomClient({
-  url, state:'/tmp/dot-owner-fixture', userId:dot.user_id, deviceId:dot.device, roomId:agents, name:'Fixture Dot', token:dot.access_token,
+const managerClient = await openRoomClient({
+  url, state:'/tmp/dot-owner-fixture', userId:manager.user_id, deviceId:manager.device, roomId:agents, name:'Manager', token:manager.access_token,
 });
 
 const archived = [];
 const context = httpServer(async (request, response) => {
   assert.equal(request.url, '/events');
-  assert.equal(request.headers.authorization, 'Bearer fixture');
+  assert.ok(['Bearer fixture', 'Bearer office-fixture'].includes(request.headers.authorization));
   let body = '';
   for await (const part of request) body += part;
   archived.push(JSON.parse(body));
@@ -75,7 +83,7 @@ const sockets = createServer(socket => {
   });
 });
 await new Promise(resolve => sockets.listen('/run/executor.sock', resolve));
-const worker = spawn('node', ['/app/root/agent.mjs'], {stdio: 'inherit'});
+const worker = spawn('node', ['/app/root/agent.mjs'], {stdio: 'inherit', env: { ...process.env, MATRIX_CATALOG_PATH: '/state/agents.json', CONTEXT_INTELLIGENCE_URL: 'http://context:8000' }});
 let database;
 
 async function waitFor(lookup) {
@@ -114,18 +122,24 @@ try {
   });
   assert.ok(readiness.size > 0, 'Root must write a non-empty marker for the Compose health check.');
   let cursor = (await timeline()).next_batch;
-  const thread = await sendEncrypted(reader, agents, 'fixture-thread', {msgtype:'m.text', body:'Original task thread'});
+  const thread = await sendEncrypted(reader, agents, 'fixture-thread', mentionMessage('Original task thread', {id: manager.user_id, name: 'Manager'}));
+  const forged = await sendEncrypted(managerClient, agents, 'fixture-forged', {
+    ...mentionMessage('Check a synthetic local ID.', {id: root.user_id, name: 'VPS Manager'}),
+    [turnKey]: {request: thread, number: 1},
+    'm.relates_to': {rel_type: 'm.thread', event_id: thread, 'm.in_reply_to': {event_id: '$unrelated'}},
+  });
   for (const [index, action, label] of [[1, 'approve', 'Accept'], [2, 'reject', 'Reject'], [3, 'approve', 'Accept']]) {
     const dynamic = index !== 3;
     const exact = index === 1;
-    const draft = {operation:'reviewed-script', summary:'Confirm exact submitted bytes.', impact:'Runs only the fixture script.',
-      verification:'Read the reviewed result.', failure_reasons:{41:'The fixture returned a synthetic failure.'}, script:reviewed};
+    const draft = {operation:'reviewed-plan', summary:'Confirm exact submitted bytes.', impact:'Runs only the fixture script.',
+      verification:'The fixture check must pass.', recovery:'Inspect the fixture state.', plan:{kind:'shell', script:reviewed, verify:'test -d /tmp'}};
     const body = exact ? 'Root Dot review request\n\nROOT_REVIEW: ' + JSON.stringify(draft)
       : dynamic ? 'Root: Check a synthetic local ID.' : 'Root: fixed status fixture';
-    const sender = exact ? dot.user_id : owner.user_id;
-    const source = await sendEncrypted(exact ? dotClient : reader, agents, 'fixture-request-' + index,
-      {msgtype:'m.text', body, 'm.mentions':{user_ids:[root.user_id]},
-        ...(index === 1 && {'m.relates_to':{rel_type:'m.thread',event_id:thread,is_falling_back:true,'m.in_reply_to':{event_id:thread}}})});
+    const sender = exact ? manager.user_id : owner.user_id;
+    const source = await sendEncrypted(exact ? managerClient : reader, agents, 'fixture-request-' + index,
+      {...mentionMessage(body, {id: root.user_id, name: 'VPS Manager'}),
+        ...(index === 1 && {'m.relates_to':{rel_type:'m.thread',event_id:thread,is_falling_back:true,'m.in_reply_to':{event_id:thread}},
+          [turnKey]: {request:thread, number:1, managed:{version:2,manager:manager.user_id,target:root.user_id}}})});
     const state = await waitFor(() => {
       database ||= new DatabaseSync('/state/gateway.sqlite3', {readOnly:true});
       const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(source);
@@ -158,7 +172,7 @@ try {
     if (dynamic) {
       assert.ok(notice.content.body.includes(reviewed), 'The proposal contains the script, including its trailing newline.');
       assert.ok(notice.content.formatted_body.includes('&lt;candidate&gt;'));
-      assert.ok(notice.content.body.includes('Exit 41 · The fixture returned a synthetic failure.'));
+      assert.ok(notice.content.body.includes('Verify\ntest -d /tmp'));
     } else {
       assert.match(notice.content.body, /systemctl is-active --quiet matrix-stack.service/u);
     }
@@ -178,10 +192,10 @@ try {
     assert.equal(result.outcome, action === 'approve' ? 'failed' : 'denied');
     assert.equal(result.source_thread, index === 1 ? thread : source);
     const payload = accepted[index - 1];
-    assert.equal(payload.operation, dynamic ? 'reviewed-script' : 'matrix-stack-status');
+    assert.equal(payload.operation, dynamic ? 'reviewed-plan' : 'matrix-stack-status');
     assert.equal(Object.hasOwn(payload, 'command'), false);
     if (dynamic) {
-      assert.equal(payload.script, reviewed);
+      assert.equal(JSON.parse(payload.plan).script, reviewed);
       assert.equal(payload.choice, poll.answers.find(answer => answer[pollText] === label).id);
       assert.equal(payload.source_room, agents);
       assert.equal(payload.review_room, audit);
@@ -195,23 +209,26 @@ try {
     await waitFor(() => database.prepare('SELECT source_notified FROM tasks WHERE id=?').get(state.id).source_notified);
     await waitFor(() => database.prepare('SELECT closed FROM review_polls WHERE id=?').get(state.id).closed);
   }
-  await waitFor(() => archived.length === 12);
-  for (const id of new Set(archived.map(record => record.data.operation.id))) {
-    const entries = archived.filter(record => record.data.operation.id === id);
+  await waitFor(() => archived.filter(record => record.workspace === 'root-operations').length === 12);
+  await waitFor(() => archived.find(record => record.workspace === 'agents-team' && record.data.evidence?.operation));
+  const auditRecords = archived.filter(record => record.workspace === 'root-operations');
+  for (const id of new Set(auditRecords.map(record => record.data.operation.id))) {
+    const entries = auditRecords.filter(record => record.data.operation.id === id);
     assert.deepEqual(entries.map(record => record.event), ['root:requested', 'root:proposed', 'root:decided', 'root:finished']);
     assert.deepEqual(entries.map(record => record.data.execution.sequence), [0, 1, 2, 3]);
     assert.equal(new Set(entries.map(record => record.data.execution.task_id)).size, 1);
   }
-  const malformed = await sendEncrypted(dotClient, agents, 'fixture-malformed',
-    {msgtype:'m.text', body:'Root: Invalid review\n\nROOT_REVIEW: private-marker', 'm.mentions':{user_ids:[root.user_id]}});
+  const malformed = await sendEncrypted(reader, agents, 'fixture-malformed',
+    mentionMessage('Invalid review\n\nROOT_REVIEW: private-marker', {id: root.user_id, name: 'VPS Manager'}));
   const invalid = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE id=? AND source_notified=1')
     .get(digest(agents + ':' + malformed).slice(0,32)));
   assert.equal(invalid.outcome, 'proposal_failed');
   assert.match(invalid.summary, /one JSON proposal/u);
   assert.doesNotMatch(invalid.summary, /private-marker/u);
   assert.equal(invalid.proposal_event, null);
+  assert.equal(database.prepare('SELECT id FROM tasks WHERE event=?').get(forged), undefined);
   assert.equal(accepted.length, 3);
-  console.log('Dot exact script and Amplifier Markdown proposals reached the encrypted poll, the owner vote and the source receipt.');
+  console.log('VPS Manager handoffs and reviewed plans reached the encrypted poll, the owner vote and the source receipt.');
   console.log('Invalid input produced a specific reason, without publishing a poll or running a command.');
 } catch (error) {
   console.error(error);

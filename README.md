@@ -156,7 +156,8 @@ The installer enables startup at boot. Docker restarts application containers, T
 | Retire a local Office worker | Run `sudo ./constellation_matrix agent remove <id>` to finish accepted work, revoke access, and archive the workspace. [Retirement](docs/runbook.md#retire-a-worker) |
 | Manage the Office roster from Element | Send `hire` or `retire` in Chief of Staff’s DM and approve the exact proposal. Setup enables roster management when Chief of Staff is ready. [Chief of Staff approval](docs/chief-of-staff.md#hire-or-retire-an-office-worker) |
 | Review how the team works | Send `review team` in the [Chief of Staff DM](docs/chief-of-staff.md) for proposals backed by Office evidence. |
-| Approve maintenance | Review the exact operation and vote in the private [Root Operations chat](integrations/root/README.md). |
+| Ask for VPS maintenance | Mention **VPS Manager** in Office or ask Manager to delegate the work. Review and approve the exact action in the private [Root Operations chat](integrations/root/README.md). |
+| Trace an Office task | Open [Context Intelligence](integrations/context-execution/README.md) to see who handed off the work, whether the recipient accepted it, and how the original assignee closed the task. |
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |

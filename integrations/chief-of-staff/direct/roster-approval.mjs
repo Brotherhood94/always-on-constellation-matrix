@@ -13,7 +13,7 @@ const pollText = 'org.matrix.msc1767.text';
 const pollResponse = 'org.matrix.msc3381.poll.response';
 const gapId = /^cos-gap-[a-f0-9]{64}$/u;
 const validKey = /^[a-z0-9][a-z0-9_-]{0,35}$/u;
-const protectedKeys = new Set(['manager', 'root', 'chief-of-staff', 'remote-worker', 'dot', 'monitor',
+const protectedKeys = new Set(['manager', 'root', 'vps-manager', 'chief-of-staff', 'remote-worker', 'dot', 'monitor',
   'telegram-agent', 'telegrambot', 'roster-inviter']);
 
 const digest = text => createHash('sha256').update(text).digest('hex');

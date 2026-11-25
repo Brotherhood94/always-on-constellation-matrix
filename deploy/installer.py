@@ -36,7 +36,7 @@ PROJECT = re.compile(r'[a-z][a-z0-9-]{0,38}')
 RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
-            'telegram-agent', 'telegrambot', 'roster-inviter'}
+            'telegram-agent', 'telegrambot', 'roster-inviter', 'root', 'vps-manager-ops'}
 LEGACY_CONNECTION = 'chatgpt-codex'
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
@@ -197,13 +197,15 @@ def context_config(settings, data, registry):
     directory(data / 'context/config', mode=0o755)
     keys = {'observation-reader': ('agents-team', ['data:read'])}
     for key in registry['agents']:
-        keys[key] = ('root-operations' if key == 'root' else 'agents-team', ['live:write'])
+        keys[key] = ('agents-team', ['live:write'])
+    if 'vps-manager' in registry['agents']:
+        keys['vps-manager-ops'] = ('root-operations', ['live:write'])
     if settings['telegram']:
         keys['telegram-agent'] = ('telegram', ['live:write'])
     identities = {}
     grants = {}
     for key, (workspace, capabilities) in keys.items():
-        token = private_secret(data / 'context' / (key + '.token'), uid=ROOT_UID if key == 'root' else RUNTIME_UID)
+        token = private_secret(data / 'context' / (key + '.token'), uid=ROOT_UID if key in {'vps-manager', 'vps-manager-ops'} else RUNTIME_UID)
         identities[sha256(token.encode()).hexdigest()] = {'id': key}
         grants[key] = {'workspaces': [workspace], 'capabilities': capabilities}
     password = read_password_file(data / 'context/neo4j-password', 'Context Intelligence')
@@ -338,7 +340,7 @@ def register_entry(settings, registry, key, definition):
     if effort not in {'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}:
         raise ValueError('Invalid reasoning effort')
     placement = agent_placement(key, definition)
-    if placement not in {'local', 'remote'} or (key in {'chief-of-staff', 'root'} and placement != 'local'):
+    if placement not in {'local', 'remote'} or (key in {'chief-of-staff', 'vps-manager'} and placement != 'local'):
         raise ValueError('Invalid agent placement')
     validated = profile(definition['profile'])
     if validated['role'] == 'observer' and key != 'chief-of-staff':
@@ -377,25 +379,25 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     layout = data / 'state' / key
     matrix_state = layout / 'matrix'
     directory(layout)
-    gateway_uid = ROOT_UID if key == 'root' else RUNTIME_UID
+    gateway_uid = ROOT_UID if key == 'vps-manager' else RUNTIME_UID
     directory(matrix_state, uid=gateway_uid)
     if key != 'dot':
         for name in ('work', 'instance', 'exchange'):
             directory(layout / name, uid=RUNTIME_UID)
-    if key not in {'dot', 'root', 'chief-of-staff'}:
+    if key not in {'dot', 'vps-manager', 'chief-of-staff'}:
         directory(layout / 'work/desktop', uid=RUNTIME_UID)
     peer = f'@{key}:{server}'
-    if key == 'root':
+    if key == 'vps-manager':
         directory(layout / 'gateway-credentials', mode=0o750)
         os.chown(layout / 'gateway-credentials', 0, ROOT_UID)
     credential = matrix_state / 'matrix-password'
     secret = private_secret(credential, uid=gateway_uid)
-    token_file = layout / 'gateway-credentials/matrix-token' if key == 'root' else matrix_state / 'matrix-token'
-    device = 'ROOTOPS2' if key == 'root' else 'MATRIX' + key.upper().replace('-', '')
+    token_file = layout / 'gateway-credentials/matrix-token' if key == 'vps-manager' else matrix_state / 'matrix-token'
+    device = 'VPSMANAGER' if key == 'vps-manager' else 'MATRIX' + key.upper().replace('-', '')
     if not token_file.exists():
         own = login(key, secret, device, entry['name'])
-        save(token_file, own['access_token'] + '\n', uid=None if key == 'root' else gateway_uid)
-        if key == 'root':
+        save(token_file, own['access_token'] + '\n', uid=None if key == 'vps-manager' else gateway_uid)
+        if key == 'vps-manager':
             os.chown(token_file, 0, ROOT_UID)
             token_file.chmod(0o440)
     token = token_file.read_text().strip()
@@ -405,9 +407,9 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     invite(rooms['office'], peer, owner_token)
     join(rooms['office'], peer, token)
     room = rooms['office']
-    if key in {'root', 'chief-of-staff'}:
-        label = 'Root Operations' if key == 'root' else entry['name']
-        room = direct_room(server, rooms['space'], key, label, rooms['owner'], owner_token, peer, token)
+    if key in {'vps-manager', 'chief-of-staff'}:
+        label = 'Root Operations' if key == 'vps-manager' else entry['name']
+        room = direct_room(server, rooms['space'], 'root' if key == 'vps-manager' else key, label, rooms['owner'], owner_token, peer, token)
     save(matrix_state / 'room-id', room + '\n', uid=gateway_uid)
     if key == 'dot':
         private_secret(matrix_state / 'bridge-token', uid=RUNTIME_UID)
@@ -416,9 +418,11 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
         directory(layout / 'persona', uid=RUNTIME_UID)
         directory(layout / 'observer/outbox', uid=RUNTIME_UID)
         save(layout / 'observer/agents-room-id', rooms['office'] + '\n', uid=RUNTIME_UID)
-    if key == 'root':
+    if key == 'vps-manager':
         save(layout / 'config.json', {'url': 'http://synapse:8008', 'owner': rooms['owner'], 'root': peer,
-                                      'agents': rooms['office'], 'audit': room, 'gateway_uid': ROOT_UID},
+                                      'agents': rooms['office'], 'audit': room, 'gateway_uid': ROOT_UID,
+                                      'legacy_cutover': (data / 'vps-manager-migration.json').is_file(),
+                                      'dot': f'@dot:{server}' if settings['dot'] else None},
              mode=0o444)
         operations = load(SOURCE / 'integrations/root/operations.json')
         for detail in operations.values():
@@ -453,6 +457,8 @@ def provision_layout(settings, data, registry, passphrase):
 
 
 def compose_config(settings, data, registry):
+    if 'root' in registry['agents']:
+        raise ValueError('Run agent migrate-root to replace the legacy Root agent before changing the deployment.')
     environment = base_environment(settings, data)
     env_write(data, environment)
     context_config(settings, data, registry)
@@ -608,6 +614,9 @@ def install(data, args):
     from setup_guide import interactive_terminal
     presets = load(PRESETS)
     previous = data / 'settings.json'
+    registry_file = data / 'agents.json'
+    if registry_file.exists() and 'root' in load(registry_file)['agents']:
+        raise ValueError('Run agent migrate-root before updating the existing Root deployment.')
     if args.config:
         settings = normalized(load(args.config), presets)
         if not settings.get('owner_password_file'):
@@ -650,13 +659,14 @@ def install(data, args):
         save(registry_path, registry)
         environment = compose_config(settings, data, registry)
         compose(data, 'config', '--quiet')
-        service_units(settings, data, broker=registry['agents'].get('root', {}).get('active', False))
+        service_units(settings, data, broker=registry['agents'].get('vps-manager', {}).get('active', False))
         homeserver = data / 'synapse/homeserver.yaml'
         if not homeserver.exists():
             compose(data, 'run', '--rm', '--no-deps', 'synapse', 'generate')
             write_config(data, environment)
         if (data / 'context/data/identity/api-keys.json').exists():
             up(data, 'postgres', 'synapse')
+            compose(data, 'build', 'context')
             refresh_context(data)
         else:
             up(data, 'postgres', 'synapse', 'context')
@@ -810,8 +820,8 @@ def agent_activate(data, key, *, pending_only=False):
             publish_inventory(settings, data, registry)
             compose(data, '--profile', 'agents', 'stop', key)
         configured = configure_amplifier(data, engine, entry)
-        if key == 'root':
-            state = data / 'state/root'
+        if key == 'vps-manager':
+            state = data / 'state/vps-manager'
             for source, target in (('credential-token', 'engine-token'), ('ca.pem', 'engine-ca.pem')):
                 path = state / 'gateway-credentials' / target
                 save(path, (state / 'exchange' / source).read_text(), mode=0o440)
@@ -914,6 +924,9 @@ def main():
     management = agent.add_parser('management').add_subparsers(dest='management', required=True)
     enable = management.add_parser('enable', help='Enable approved roster changes in the Chief of Staff DM')
     enable.add_argument('--owner-password-file', type=Path)
+    migrate = agent.add_parser('migrate-root', help='Replace legacy Root and preserve the Root Operations room')
+    migrate.add_argument('--owner-password-file', type=Path)
+    migrate.add_argument('--yes', action='store_true', help='Confirm retirement of the legacy Root account')
     agent.add_parser('configure', aliases=['sign-in'], help='Open native Amplifier provider setup').add_argument(
         'key', nargs='?', help='Agent ID. Omit to configure all pending local agents in order.')
     remote = commands.add_parser('remote').add_subparsers(dest='action', required=True)
@@ -984,6 +997,9 @@ def main():
         elif args.action == 'management':
             from roster import enable_management
             enable_management(data, args.owner_password_file)
+        elif args.action == 'migrate-root':
+            from vps_migration import migrate_root
+            migrate_root(data, args.owner_password_file, args.yes)
         else:
             agent_sign_in(data, args.key)
             if args.key in (None, 'chief-of-staff'):

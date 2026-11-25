@@ -83,7 +83,7 @@ export async function managedContext(task, names, readEvent) {
       const step = event && dynamicHandoff({ ...event, event_id: eventId }, route.manager, names);
       if (!step || step.target !== target || step.dispatch !== route.dispatch || step.thread !== task.thread ||
           step.request !== task.request || step.number !== number) return null;
-      history.unshift(`${names[event.sender]}:\n${event.content.body.slice(0, 4500)}`);
+      history.unshift(`${names[event.sender]} (${eventId}):\n${event.content.body.slice(0, 4500)}`);
       target = event.sender;
       eventId = step.previous;
     }
@@ -110,6 +110,32 @@ export async function managedContext(task, names, readEvent) {
   const body = ['Original request:', request.content.body.slice(0, 12000),
     ...history, `${names[task.delegator]} (current handoff):\n${task.body}`].join('\n\n');
   return { ...task, body };
+}
+
+export async function assignedHandoff(event, request, thread, recipient, names, activators, readEvent) {
+  let { sender, content } = event;
+  const mentions = user => {
+    const ids = content?.['m.mentions']?.user_ids;
+    return Array.isArray(ids) && ids.length === 1 && ids[0] === user;
+  };
+  let next = recipient;
+  for (let number = content?.['net.matrix_agents.turn']?.number; Number.isInteger(number) && number >= 1; number--) {
+    const relation = content?.['m.relates_to'];
+    const previous = relation?.['m.in_reply_to']?.event_id;
+    const turn = content?.['net.matrix_agents.turn'];
+    if (number >= replyLimit || !Object.hasOwn(names, sender) || !mentions(next) ||
+        relation?.rel_type !== 'm.thread' || relation.event_id !== thread || !validEventId(previous) ||
+        turn?.request !== request || turn?.number !== number) return false;
+    next = sender;
+    const parent = await readEvent(previous);
+    if (!parent) return false;
+    ({ sender, content } = parent);
+    if (number === 1) {
+      const initialThread = content?.['m.relates_to']?.event_id ?? previous;
+      return previous === request && initialThread === thread && activators.includes(sender) && mentions(next);
+    }
+  }
+  return false;
 }
 
 export function managedGuidance(event, name, names, userId) {

@@ -1,6 +1,7 @@
 """Materialize chronological links while preserving the native event graph."""
 
 import hashlib
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -36,6 +37,114 @@ async def attach_execution(graph: Any, event_id: str, scope: tuple[str, str]) ->
     await graph.upsert_node(task, {"labels": ["ExecutionTask"], "execution_trace_id": trace})
     await graph.upsert_edge(trace, task, {"type": "HAS_TASK"})
     await graph.upsert_edge(task, event_id, {"type": "HAS_STEP"})
+
+
+_MATRIX_EVENT = re.compile(r"\$[^\s/#?%]{1,254}\Z")
+_MATRIX_USER = re.compile(r"@([a-z0-9][a-z0-9_.=-]{0,63}):([^\s/#?%]{1,253})\Z")
+_MATRIX_ROOM = re.compile(r"![^\s/#?%]{1,254}\Z")
+
+
+def _office_digest(*values: str) -> str:
+    return hashlib.sha256(json.dumps(values, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
+def office_step(event: str, evidence: Any, scope: tuple[str, str] | None, graph: Any) -> dict[str, Any]:
+    if (not scope or event not in {"agents:assignment_accepted", "agents:execution"}
+            or graph.workspace != "agents-team" or not isinstance(evidence, dict)):
+        return {}
+    room, thread, request, actor, assignment = (evidence.get(key) for key in
+        ("room", "thread", "request", "actor", "assignment"))
+    if not all(isinstance(value, str) and pattern.fullmatch(value) for value, pattern in
+               ((room, _MATRIX_ROOM), (thread, _MATRIX_EVENT), (request, _MATRIX_EVENT),
+                (actor, _MATRIX_USER), (assignment, _MATRIX_EVENT))):
+        return {}
+    match = _MATRIX_USER.fullmatch(actor)
+    if graph.created_by != match[1] or scope != execution_ids({
+        "trace_id": "agents-thread-" + _office_digest(room, thread),
+        "task_id": "agents-request-" + _office_digest(room, request),
+    }):
+        return {}
+    fields = {"office_room": room, "office_thread": thread, "office_request": request,
+              "office_actor": actor, "office_assignment": assignment}
+    peer = evidence.get("from" if event == "agents:assignment_accepted" else "to")
+    if peer is not None and (not isinstance(peer, str) or not _MATRIX_USER.fullmatch(peer)
+                             or peer == actor or not peer.endswith(":" + match[2])):
+        return {}
+    if event == "agents:assignment_accepted":
+        if (assignment == request) != (peer is None):
+            return {}
+        return {**fields, "office_kind": "accepted", **({"office_from": peer} if peer else {})}
+    reply = evidence.get("reply")
+    if not isinstance(reply, str) or not _MATRIX_EVENT.fullmatch(reply):
+        return {}
+    fields.update(office_kind="reply", office_reply=reply)
+    if peer:
+        fields["office_to"] = peer
+        fields["office_handoff"] = "office-handoff:" + _office_digest(room, reply)
+    if evidence.get("step") in ("returned", "blocked"):
+        fields["office_step"] = evidence["step"]
+    references = evidence.get("references", [])
+    if not isinstance(references, list) or len(references) > 16 or not all(
+            isinstance(ref, str) and _MATRIX_EVENT.fullmatch(ref) and ref not in {request, reply} for ref in references):
+        return {}
+    outcome = evidence.get("outcome")
+    if not peer and outcome in ("completed", "blocked"):
+        fields["office_outcome"] = "verified" if outcome == "completed" and references else (
+            "blocked" if outcome == "blocked" else "in_progress")
+    if references:
+        fields["office_references"] = references
+    receipt = evidence.get("operation")
+    if match[1] == "vps-manager" and isinstance(receipt, str) and re.fullmatch(r"[a-f0-9]{32}", receipt):
+        fields["office_operation"] = receipt
+    return fields
+
+
+async def attach_office_step(graph: Any, task: str, event_id: str, office: dict[str, Any]) -> None:
+    if handoff := office.get("office_handoff"):
+        await graph.upsert_node(handoff, {"labels": ["OfficeHandoff"], "source": office["office_actor"],
+                                         "target": office["office_to"], "dispatch_event": office["office_reply"]})
+        await graph.upsert_edge(task, handoff, {"type": "HAS_HANDOFF"})
+        await graph.upsert_edge(handoff, event_id, {"type": "DISPATCHED_IN"})
+
+
+_OFFICE_OUTCOME: LiteralString = """
+MATCH (t:ExecutionTask:Node {workspace:$workspace,node_id:$owner})-[:HAS_STEP]->(event:Event)
+WHERE event.office_kind IS NOT NULL
+WITH t, head(collect(event.office_request)) AS request,
+     head(collect(event.office_room)) AS room, head(collect(event.office_thread)) AS thread
+OPTIONAL MATCH (t)-[:HAS_STEP]->(first:Event {office_kind:'accepted'})
+WHERE first.office_assignment = request AND first.office_from IS NULL
+WITH t,request,room,thread,first ORDER BY first.occurred_at,first.node_id
+WITH t,request,room,thread,head(collect(first)) AS assigned
+OPTIONAL MATCH (t)-[:HAS_STEP]->(outcome:Event)
+WHERE outcome.office_actor = assigned.office_actor AND outcome.office_outcome IN ['verified','blocked']
+WITH t,request,room,thread,assigned,outcome
+ORDER BY outcome.execution_sequence,outcome.occurred_at,outcome.node_id
+WITH t,request,room,thread,assigned,head(collect(outcome)) AS final
+SET t.office_request = request, t.office_room = room, t.office_thread = thread,
+    t.office_assignee = assigned.office_actor, t.office_status = coalesce(final.office_outcome,'in_progress')
+WITH t,final
+OPTIONAL MATCH (t)-[old:HAS_OUTCOME]->(previous:Event)
+WHERE final IS NULL OR previous <> final
+DELETE old
+WITH DISTINCT t,final
+FOREACH (_ IN CASE WHEN final IS NULL THEN [] ELSE [1] END | MERGE (t)-[:HAS_OUTCOME]->(final))
+"""
+
+_OFFICE_HANDOFFS: LiteralString = """
+MATCH (t:ExecutionTask:Node {workspace:$workspace,node_id:$owner})-[:HAS_HANDOFF]->(h:OfficeHandoff)
+OPTIONAL MATCH (t)-[:HAS_STEP]->(ack:Event {office_kind:'accepted'})
+WHERE ack.office_assignment=h.dispatch_event AND ack.office_actor=h.target AND ack.office_from=h.source
+WITH t,h,head(collect(ack)) AS accepted
+OPTIONAL MATCH (t)-[:HAS_STEP]->(result:Event {office_kind:'reply'})
+WHERE result.office_assignment=h.dispatch_event AND result.office_actor=h.target
+WITH h,accepted,result ORDER BY result.occurred_at,result.node_id
+WITH h,accepted,head(collect(result)) AS returned
+SET h.status = CASE WHEN accepted IS NULL THEN 'dispatched' WHEN returned IS NULL THEN 'accepted'
+                    ELSE coalesce(returned.office_step,'returned') END
+FOREACH (_ IN CASE WHEN accepted IS NULL THEN [] ELSE [1] END | MERGE (h)-[:ACCEPTED_IN]->(accepted))
+FOREACH (_ IN CASE WHEN accepted IS NULL OR returned IS NULL THEN [] ELSE [1] END | MERGE (h)-[:RETURNED_IN]->(returned))
+"""
 
 
 _LOCK: LiteralString = """
@@ -129,3 +238,6 @@ async def update_timelines(tx: Any, groups: dict[str, list[dict]], workspace: st
     for owner, query in sorted(timelines.items()):
         await (await tx.run(_LOCK, workspace=workspace, owner=owner)).consume()
         await _reconcile(tx, query, workspace, owner)
+        if workspace == "agents-team" and query == _TASK_EVENTS:
+            for projection in (_OFFICE_OUTCOME, _OFFICE_HANDOFFS):
+                await (await tx.run(projection, workspace=workspace, owner=owner)).consume()

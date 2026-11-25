@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdtemp, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { request as http } from 'node:http';
+import { createServer as createHttpServer, request as http } from 'node:http';
 import { createServer } from 'node:https';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -165,6 +165,16 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   await writeFile('/acp/credential-token', 'welcome-acp-fixture');
   const server = createServer({ key: await readFile(key), cert: await readFile(ca) });
   const ws = new WebSocketServer({ server, path: '/api/v1/acp' });
+  const records = [];
+  const context = createHttpServer(async (request, response) => {
+    assert.equal(request.url, '/events');
+    assert.equal(request.headers.authorization, 'Bearer office-evidence-fixture');
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    records.push(JSON.parse(Buffer.concat(chunks)));
+    response.writeHead(200).end();
+  });
+  await writeFile('/context-token', 'office-evidence-fixture');
   const analyst = { id: '@analyst:' + domain, key: 'analyst', name: 'Analyst', role: 'worker', limits: 'Fixture',
     status: 'Available', capabilities: [{ code: 'welcome-tip', description: 'Write one welcome tip.', resources: ['task:*'] }] };
   const manager = { id: '@manager:' + domain, key: 'manager', name: 'Manager', role: 'coordinator',
@@ -184,9 +194,12 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
         const prompt = params.prompt.map(entry => entry.text ?? '').join('\n');
         assert.match(prompt, /three-step checklist/i);
         if (prompt.includes('Retirement fixture')) await retirementWork;
-        const text = prompt.includes('You are Analyst') ? 'Fixture tip: mention an available agent.'
-          : prompt.includes('Fixture tip: mention an available agent.') ?
-            'TASK_OUTCOME: {"status":"completed","result":"Welcome to Office","verification":"Analyst shared a tip"}'
+        const citedReply = /(?:^|\n)Analyst \((\$[^\s)]+)\):\n[^\n]*Fixture tip/u.exec(prompt)?.[1];
+        const text = prompt.includes('Unverified fixture') ? 'TASK_OUTCOME: ' + JSON.stringify({status: 'completed',
+          result: 'Checklist drafted', verification: 'Claimed an unverified check', evidence: ['$missing-receipt']})
+          : prompt.includes('You are Analyst') ? 'Fixture tip: mention an available agent.'
+          : citedReply ? 'TASK_OUTCOME: ' + JSON.stringify({status: 'completed', result: 'Welcome to Office',
+            verification: 'Analyst shared a tip', evidence: [citedReply]})
             : 'Analyst, add a welcome tip.\nHANDOFF: ' + JSON.stringify(handoff);
         socket.send(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {
           sessionId: params.sessionId, update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } },
@@ -198,6 +211,8 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
+  context.listen(0, '127.0.0.1');
+  await once(context, 'listening');
   try {
     await writeFile(catalog, JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
       dynamicHandoffs: true, agents: [manager, analyst] }));
@@ -209,6 +224,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       launch('/app/connector.mjs', { AGENT_STATE: agentState, AGENT_WORKSPACE: base, AGENT_NAME: agent.name,
         AGENT_USERNAME: agent.key, MATRIX_CATALOG_PATH: catalog,
         MATRIX_PLANNER: '@dot:' + domain,
+        CONTEXT_INTELLIGENCE_URL: 'http://127.0.0.1:' + context.address().port,
         INSTANCE_ACP_URL: 'wss://localhost:' + server.address().port + '/api/v1/acp' });
     }
     await eventually(async () => {
@@ -266,11 +282,26 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       assert.equal(submitted.room_id, office);
       assert.deepEqual(submitted.content['m.mentions'].user_ids, [manager.id]);
       const inThread = item => item.content['m.relates_to']?.event_id === event;
-      await eventually(() => findMessage(item => inThread(item) && item.sender === analyst.id &&
+      const tip = await eventually(() => findMessage(item => inThread(item) && item.sender === analyst.id &&
         item.content.body.includes('Fixture tip')));
-      await eventually(() => findMessage(item => inThread(item) && item.sender === manager.id &&
+      const final = await eventually(() => findMessage(item => inThread(item) && item.sender === manager.id &&
         item.content['net.matrix_agents.task_outcome']?.status === 'completed'));
+      const proof = await eventually(() => records.find(record => record.data.evidence.reply === final.event_id));
+      assert.deepEqual(proof.data.evidence.references, [tip.event_id]);
+      const history = records.filter(record => record.data.execution.task_id === proof.data.execution.task_id);
+      assert.ok(history.some(record => record.event === 'agents:assignment_accepted' &&
+        record.data.evidence.actor === analyst.id && record.data.evidence.from === manager.id));
+      assert.notEqual(history.find(record => record.data.evidence.actor === analyst.id).data.session_id, proof.data.session_id);
     }
+    const unverified = await sendEncrypted(reader, office, 'fixture-unverified',
+      mentionMessage('Unverified fixture. Draft a three-step checklist.', manager));
+    const progress = await eventually(() => findMessage(item => item.content['m.relates_to']?.event_id === unverified &&
+      item.sender === manager.id));
+    assert.match(progress.content.body, /no verifiable Office evidence/u);
+    assert.equal(progress.content['net.matrix_agents.task_outcome'], undefined);
+    const attempt = await eventually(() => records.find(record => record.data.evidence.reply === progress.event_id));
+    assert.equal(attempt.data.evidence.outcome, 'progress');
+    assert.equal(attempt.data.evidence.references, undefined);
     const duringRetirement = await sendEncrypted(reader, office, 'retirement-fixture-active',
       mentionMessage('Retirement fixture: draft a three-step checklist.', analyst));
     const workerDb = new DatabaseSync(join(base, 'welcome-analyst', 'connector.sqlite3'));
@@ -311,6 +342,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     for (const connection of ws.clients) connection.terminate();
     ws.close();
     await new Promise(resolve => server.close(resolve));
+    await new Promise(resolve => context.close(resolve));
   }
 }
 

@@ -110,6 +110,19 @@ export class Store {
     this.db.prepare('UPDATE assignment_reactions SET activity_id=? WHERE assignment=?').run(id, event);
   }
 
+  acceptEvidence(event, evidence) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.startActivity(event);
+      if (evidence) this.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?, ?)').run(
+        'accept:' + event, JSON.stringify(evidence));
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   sent(event, id, outcomeKey, evidence) {
     this.db.exec('BEGIN IMMEDIATE');
     try {

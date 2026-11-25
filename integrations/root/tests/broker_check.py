@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 
-from broker import WINDOW, database, execute_script, handle, sha, verify_matrix_receipt
+from broker import WINDOW, database, execute_plan, execute_script, handle, sha, verify_matrix_receipt
 
 
 now = 5_000_000
@@ -95,7 +95,7 @@ with TemporaryDirectory() as directory:
     assert submit(db, expired) == {'outcome': 'expired', 'exit_code': None}
     crashed = payload_for('approve', 5)
     with db:
-        db.execute('INSERT INTO audit VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        db.execute('INSERT INTO audit (id,digest,decision,requested,approver,action,decided,outcome,exit_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
                    tuple(crashed[key] for key in ('id', 'hash', 'decision', 'request', 'approver', 'action', 'decided')) + ('running',))
     db.close()
     db = database(path)
@@ -103,7 +103,34 @@ with TemporaryDirectory() as directory:
     assert executions == [accept['script']]
     db.close()
 
-print('Broker verified fresh owner approval, exact bytes, replay, rejection, expiry and crash recovery.')
+with TemporaryDirectory() as directory:
+    home = Path(directory).resolve()
+    target = home / 'fixture.conf'
+    target.write_text('port=8000\npassword=fixture-private\n')
+    target.chmod(0o640)
+    inspection = json.dumps({'kind': 'inspect-file', 'path': str(target)})
+    status, code, result = execute_plan(inspection, home, 'inspect')
+    assert (status, code) == ('completed', 0)
+    assert result['preview'] == 'port=8000\n[Redacted]'
+    assert 'fixture-private' not in result['preview']
+    old = target.read_text()
+    replacement = json.dumps({'kind': 'replace-file', 'path': str(target), 'before': old,
+                              'after': old.replace('8000', '9000'), 'verify': 'test -f approved'})
+    assert execute_plan(replacement, home, 'fail', run_script=lambda _: ('failed', 4)) == ('rolled_back', 4, None)
+    assert target.read_text() == old
+    assert execute_plan(replacement, home, 'pass', run_script=lambda _: ('completed', 0)) == ('completed', 0, None)
+    assert target.read_text() == old.replace('8000', '9000') and target.stat().st_mode & 0o777 == 0o640
+    assert (home / 'pass.previous').read_text() == old
+    assert execute_plan(replacement, home, 'stale') == ('file_changed', None, None)
+    calls = []
+    plan = json.dumps({'kind': 'shell', 'script': 'printf fixture', 'verify': 'test -f expected'})
+    def run_step(command):
+        calls.append(command)
+        return ('completed', 0) if len(calls) == 1 else ('failed', 1)
+    assert execute_plan(plan, home, 'verified-shell', run_script=run_step) == ('verification_failed', 1, None)
+    assert calls == ['printf fixture', 'test -f expected']
+
+print('Broker verified owner approval, exact edits, redaction, replay, rejection, expiry and crash recovery.')
 if sys.platform == 'linux':
     assert execute_script('test -r "$0"\nexit $?\n') == ('completed', 0)
     assert execute_script('exit 7\n') == ('failed', 7)

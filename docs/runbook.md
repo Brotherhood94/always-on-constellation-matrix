@@ -122,6 +122,17 @@ Retirement removes the worker from Office, the dashboard, Docker Compose, and Pe
 
 Retirement supports ordinary local Office workers. [Chief of Staff approval](chief-of-staff.md#hire-or-retire-an-office-worker)
 
+### Upgrade from Root to VPS Manager
+
+From the updated VPS checkout, run the migration, then complete VPS Manager’s native Amplifier sign-in.
+
+```sh
+sudo ./constellation_matrix agent migrate-root
+sudo ./constellation_matrix agent configure vps-manager
+```
+
+Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. VPS Manager joins the existing encrypted **Root Operations** chat with a new Matrix identity. Update saved install configurations to use `vps-manager` where they previously listed `root`. [VPS Manager guide](../integrations/root/README.md)
+
 ## Add a remote worker
 
 Select `remote-worker` during setup or add a profile with `"placement": "remote"`. Generate a dedicated Ed25519 SSH key on the remote host for the desktop. On the coordinator, approve its public key and export the enrollment file.

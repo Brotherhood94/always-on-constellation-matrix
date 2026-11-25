@@ -15,7 +15,7 @@ from layout import invite, join, room_route
 from provision import MatrixError
 
 INVITER = 'roster-inviter'
-PROTECTED = RESERVED | {'manager', 'chief-of-staff', 'root', 'remote-worker'}
+PROTECTED = RESERVED | {'manager', 'chief-of-staff', 'root', 'vps-manager', 'remote-worker'}
 
 
 def local_worker(key, entry):

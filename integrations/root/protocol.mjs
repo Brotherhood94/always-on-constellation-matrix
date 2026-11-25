@@ -11,6 +11,7 @@ export const pollEnd = 'org.matrix.msc3381.poll.end';
 export const pollText = 'org.matrix.msc1767.text';
 export const agentTurnKey = 'net.matrix_agents.turn';
 export const reviewedScriptOperation = 'reviewed-script';
+export const reviewedPlanOperation = 'reviewed-plan';
 export const maximumScriptBytes = 4000;
 const reviewPrefix = 'ROOT_REVIEW:';
 const maximumReviewRequestBytes = 12000;
@@ -27,7 +28,7 @@ export function requestText(event, root, maximumBytes = 1800) {
   const relation = content['m.relates_to'];
   if (relation && (relation.rel_type !== 'm.thread' || !eventId.test(relation.event_id))) return null;
   const text = content.body.replace(/^(?:>[^\n]*\n)+\n/u, '')
-    .replace(/^\s*@?root(?::[a-z0-9.-]+)?[,:\s]+/iu, '').trim();
+    .replace(/^\s*@?(?:vps-manager|VPS Manager|root)(?::[a-z0-9.-]+)?[,:\s]+/iu, '').trim();
   const limit = reviewLine(text) === null ? maximumBytes : maximumReviewRequestBytes;
   return text && Buffer.byteLength(text) <= limit ? text : null;
 }
@@ -91,7 +92,57 @@ function readProposal(text, allowFormatting) {
 
 function reviewLine(text) {
   const lastLine = text.slice(text.lastIndexOf('\n') + 1);
+  if (lastLine.startsWith('VPS_REVIEW:')) return lastLine.slice('VPS_REVIEW:'.length);
   return lastLine.startsWith(reviewPrefix) ? lastLine.slice(reviewPrefix.length) : null;
+}
+
+function reviewedPlan(answer) {
+  const { plan } = answer;
+  if (!plan || !['shell', 'inspect-file', 'replace-file'].includes(plan.kind)) {
+    throw new ProposalError('Specify a shell, inspect-file or replace-file maintenance plan.');
+  }
+  const exact = { kind: plan.kind };
+  if (plan.kind !== 'shell') {
+    if (typeof plan.path !== 'string' || plan.path.length > 512 || !/^\/[A-Za-z0-9_./@+=-]+$/u.test(plan.path)) {
+      throw new ProposalError('Specify one absolute file path.');
+    }
+    exact.path = plan.path;
+  }
+  if (plan.kind === 'replace-file') {
+    if (!['before', 'after'].every(key => typeof plan[key] === 'string' && Buffer.byteLength(plan[key]) <= 4096 &&
+        !plan[key].includes('\0')) || plan.before === plan.after) {
+      throw new ProposalError('Include the exact original and replacement text.');
+    }
+    exact.before = plan.before;
+    exact.after = plan.after;
+  }
+  const scriptFields = plan.kind === 'shell' ? ['script', 'verify'] : plan.kind === 'replace-file' ? ['verify'] : [];
+  for (const key of scriptFields) {
+    if (typeof plan[key] !== 'string' || !plan[key].trim() || !/^[\t\n\x20-\x7e]{1,4000}$/u.test(plan[key])) {
+      throw new ProposalError('Include the exact commands and a separate verification script.');
+    }
+    exact[key] = plan[key];
+  }
+  const command = JSON.stringify(exact);
+  const summary = reviewText(answer.summary, 220);
+  const impact = reviewText(answer.impact, 220);
+  const verification = reviewText(answer.verification, 220);
+  const recovery = reviewText(answer.recovery, 220);
+  if (!summary || !impact || !verification || (plan.kind !== 'inspect-file' && !recovery) ||
+      Buffer.byteLength(command) > 15000) throw new ProposalError('Review requires purpose, impact, verification and recovery.');
+  return { operation: reviewedPlanOperation, summary, command, hash: digest(command),
+    details: { impact, verification, recovery } };
+}
+
+export function reviewBody(task) {
+  if (task.operation !== reviewedPlanOperation) return task.command;
+  const plan = JSON.parse(task.command);
+  if (plan.kind === 'shell') return 'Apply\n' + plan.script + '\n\nVerify\n' + plan.verify;
+  if (plan.kind === 'inspect-file') return 'Inspect regular file\n' + plan.path + '\nReturn a bounded redacted preview.';
+  return 'Replace ' + plan.path + '\n' +
+    'Remove exact text: ' + JSON.stringify(plan.before) + '\n' +
+    'Insert exact text: ' + JSON.stringify(plan.after) + '\n\nVerify\n' + plan.verify +
+    '\nIf verification fails, restore the previous bytes if the replacement is still unchanged.';
 }
 
 function reviewedProposal(answer) {
@@ -122,6 +173,7 @@ export function submittedProposal(text) {
   const line = reviewLine(text);
   if (line === null) return null;
   const answer = readProposal(line, false);
+  if (answer.operation === reviewedPlanOperation) return reviewedPlan(answer);
   if (answer.operation !== reviewedScriptOperation) {
     throw new ProposalError('An exact-script submission must use operation reviewed-script.');
   }
@@ -133,6 +185,7 @@ export function proposal(text, operations) {
   const summary = reviewText(answer.summary, 220);
   if (answer.operation === null) return { summary: summary || 'Root could not prepare an exact script for review.' };
   if (answer.operation === reviewedScriptOperation) return reviewedProposal(answer);
+  if (answer.operation === reviewedPlanOperation) return reviewedPlan(answer);
   if (typeof answer.operation !== 'string' || !Object.hasOwn(operations, answer.operation)) {
     throw new ProposalError('The proposal names an operation Root does not recognize.');
   }
@@ -149,6 +202,11 @@ const executionCauses = new Map(Object.entries({
   timed_out: 'The script exceeded its execution time limit.',
   executor_rejected: 'The host executor returned an error before confirming the outcome.',
   unknown: 'The host executor did not confirm an outcome.',
+  verification_failed: 'The operation ran but its post-change check failed.',
+  rolled_back: 'Verification failed and the original file was restored.',
+  file_changed: 'The file no longer matches the reviewed version.',
+  precondition_failed: 'The file or its metadata could not be checked safely.',
+  recovery_required: 'Verification and automatic file recovery failed. Check the host and private backup.',
 }));
 
 export function executionCause(task) {
@@ -161,14 +219,14 @@ export function executionCause(task) {
   return reasons?.[task.exit_code] ?? 'The script returned an exit code without identifying a specific cause.';
 }
 
-export function sourceTurn(content, config, event) {
+export function sourceTurn(content, config, event, coordinator) {
   const turn = content?.[agentTurnKey];
   if (content?.['m.relates_to']?.rel_type !== 'm.thread' || typeof turn?.request !== 'string' ||
       !eventId.test(turn.request) || !Number.isInteger(turn.number) || turn.number < 1 || turn.number >= replyLimit) return null;
   const base = { request: turn.request, number: turn.number };
   const managed = turn.managed;
   if (!managed) return base;
-  const manager = '@manager:' + config.root.split(':').slice(1).join(':');
+  const manager = coordinator ?? '@manager:' + config.root.split(':').slice(1).join(':');
   if (managed.version !== 2 || managed.target !== config.root || managed.manager !== manager) return base;
   const dispatch = turn.number === 1 && event.sender === manager ? event.event_id : managed.dispatch;
   return typeof dispatch === 'string' && eventId.test(dispatch) ? { ...base, managed: { manager, dispatch } } : base;

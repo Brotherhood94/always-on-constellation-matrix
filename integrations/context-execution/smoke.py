@@ -18,7 +18,7 @@ def post(endpoint, payload, key):
         return json.load(response)
 
 
-writers = {'first': 'fixture-writer-first', 'second': 'fixture-writer-second'}
+writers = {name: f'fixture-writer-{name}' for name in ('first', 'second', 'manager', 'analyst', 'vps-manager', 'vps-manager-ops')}
 reader = 'fixture-reader'
 workspace = 'agents-team'
 
@@ -36,13 +36,13 @@ async def write(name, pos, actor, session, trace=None, task=None):
     assert result['status'] == 'queued', result
 
 
-def query(cypher):
-    return post('cypher', {'workspace': workspace, 'query': cypher}, reader)['results']
+def query(cypher, scope=workspace):
+    return post('cypher', {'workspace': scope, 'query': cypher}, reader)['results']
 
 
-def wait_for(cypher, condition):
+def wait_for(cypher, condition, scope=workspace):
     for _ in range(40):
-        rows = query(cypher)
+        rows = query(cypher, scope)
         if condition(rows):
             return rows
         time.sleep(0.4)
@@ -68,16 +68,74 @@ async def verify():
     assert post('events', stale, writers['first'])['status'] == 'duplicate'
 
 
+def office(kind, writer, stamp, request, assignment, **fields):
+    room, thread = '!office:fixture.test', '$thread'
+    actor = fields.pop('actor', f'@{writer}:fixture.test')
+    digest = lambda *items: hashlib.sha256(json.dumps(items, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+    trace = 'agents-thread-' + digest(room, thread)
+    data = {'session_id': trace + '-' + writer, 'timestamp': f'2026-11-24T16:00:{stamp:02d}Z',
+            'execution': {'trace_id': trace, 'task_id': 'agents-request-' + digest(room, request), 'sequence': stamp},
+            'evidence': {'room': room, 'thread': thread, 'request': request, 'actor': actor,
+                         'assignment': assignment, **fields}}
+    return post('events', {'event': 'agents:' + kind, 'workspace': workspace, 'data': data,
+                           'idempotency_key': f'office-{writer}-{stamp}'}, writers[writer])
+
+
+def verify_office():
+    # A result can arrive before dispatch or acceptance without losing the links.
+    office('execution', 'vps-manager', 5, '$first', '$delegate-vps', reply='$vps-result', to='@manager:fixture.test',
+           step='returned', operation='a' * 32)
+    post('events', {'event': 'root:finished', 'workspace': 'root-operations', 'idempotency_key': 'fixture-vps-audit',
+                    'data': {'session_id': 'fixture-vps-audit', 'timestamp': '2026-11-24T16:00:05Z',
+                             'operation': {'id': 'a' * 32}}}, writers['vps-manager-ops'])
+    office('execution', 'manager', 7, '$first', '$vps-result', reply='$verified', outcome='completed',
+           references=['$vps-result'])
+    office('execution', 'analyst', 1, '$first', '$first', reply='$spoof', actor='@manager:fixture.test', outcome='blocked')
+    office('assignment_accepted', 'manager', 2, '$first', '$first')
+    office('execution', 'manager', 3, '$first', '$first', reply='$delegate-analyst', to='@analyst:fixture.test')
+    office('assignment_accepted', 'analyst', 4, '$first', '$delegate-analyst', **{'from': '@manager:fixture.test'})
+    office('execution', 'analyst', 8, '$first', '$delegate-analyst', reply='$delegate-vps', to='@vps-manager:fixture.test',
+           step='returned')
+    office('assignment_accepted', 'vps-manager', 9, '$first', '$delegate-vps', **{'from': '@analyst:fixture.test'})
+    office('assignment_accepted', 'manager', 6, '$first', '$vps-result', **{'from': '@vps-manager:fixture.test'})
+    office('assignment_accepted', 'manager', 10, '$second', '$second')
+    office('execution', 'manager', 11, '$second', '$second', reply='$unverified', outcome='completed')
+    statuses = ('MATCH (t:ExecutionTask {workspace:$workspace,office_thread:"$thread"}) '
+                'RETURN t.office_request AS request,t.office_status AS status')
+    wait_for(statuses, lambda rows: {(r['request'], r['status']) for r in rows} ==
+             {('$first', 'verified'), ('$second', 'in_progress')})
+    office('execution', 'manager', 12, '$second', '$second', reply='$blocked', outcome='blocked')
+    assert office('execution', 'manager', 12, '$second', '$second', reply='$blocked', outcome='blocked')['status'] == 'duplicate'
+    wait_for(statuses, lambda rows: {(r['request'], r['status']) for r in rows} ==
+             {('$first', 'verified'), ('$second', 'blocked')})
+    handoffs = ('MATCH (:ExecutionTask {workspace:$workspace,office_request:"$first"})-[:HAS_HANDOFF]->(h:OfficeHandoff) '
+                'RETURN h.source AS source,h.target AS target,h.status AS status')
+    wait_for(handoffs, lambda rows: {(r['source'], r['target'], r['status']) for r in rows} == {
+        ('@manager:fixture.test', '@analyst:fixture.test', 'returned'),
+        ('@analyst:fixture.test', '@vps-manager:fixture.test', 'returned'),
+        ('@vps-manager:fixture.test', '@manager:fixture.test', 'returned'),
+    })
+    assert query('MATCH (t:ExecutionTask {workspace:$workspace,office_request:"$first"})-[:HAS_OUTCOME]->(e) '
+                 'RETURN e.office_reply AS reply,e.office_references AS refs') == [{'reply': '$verified', 'refs': ['$vps-result']}]
+    office_receipt = query('MATCH (e:Event {workspace:$workspace,office_reply:"$vps-result"}) '
+                           'RETURN e.office_operation AS id')
+    wait_for('MATCH (e:Event {workspace:$workspace,event_name:"root:finished"}) RETURN e.vps_operation_id AS id',
+             lambda rows: rows == office_receipt == [{'id': 'a' * 32}], 'root-operations')
+    print('Office handoffs, recipient acceptance, VPS receipt and authoritative task outcomes verified.')
+
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['config']:
-        ids = {**{token: f'writer-{name}' for name, token in writers.items()}, reader: 'reader'}
+        ids = {**{token: f'writer-{name}' if name in ('first', 'second') else name
+                  for name, token in writers.items()}, reader: 'reader'}
         print(json.dumps({'auth_mode': 'static', 'allow_unauthenticated': False,
                           'access_control_mode': 'scoped', 'neo4j_url': 'bolt://neo4j:7687',
                           'api_keys_store_path': '/data/identity/api-keys.json',
                           'api_keys': {hashlib.sha256(token.encode()).hexdigest(): {'id': identity}
                                        for token, identity in ids.items()},
                           'contributor_grants': {identity: ({'all_workspaces': True, 'capabilities': ['data:read']}
-                              if identity == 'reader' else {'workspaces': [workspace], 'capabilities': ['live:write']})
+                              if identity == 'reader' else {'workspaces': ['root-operations' if identity == 'vps-manager-ops'
+                                                                         else workspace], 'capabilities': ['live:write']})
                               for identity in ids.values()}}))
         raise SystemExit(0)
     asyncio.run(verify())
@@ -96,3 +154,4 @@ if __name__ == '__main__':
     wait_for(task_query, lambda rows: rows == [{'links': 1}])
     assert query('MATCH (:ExecutionTask {workspace:$workspace})-[r:NEXT_TASK]->() RETURN count(r) AS links') == [{'links': 1}]
     print('Chronological steps, ordered tasks, independent traces, authenticated authors and cutoff verified.')
+    verify_office()

@@ -3,16 +3,18 @@ import { readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
-import { acceptedMessage, requestedAttachments, returnDelegatedReview, taskOutcomeKey, team, threadRelation, threadReply } from './matrix-routing.mjs';
+import { acceptedMessage, declaredOutcome, requestedAttachments, returnDelegatedReview, taskOutcomeKey, team,
+  threadRelation, threadReply, turnKey } from './matrix-routing.mjs';
 import { createCatalog } from './agent-catalog.mjs';
+import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
 import { decideDispatch, dynamicTurn, gapNotice, guidanceFor, routingFor } from './capability-dispatch.mjs';
 import { attachmentLimit, importAttachments, uploadAttachment } from './matrix-media.mjs';
 import { managedContext, managedGuidance } from './managed-task.mjs';
 import { openRoomClient, readEncryptedRoomMessage, readOptional, redactReaction, sendEncrypted, sendReaction } from './matrix-session.mjs';
 import { Store } from './store.mjs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
-import { activityReaction, outcomeReaction } from './office-policy.mjs';
-import { executionEvidence, writeExecutionEvidence } from './context.mjs';
+import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
+import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
   AGENT_STATE, AGENT_WORKSPACE, MATRIX_PLANNER, AGENT_INSTRUCTIONS } = process.env;
@@ -85,7 +87,6 @@ async function publishActivity(client, id) {
 }
 
 async function trackActivity(client, id, signal) {
-  store.startActivity(id);
   let retry = 1000;
   while (!signal.aborted) {
     try {
@@ -99,6 +100,40 @@ async function trackActivity(client, id, signal) {
       retry = Math.min(retry * 2, 10000);
     }
   }
+}
+
+async function qualifyOutcome(client, event, content, attachments) {
+  const outcome = content[taskOutcomeKey];
+  if (!outcome) return content;
+  const initial = event.id === event.request ? null : await readEncryptedRoomMessage(client, roomId, event.request);
+  const mentions = initial?.content?.['m.mentions']?.user_ids;
+  const authorized = event.id === event.request ||
+    ([MATRIX_OWNER, MATRIX_PLANNER].includes(initial?.sender) && mentions?.length === 1 && mentions[0] === userId);
+  if (authorized && outcome.status === 'blocked') return content;
+  const evidence = [...attachments];
+  if (authorized) {
+    for (const id of outcome.evidence ?? []) {
+      if (evidence.includes(id) || id === event.request) continue;
+      const source = await readEncryptedRoomMessage(client, roomId, id);
+      if (source?.content?.[turnKey]?.request === event.request &&
+          source.content['m.relates_to']?.event_id === event.thread) evidence.push(id);
+    }
+  }
+  if (authorized && evidence.length) {
+    return { ...content, [taskOutcomeKey]: { ...outcome, evidence } };
+  }
+  const detail = outcome.status === 'completed' ? outcome.result : outcome.blocker;
+  if (authorized && event.number === replyLimit) {
+    const blocked = { status: 'blocked', blocker: 'The final reply had no verifiable Office evidence.',
+      unblocker: 'The requester', action: 'Start a new assignment with the evidence needed to verify the result.' };
+    const message = outcomeReplyText(detail, blocked);
+    return { ...content, ...mentionMessage(message.plain, outcomeRecipients, message.rich), [taskOutcomeKey]: blocked };
+  }
+  const note = authorized
+    ? 'The task remains open. This result has no verifiable Office evidence reference.'
+    : 'This reply covers the assigned step. The original assignee owns the overall outcome.';
+  const { [taskOutcomeKey]: _outcome, format: _format, formatted_body: _formatted, ...progress } = content;
+  return { ...progress, ...mentionMessage([detail, note].join('\n\n')) };
 }
 
 async function settleReactions(client) {
@@ -172,6 +207,8 @@ async function deliver(client, event) {
           : 'Provide a smaller or readable copy of the attachment.' });
     }
     if (!event.replyTo) {
+      store.acceptEvidence(event.id, process.env.CONTEXT_INTELLIGENCE_URL &&
+        assignmentEvidence({ roomId, actor: userId, event }));
       activity = trackActivity(client, event.id, activityTimer.signal).catch(error => {
         console.error('Matrix activity tracking failed:', error.body?.errcode || error.code || error.name);
       });
@@ -208,9 +245,14 @@ async function deliver(client, event) {
   if (!outgoing) {
     const delivery = await deliverAttachments(client, event, reply);
     const decision = await decideDispatch(catalog, event, reply, userId, client, roomId);
-    const content = threadReply(event, reply, peers, requesterName, outcomeRecipients, delivery, decision);
+    const proposal = threadReply(event, reply, peers, requesterName, outcomeRecipients, delivery, decision);
+    const content = process.env.CONTEXT_INTELLIGENCE_URL
+      ? await qualifyOutcome(client, event, proposal, delivery.ids) : proposal;
     const notice = gapNotice(event, decision, threadRelation(event));
-    outgoing = { content, notice };
+    const target = !content[taskOutcomeKey] && !event.replyTo && content['m.mentions']?.user_ids
+      ?.find(id => Object.hasOwn(members, id));
+    const step = (delivery.issues.length || declaredOutcome(reply)?.status === 'blocked') ? 'blocked' : 'returned';
+    outgoing = { content, notice, target, step };
     store.saveOutgoing(event.id, outgoing);
   }
   const { content, notice } = outgoing;
@@ -220,7 +262,8 @@ async function deliver(client, event) {
   const sent = await sendEncrypted(client, roomId, txnId, content);
   if (notice) await sendEncrypted(client, roomId, reactionTransaction('capability-gap', event.id), notice);
   store.sent(event.id, sent, outcomeKey, process.env.CONTEXT_INTELLIGENCE_URL &&
-    executionEvidence({ roomId, actor: userId, event, sent, status }));
+    executionEvidence({ roomId, actor: userId, event, sent, status, target: outgoing.target, step: outgoing.step,
+      evidence: content[taskOutcomeKey]?.evidence }));
   console.log('Encrypted agent reply delivered.');
 }
 

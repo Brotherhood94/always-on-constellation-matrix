@@ -12,6 +12,7 @@ from onboarding import finish
 from provision import MatrixError, request
 from roster import deactivate_worker, invitation_ready, office_inviter, prepare_management
 from roster_broker import verify
+from vps_migration import revoke_legacy
 
 
 class LayoutTest(unittest.TestCase):
@@ -80,6 +81,42 @@ class LayoutTest(unittest.TestCase):
             join(office, remote['user_id'], remote['access_token'])
             self.assertEqual(finish(data, 'fixture'), {'sender': manager['user_id'], 'room': office, 'event': '$welcome'})
             publish.assert_called_once()
+
+    def test_vps_manager_replaces_root_in_the_same_private_chat(self):
+        server = os.environ['MATRIX_SERVER_NAME']
+        password = 'synthetic-test-passphrase-88'
+        owner, old, replacement = (login(key, password) for key in ('operator', 'root', 'vps-manager'))
+        token = owner['access_token']
+        rooms = create_layout(server, owner['user_id'], token)
+        invite(rooms['office'], old['user_id'], token)
+        join(rooms['office'], old['user_id'], old['access_token'])
+        audit = direct_room(server, rooms['space'], 'root', 'Root Operations', owner['user_id'], token,
+                            old['user_id'], old['access_token'])
+        original = request('PUT', room_route(audit) + '/send/m.room.encrypted/old-root-receipt', {
+            'algorithm': 'm.megolm.v1.aes-sha2', 'ciphertext': 'synthetic-envelope',
+        }, old['access_token'])['event_id']
+        with TemporaryDirectory() as working, patch('vps_migration.disconnect') as disconnect:
+            data = Path(working)
+            matrix = data / 'state/root/matrix'
+            matrix.mkdir(parents=True)
+            save(matrix / 'room-id', audit)
+            save(matrix / 'matrix-password', password)
+            settings = {'server_name': server}
+            revoke_legacy(data, settings, rooms, token)
+            revoke_legacy(data, settings, rooms, token)
+            disconnect.assert_called_with(data, 'root')
+        with self.assertRaises(MatrixError):
+            request('GET', CLIENT + '/account/whoami', token=old['access_token'])
+        self.assertNotIn(old['user_id'], request('GET', room_route(rooms['office']) + '/joined_members', token=token)['joined'])
+        self.assertEqual(audit, direct_room(server, rooms['space'], 'root', 'Root Operations', owner['user_id'],
+                                           token, replacement['user_id'], replacement['access_token']))
+        self.assertEqual(set(request('GET', room_route(audit) + '/joined_members', token=token)['joined']),
+                         {owner['user_id'], replacement['user_id']})
+        mapping = request('GET', f"{CLIENT}/user/{encoded(owner['user_id'])}/account_data/m.direct", token=token)
+        self.assertNotIn(old['user_id'], mapping)
+        self.assertEqual(mapping[replacement['user_id']], [audit])
+        previous = request('GET', room_route(audit) + '/event/' + encoded(original), token=token)
+        self.assertEqual((previous['sender'], previous['type']), (old['user_id'], 'm.room.encrypted'))
 
     def test_roster_invitation_approval_receipt_and_retirement_against_synapse(self):
         server = os.environ['MATRIX_SERVER_NAME']

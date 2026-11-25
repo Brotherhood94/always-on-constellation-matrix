@@ -9,16 +9,19 @@ import re
 import signal
 import socket
 import sqlite3
+import stat
 import struct
 import subprocess
 import sys
+from tempfile import NamedTemporaryFile
 import time
 from urllib.parse import quote
 
 
-MAX_MESSAGE = 24_000
+MAX_MESSAGE = 40_000
 WINDOW = 900_000
 REVIEWED_SCRIPT = 'reviewed-script'
+REVIEWED_PLAN = 'reviewed-plan'
 EVENT_ID = re.compile(r'\$[^\s\x00-\x1f]{1,254}')
 
 
@@ -32,28 +35,33 @@ def validate(payload, approvers, operations, now):
             not isinstance(payload.get('decided'), int)):
         raise ValueError('Invalid authority.')
     operation = payload.get('operation')
-    dynamic = operation == REVIEWED_SCRIPT
-    keys = ('request', 'decision', 'proposal', 'poll') if dynamic else ('request', 'decision')
+    dynamic = operation in (REVIEWED_SCRIPT, REVIEWED_PLAN)
+    review = dynamic or 'proposal' in payload
+    keys = ('request', 'decision', 'proposal', 'poll') if review else ('request', 'decision')
     for key in keys:
         if not isinstance(payload.get(key), str) or not EVENT_ID.fullmatch(payload[key]):
             raise ValueError('Invalid Matrix receipt.')
     if not re.fullmatch(r'[a-f0-9]{32}', payload.get('id', '')):
         raise ValueError('Invalid operation.')
-    if dynamic:
+    if operation == REVIEWED_PLAN:
+        reviewed = payload.get('plan')
+        read_plan(reviewed)
+    elif dynamic:
         script = payload.get('script')
         if not isinstance(script, str) or not script.strip() or not re.fullmatch(r'[\t\n\x20-\x7e]{1,4000}', script):
             raise ValueError('Invalid reviewed script.')
-        if len({payload[key] for key in keys}) != len(keys):
-            raise ValueError('Matrix receipts must be distinct.')
         reviewed = script
-        choice = json.dumps([payload['id'], sha(script), payload['proposal'], payload['action']],
-                            ensure_ascii=False, separators=(',', ':'))
-        if payload.get('choice') != sha(choice):
-            raise ValueError('The decision does not bind the reviewed script.')
     else:
         if not isinstance(operation, str) or operation not in operations:
             raise ValueError('Operation is not registered.')
         reviewed = ' '.join(operations[operation]['argv'])
+    if review:
+        if len({payload[key] for key in keys}) != len(keys):
+            raise ValueError('Matrix receipts must be distinct.')
+        choice = json.dumps([payload['id'], sha(reviewed), payload['proposal'], payload['action']],
+                            ensure_ascii=False, separators=(',', ':'))
+        if payload.get('choice') != sha(choice):
+            raise ValueError('The decision does not bind the reviewed operation.')
     if sha(reviewed) != payload.get('hash'):
         raise ValueError('Changed command.')
     if payload['decided'] > now + 60_000 or not payload['decided'] <= payload['expires'] <= payload['decided'] + WINDOW:
@@ -90,6 +98,122 @@ def execute_script(script):
         fcntl.fcntl(fd, fcntl.F_ADD_SEALS, fcntl.F_SEAL_WRITE | fcntl.F_SEAL_GROW |
                     fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_SEAL)
         return execute(['/bin/bash', '--noprofile', '--norc', f'/proc/self/fd/{fd}'], pass_fds=(fd,))
+
+
+def read_plan(raw):
+    if not isinstance(raw, str) or len(raw.encode()) > 15_000:
+        raise ValueError('Invalid reviewed plan.')
+    plan = json.loads(raw)
+    fields = {'shell': {'script', 'verify'}, 'inspect-file': {'path'},
+              'replace-file': {'path', 'before', 'after', 'verify'}}
+    kind = plan.get('kind') if isinstance(plan, dict) else None
+    if not isinstance(kind, str) or kind not in fields or set(plan) != {'kind', *fields[kind]}:
+        raise ValueError('Invalid reviewed plan.')
+    for name in ('script', 'verify'):
+        if name in plan and (not isinstance(plan[name], str) or not plan[name].strip() or
+                             not re.fullmatch(r'[\t\n\x20-\x7e]{1,4000}', plan[name])):
+            raise ValueError('Invalid reviewed command.')
+    if 'path' in plan and (not isinstance(plan['path'], str) or len(plan['path']) > 512 or
+                           not re.fullmatch(r'/[A-Za-z0-9_./@+=-]+', plan['path'])):
+        raise ValueError('Specify one absolute file path.')
+    if kind == 'replace-file' and (not all(isinstance(plan[key], str) and len(plan[key].encode()) <= 4096
+                                          and '\x00' not in plan[key] for key in ('before', 'after')) or
+                                   plan['before'] == plan['after']):
+        raise ValueError('The review must contain the exact old and new text.')
+    return plan
+
+
+def read_regular(path):
+    if path.resolve(strict=True) != path:
+        raise ValueError('Use the canonical path of a regular file.')
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as handle:
+        metadata = os.fstat(handle.fileno())
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 4096:
+            raise ValueError('Only bounded regular files can be read.')
+        content = handle.read(4097)
+        if len(content) > 4096:
+            raise ValueError('The file changed while it was read.')
+    return metadata, content
+
+
+def redacted_preview(path, content):
+    secret = re.compile(r'password|passwd|shadow|credential|token|secret|private.key|api.key|authorization|\.env|\.ssh',
+                        re.IGNORECASE)
+    if path.parts[1:2] in {('proc',), ('sys',), ('dev',)} or secret.search(str(path)):
+        return '[Private file content withheld]'
+    try:
+        text = content.decode('utf-8')
+    except UnicodeDecodeError:
+        return '[Non-text content withheld]'
+    if any(ord(char) < 32 and char not in '\n\t\r' for char in text):
+        return '[Non-text content withheld]'
+    if re.search(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----', text):
+        return '[Private file content withheld]'
+    opaque = re.compile(r'[A-Za-z0-9+/=_-]{24,}|://[^\s/:]+:[^\s/@]+@')
+    lines = ['[Redacted]' if secret.search(line) or opaque.search(line) else line for line in text.splitlines()]
+    return '\n'.join(lines)[:1400]
+
+
+def replace_regular(path, expected, content, metadata):
+    with NamedTemporaryFile(dir=path.parent, prefix='.vps-manager-', delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write(content)
+            os.fchown(handle.fileno(), metadata.st_uid, metadata.st_gid)
+            os.fchmod(handle.fileno(), stat.S_IMODE(metadata.st_mode))
+            handle.flush()
+            os.fsync(handle.fileno())
+            current, existing = read_regular(path)
+            if (existing != expected or (current.st_mode, current.st_uid, current.st_gid, current.st_ino) !=
+                    (metadata.st_mode, metadata.st_uid, metadata.st_gid, metadata.st_ino)):
+                raise ValueError('File changed before the replacement.')
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def execute_plan(raw, state, identifier, *, run_script=execute_script):
+    plan = read_plan(raw)
+    kind = plan['kind']
+    if kind == 'shell':
+        outcome, code = run_script(plan['script'])
+        if outcome != 'completed':
+            return outcome, code, None
+        outcome, code = run_script(plan['verify'])
+        return ('completed' if outcome == 'completed' else 'verification_failed'), code, None
+    path = Path(plan['path'])
+    try:
+        metadata, original = read_regular(path)
+        if kind == 'inspect-file':
+            return 'completed', 0, {'sha256': hashlib.sha256(original).hexdigest(),
+                                     'preview': redacted_preview(path, original)}
+        updated = plan['after'].encode()
+        if original != plan['before'].encode():
+            return 'file_changed', None, None
+        backup = state / (identifier + '.previous')
+        with backup.open('xb') as file:
+            file.write(original)
+            file.flush()
+            os.fsync(file.fileno())
+        replace_regular(path, original, updated, metadata)
+    except (ValueError, OSError):
+        return 'precondition_failed', None, None
+    try:
+        verified, code = run_script(plan['verify'])
+    except OSError:
+        verified, code = 'launch_failed', None
+    try:
+        current, live = read_regular(path)
+        if live != updated or (current.st_mode, current.st_uid, current.st_gid) != (
+                metadata.st_mode, metadata.st_uid, metadata.st_gid):
+            return 'recovery_required', code, None
+        if verified == 'completed':
+            return 'completed', code, None
+        replace_regular(path, updated, original, current)
+    except (ValueError, OSError):
+        return 'recovery_required', code, None
+    return 'rolled_back', code, None
 
 
 def matrix_event(port, token, room, event):
@@ -142,32 +266,37 @@ def database(path):
       approver TEXT NOT NULL, action TEXT NOT NULL, decided INTEGER NOT NULL,
       outcome TEXT NOT NULL, exit_code INTEGER
     )''')
+    if 'result' not in {row[1] for row in db.execute('PRAGMA table_info(audit)')}:
+        db.execute('ALTER TABLE audit ADD COLUMN result TEXT')
     with db:
         db.execute("UPDATE audit SET outcome='unknown' WHERE outcome='running'")
     return db
 
 
 def handle(db, payload, approvers, operations, now=None, runner=execute, script_runner=execute_script,
-           verify_review=None):
+           verify_review=None, plan_runner=None, require_review=False):
     realtime = now is None
     now = int(time.time() * 1000) if now is None else now
     validate(payload, approvers, operations, now)
+    operation = payload['operation']
+    if require_review and ('proposal' not in payload or operation == REVIEWED_SCRIPT):
+        raise ValueError('VPS Manager requires a reviewed operation with verification.')
     digest, identifier, receipt = payload['hash'], payload['id'], payload['decision']
     existing = db.execute(
-        'SELECT digest, decision, requested, approver, action, outcome, exit_code FROM audit WHERE id=?',
+        'SELECT digest, decision, requested, approver, action, outcome, exit_code, result FROM audit WHERE id=?',
         (identifier,),
     ).fetchone()
     if existing:
         if existing[:5] != (digest, receipt, payload['request'], payload['approver'], payload['action']):
             raise ValueError('An existing receipt belongs to this operation.')
-        return {'outcome': existing[5], 'exit_code': existing[6]}
+        return {'outcome': existing[5], 'exit_code': existing[6],
+                **({'result': json.loads(existing[7])} if existing[7] else {})}
     if db.execute('SELECT 1 FROM audit WHERE decision=?', (receipt,)).fetchone():
         raise ValueError('This decision has already been used.')
     outcome = 'denied'
     if payload['action'] == 'approve':
         outcome = 'running' if now < payload['expires'] and payload['decided'] >= now - WINDOW else 'expired'
-    dynamic = payload['operation'] == REVIEWED_SCRIPT
-    if dynamic:
+    if operation == REVIEWED_SCRIPT or 'proposal' in payload:
         if verify_review is None:
             raise ValueError('Reviewed scripts are disabled.')
         if outcome in {'running', 'denied'}:
@@ -175,21 +304,26 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
         if outcome == 'running' and realtime and int(time.time() * 1000) >= payload['expires']:
             outcome = 'expired'
     with db:
-        db.execute('INSERT INTO audit VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)', (
+        db.execute('INSERT INTO audit (id,digest,decision,requested,approver,action,decided,outcome) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', (
             identifier, digest, receipt, payload['request'], payload['approver'],
             payload['action'], payload['decided'], outcome))
-    code = None
+    code = result = None
     if outcome == 'running':
         try:
-            if dynamic:
+            if operation == REVIEWED_PLAN:
+                if plan_runner is None:
+                    raise ValueError('Reviewed maintenance plans are disabled.')
+                outcome, code, result = plan_runner(payload['plan'], identifier)
+            elif operation == REVIEWED_SCRIPT:
                 outcome, code = script_runner(payload['script'])
             else:
                 outcome, code = runner(operations[payload['operation']]['argv'])
         except OSError:
             outcome = 'launch_failed'
         with db:
-            db.execute('UPDATE audit SET outcome=?, exit_code=? WHERE id=?', (outcome, code, identifier))
-    return {'outcome': outcome, 'exit_code': code}
+            db.execute('UPDATE audit SET outcome=?, exit_code=?, result=? WHERE id=?',
+                       (outcome, code, json.dumps(result) if result else None, identifier))
+    return {'outcome': outcome, 'exit_code': code, **({'result': result} if result else {})}
 
 
 def serve(config, state, operations_path):
@@ -227,11 +361,12 @@ def serve(config, state, operations_path):
                     body = stream.readline(MAX_MESSAGE + 1)
                 if len(body) > MAX_MESSAGE or not body.endswith(b'\n'):
                     raise ValueError('Invalid request size.')
-                result = handle(db, json.loads(body), allow, read_operations(operations_path), verify_review=verifier)
+                result = handle(db, json.loads(body), allow, read_operations(operations_path), verify_review=verifier,
+                                require_review=True, plan_runner=lambda raw, key: execute_plan(raw, state, key))
             except (ValueError, TypeError, KeyError, AttributeError, OSError, sqlite3.Error):
                 result = {'error': 'Execution request rejected.'}
             try:
-                peer.sendall(json.dumps(result).encode() + b'\n')
+                peer.sendall(json.dumps(result, ensure_ascii=False).encode() + b'\n')
             except OSError:
                 pass
 
@@ -247,7 +382,7 @@ def read_operations(path):
         require_root_file(entry)
     operations = json.loads(path.read_text())
     for operation, definition in operations.items():
-        if operation == REVIEWED_SCRIPT or not re.fullmatch('[a-z][a-z0-9-]{0,80}', operation):
+        if operation in (REVIEWED_SCRIPT, REVIEWED_PLAN) or not re.fullmatch('[a-z][a-z0-9-]{0,80}', operation):
             raise ValueError('Invalid operation name.')
         argv = definition['argv']
         if (not isinstance(argv, list) or not argv or not argv[0].startswith('/') or
@@ -257,4 +392,9 @@ def read_operations(path):
 
 
 if __name__ == '__main__':
-    serve(json.loads(Path(sys.argv[1]).read_text()), Path(sys.argv[2]), Path(sys.argv[3]))
+    config_path = Path(sys.argv[1])
+    require_root_file(config_path)
+    config = json.loads(config_path.read_text())
+    if not config['root'].startswith('@vps-manager:'):
+        raise SystemExit('Migrate the legacy Root agent before enabling the host broker.')
+    serve(config, Path(sys.argv[2]), Path(sys.argv[3]))

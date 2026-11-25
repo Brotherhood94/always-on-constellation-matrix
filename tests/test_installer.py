@@ -30,7 +30,7 @@ class InstallerTest(unittest.TestCase):
     def setUp(self):
         self.presets = load(PRESETS)
         self.raw = {
-            'server_name': 'fixture.test', 'owner': 'operator', 'agents': ['manager', 'coder', 'root', 'chief-of-staff'],
+            'server_name': 'fixture.test', 'owner': 'operator', 'agents': ['manager', 'coder', 'vps-manager', 'chief-of-staff'],
             'subscriptions': {'default': 'Work', 'overrides': {'coder': 'Personal'}}, 'dot': True, 'telegram': True,
         }
         self.settings = normalized(self.raw, self.presets)
@@ -645,7 +645,7 @@ class InstallerTest(unittest.TestCase):
 
     def test_last_local_agent_configuration_prints_element_setup(self):
         self.registry['agents']['chief-of-staff']['active'] = True
-        self.registry['agents']['root']['active'] = True
+        self.registry['agents']['vps-manager']['active'] = True
         register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
         with TemporaryDirectory() as work:
             data = Path(work).resolve()
@@ -743,7 +743,7 @@ class InstallerTest(unittest.TestCase):
                 self.assertFalse(coder['active'])
 
     def test_batch_sign_in_resumes_with_pending_local_agents(self):
-        self.registry['agents']['root']['active'] = True
+        self.registry['agents']['vps-manager']['active'] = True
         self.registry['agents']['chief-of-staff']['active'] = True
         register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
         with TemporaryDirectory() as work, redirect_stdout(StringIO()):
@@ -812,7 +812,7 @@ class InstallerTest(unittest.TestCase):
         desktop = [v for v in services['engine-coder']['volumes'] if v['target'] == '/workspace/desktop']
         self.assertEqual(len(desktop), 1)
         self.assertFalse(desktop[0]['read_only'])
-        for key in ('root', 'chief-of-staff'):
+        for key in ('vps-manager', 'chief-of-staff'):
             self.assertFalse(any(v['target'].endswith('/desktop') for v in services['engine-' + key]['volumes']))
         self.assertTrue(doc['networks']['acp-coder']['internal'])
         self.assertNotIn('memory', services['engine-coder']['networks'])

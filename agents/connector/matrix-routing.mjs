@@ -146,7 +146,10 @@ export function validatedOutcome(value) {
   const fields = status === 'completed' ? ['result', 'verification'] :
     status === 'blocked' ? ['blocker', 'unblocker', 'action'] : [];
   if (!fields.length || !fields.every(field => typeof value[field] === 'string' && value[field].trim() && value[field].length <= 1200)) return null;
-  return { status, ...Object.fromEntries(fields.map(field => [field, value[field].trim()])) };
+  const evidence = status === 'completed' && Array.isArray(value.evidence)
+    ? [...new Set(value.evidence.filter(validEventId))].slice(0, 8) : [];
+  return { status, ...Object.fromEntries(fields.map(field => [field, value[field].trim()])),
+    ...(evidence.length && { evidence }) };
 }
 
 function replyParts(reply) {
@@ -188,6 +191,8 @@ function replyParts(reply) {
   }
   return { body, outcome, paths, issue, route, attachmentLine: controls.get('ATTACH_FILES'), handoff: controls.get('HANDOFF') };
 }
+
+export const declaredOutcome = reply => replyParts(reply).outcome;
 
 export function requestedAttachments(reply) {
   const { paths, issue } = replyParts(reply);

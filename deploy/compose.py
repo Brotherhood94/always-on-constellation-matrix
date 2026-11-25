@@ -50,7 +50,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                                     'WORKSPACE_LINKS': '/dashboard/links.json'},
                     'volumes': [volume(data / 'bot', '/state'), volume(data / 'monitor/outbox', '/monitor/outbox', True),
                                 volume(data / 'monitor/acks', '/monitor/acks'), volume(dashboard, '/dashboard', True)]},
-        'context': {**restricted, 'image': 'constellation-context:6.13.0-1622b48',
+        'context': {**restricted, 'image': 'constellation-context:6.13.0-1622b48-office',
                     'build': {'context': str(SOURCE), 'dockerfile': 'deploy/context.Dockerfile'},
                     'networks': ['memory'], 'depends_on': {'neo4j': {'condition': 'service_healthy'}},
                     'environment': {'AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE': '/etc/context/server.json'},
@@ -91,7 +91,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
         network['provider'] = {}
         directory = state / key
         workspace = [volume(directory / 'work', '/workspace')]
-        office_worker = key not in {'root', 'chief-of-staff'}
+        office_worker = key not in {'vps-manager', 'chief-of-staff'}
         if office_worker:
             workspace.append(volume(data / 'desktop', '/workspace/desktop'))
         metadata = {'AGENT_USERNAME': key, 'AGENT_NAME': entry['name'], 'AGENT_MODEL': entry['model'],
@@ -131,16 +131,21 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                 worker['environment']['ROSTER_MANAGEMENT'] = 'true'
                 worker['environment']['ROSTER_CONFIGURE_COMMAND'] = (
                     f'sudo ./constellation_matrix --data-dir {quote(str(data))} agent configure')
-        elif key == 'root':
+        elif key == 'vps-manager':
             worker.update(user='992:992', command=['node', '/app/root/agent.mjs'],
                           healthcheck=health('test', '-s', '/state/synced'))
             worker['environment']['ROOT_HOST'] = server
+            worker['volumes'] = [item for item in worker['volumes'] if item['target'] != '/context-token']
+            socket = volume(f"/run/{settings['project']}-root.sock", '/run/executor.sock', True)
+            socket['bind'] = {'create_host_path': False}
             worker['volumes'] += [
                 volume(SOURCE / 'integrations/root', '/app/root', True),
                 volume(directory / 'config.json', '/config.json', True),
                 volume(directory / 'operations.json', '/operations.json', True),
                 volume(directory / 'gateway-credentials', '/credentials', True),
-                volume(f"/run/{settings['project']}-root.sock", '/run/executor.sock', True),
+                volume(data / 'context/vps-manager-ops.token', '/context-token', True),
+                volume(data / 'context/vps-manager.token', '/office-token', True),
+                socket,
             ]
         else:
             worker.update(healthcheck=health('test', '-s', '/tmp/matrix-agent-ready'))

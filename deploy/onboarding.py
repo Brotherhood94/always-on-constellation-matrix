@@ -122,7 +122,7 @@ def matrix_link(room, event):
 
 
 def office_agent(key, entry):
-    return key not in {'chief-of-staff', 'root'} and entry['profile']['role'] in {'coordinator', 'worker'}
+    return key not in {'chief-of-staff', 'root', 'vps-manager'} and entry['profile']['role'] in {'coordinator', 'worker'}
 
 
 def matrix_state(data, key):
