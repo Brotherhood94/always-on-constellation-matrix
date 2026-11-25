@@ -237,8 +237,8 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('https://element.io/download', rendered)
         self.assertIn('choose Sign in on the welcome screen', rendered)
         self.assertIn('choose Edit next to Account provider', rendered)
-        self.assertIn('Choose your account provider, paste this URL into Other account provider.\n'
-                      '   https://fixture.test\n   Select Continue.', rendered)
+        self.assertIn('Choose your account provider, enter the value below and select Continue.\n'
+                      '   Other account provider: https://fixture.test', rendered)
         self.assertIn('check that Account provider shows fixture.test', rendered)
         self.assertIn('Enter operator in Username.', rendered)
         self.assertIn('In Password, enter the Matrix operator password from setup.', rendered)
