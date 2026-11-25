@@ -22,17 +22,33 @@ function message(label, value) {
     formatted_body: `<a href="${escapeHtml(url.href)}">${label}</a>` };
 }
 
-export async function reconcilePins({ ownerJoined, getPinned, send, setPinned, save }, links, state) {
-  if (!await ownerJoined()) return false;
+export function shortcutRecipientKey(owner, devices) {
+  const recipients = [];
+  for (const id of Object.keys(devices ?? {}).sort()) {
+    const device = devices[id];
+    const curve = device?.keys?.[`curve25519:${id}`];
+    const signing = device?.keys?.[`ed25519:${id}`];
+    if (device?.user_id === owner && device.device_id === id &&
+        typeof curve === 'string' && curve && typeof signing === 'string' && signing &&
+        Array.isArray(device.algorithms) && device.algorithms.includes('m.megolm.v1.aes-sha2')) {
+      recipients.push([id, curve, signing]);
+    }
+  }
+  return recipients.length ? createHash('sha256').update(JSON.stringify(recipients)).digest('hex') : null;
+}
+
+export async function reconcilePins({ recipientKey, getPinned, send, setPinned, save }, links, state) {
+  const recipients = await recipientKey();
+  if (!recipients) return false;
   const contents = Object.fromEntries(Object.entries(labels).map(([key, label]) => [key, message(label, links[key])]));
   for (const [key, content] of Object.entries(contents)) {
     const current = state.entries[key];
-    if (current?.body === content.body) continue;
+    if (current?.body === content.body && current.recipients === recipients) continue;
     const transaction = createHash('sha256')
-      .update(JSON.stringify(['workspace-shortcut', key, current?.event ?? null, content.body])).digest('hex');
+      .update(JSON.stringify(['workspace-shortcut', key, current?.event ?? null, content.body, recipients])).digest('hex');
     const event = await send(transaction, content);
     if (current) state.replaced.push(current.event);
-    state.entries[key] = { body: content.body, event };
+    state.entries[key] = { body: content.body, event, recipients };
     await save(state);
   }
   const pinned = await getPinned();

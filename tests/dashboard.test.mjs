@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshness, historyWithin, httpsLink } from '../dashboard/dashboard.mjs';
-import { reconcilePins } from '../deploy/matrix/bot/pins.mjs';
+import { reconcilePins, shortcutRecipientKey } from '../deploy/matrix/bot/pins.mjs';
 
 test('dashboard accepts the graph link, filters history, and reports stale or missing data', () => {
   assert.equal(httpsLink('https://matrix.example:8444/browser/'), 'https://matrix.example:8444/browser/');
@@ -16,15 +16,16 @@ test('dashboard accepts the graph link, filters history, and reports stale or mi
   assert.deepEqual(historyWithin({ cpu: [[now / 1000 - 86401, 2], recent, [now / 1000, null]] }, 'cpu', 1, now), [recent]);
 });
 
-test('two encrypted shortcut events wait for membership, survive reruns and replace only their own pins', async () => {
+test('encrypted shortcuts wait for operator device keys and update only their own pins', async () => {
   const state = { entries: {}, replaced: [] };
   const links = { dashboard: 'https://matrix.example:8443/', context: 'https://matrix.example:8444/browser/' };
   let joined = false;
+  let devices = null;
   let pinned = ['$operator'];
   let writes = 0;
   const messages = new Map();
   const matrix = {
-    ownerJoined: async () => joined,
+    recipientKey: async () => joined && devices,
     getPinned: async () => pinned,
     send: async (txn, content) => {
       if (!messages.has(txn)) messages.set(txn, content);
@@ -36,6 +37,9 @@ test('two encrypted shortcut events wait for membership, survive reruns and repl
   assert.equal(await reconcilePins(matrix, links, state), false);
   assert.equal(messages.size, 0);
   joined = true;
+  assert.equal(await reconcilePins(matrix, links, state), false);
+  assert.equal(messages.size, 0);
+  devices = 'first-device';
   await reconcilePins(matrix, links, state);
   assert.equal(messages.size, 2);
   assert.match([...messages.values()][1].formatted_body, /Open Context Intelligence/);
@@ -47,4 +51,22 @@ test('two encrypted shortcut events wait for membership, survive reruns and repl
   assert.equal(messages.size, 3);
   assert.deepEqual(pinned.slice(0, 2), [operator, context]);
   assert.ok(!pinned.includes(dashboard));
+  const previousPins = [...pinned];
+  devices = 'two-devices';
+  await reconcilePins(matrix, { ...links, dashboard: 'https://matrix.example:9443/' }, state);
+  assert.equal(messages.size, 5);
+  assert.deepEqual(pinned.filter(event => previousPins.includes(event)), [operator]);
+  await reconcilePins(matrix, { ...links, dashboard: 'https://matrix.example:9443/' }, state);
+  assert.equal(writes, 3);
+});
+
+test('shortcut recipients use stable public device keys', () => {
+  const owner = '@operator:fixture.test';
+  const device = id => ({ user_id: owner, device_id: id, algorithms: ['m.megolm.v1.aes-sha2'],
+    keys: { [`curve25519:${id}`]: 'curve-' + id, [`ed25519:${id}`]: 'signing-' + id } });
+  const first = device('A');
+  const second = device('B');
+  assert.equal(shortcutRecipientKey(owner, { A: { ...first, user_id: '@unrelated:fixture.test' }, B: {} }), null);
+  assert.notEqual(shortcutRecipientKey(owner, { A: first }), shortcutRecipientKey(owner, { A: first, B: second }));
+  assert.equal(shortcutRecipientKey(owner, { B: second, A: first }), shortcutRecipientKey(owner, { A: first, B: second }));
 });

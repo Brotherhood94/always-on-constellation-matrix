@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import matrix from '@vector-im/matrix-bot-sdk';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
-import { reconcilePins } from './pins.mjs';
+import { reconcilePins, shortcutRecipientKey } from './pins.mjs';
 
 const {
   LogService, LogLevel, MatrixClient, RustSdkCryptoStorageProvider,
@@ -122,7 +122,15 @@ async function shortcuts({ client, roomId }) {
   const state = JSON.parse(await readOptional(file) ?? '{"entries":{},"replaced":[]}');
   const route = '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId);
   await reconcilePins({
-    ownerJoined: async () => (await client.getJoinedRoomMembers(roomId)).includes(MATRIX_OWNER),
+    recipientKey: async () => {
+      if (!(await client.getJoinedRoomMembers(roomId)).includes(MATRIX_OWNER)) return null;
+      const machine = client.crypto.engine.machine;
+      const query = machine.queryKeysForUsers([new crypto.UserId(MATRIX_OWNER)]);
+      const result = await client.doRequest('POST', '/_matrix/client/v3/keys/query', null, JSON.parse(query.body), 15000);
+      // The device may have uploaded its keys before the monitor's next sync.
+      await machine.markRequestAsSent(query.id, query.type, JSON.stringify(result));
+      return shortcutRecipientKey(MATRIX_OWNER, result.device_keys?.[MATRIX_OWNER]);
+    },
     getPinned: async () => {
       const current = await client.getRoomStateEventContent(roomId, 'm.room.pinned_events', '').catch(error => {
         if (error.body?.errcode !== 'M_NOT_FOUND') throw error;

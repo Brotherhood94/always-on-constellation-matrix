@@ -362,15 +362,56 @@ try {
   await writeFile(join(base, 'links.json'), JSON.stringify(links));
   await writeFile(join(monitor, 'password'), password);
   await writeFile(join(monitor, 'room-id'), alerts);
+  const monitorId = '@monitor:' + domain;
+  const monitorToken = await login('monitor', 'VPSMONITOR');
+  await writeFile(join(monitor, 'token'), monitorToken);
+  await writeFile(join(monitor, 'matrix-token'), monitorToken);
+  const legacy = await openRoomClient({ url, state: monitor, roomId: alerts, userId: monitorId,
+    deviceId: 'VPSMONITOR', name: 'Monitor', token: monitorToken });
+  const entries = {};
+  for (const [key, label] of [['dashboard', 'Open dashboard'], ['context', 'Open Context Intelligence']]) {
+    const body = `${label} — ${links[key]}`;
+    const event = await sendEncrypted(legacy, alerts, `fixture-legacy-${key}`, { msgtype: 'm.text', body });
+    entries[key] = { body, event };
+  }
+  legacy.crypto.engine.machine.close();
+  const oldPins = [preexisting.event_id, ...Object.values(entries).map(({ event }) => event)];
+  await api(pinState, { method: 'PUT', token, body: { pinned: oldPins } });
+  await writeFile(join(monitor, 'shortcut-pins.json'), JSON.stringify({ entries, replaced: [] }));
+
+  const pinReaderState = join(base, 'pin-reader');
+  await mkdir(pinReaderState);
+  const pinReaderToken = await login('operator', 'PINDEVICE');
+  await writeFile(join(pinReaderState, 'matrix-token'), pinReaderToken);
+  const pinReader = await openRoomClient({ url, state: pinReaderState, roomId: alerts, userId: owner,
+    deviceId: 'PINDEVICE', name: 'Fixture Operator', token: pinReaderToken });
+  pinReader.syncingTimeout = 0;
+  let cursor;
+  async function readShortcut(event) {
+    const batch = await pinReader.doSync(cursor);
+    cursor = batch.next_batch;
+    await pinReader.crypto.updateSyncData(batch.to_device?.events || [], batch.device_one_time_keys_count || {},
+      batch.device_unused_fallback_key_types || [], batch.device_lists?.changed || [], batch.device_lists?.left || []);
+    const raw = await pinReader.getRawEvent(alerts, event);
+    assert.equal(raw.type, 'm.room.encrypted');
+    try {
+      return (await pinReader.crypto.decryptRoomEvent(new matrix.EncryptedRoomEvent(raw), alerts)).raw.content;
+    } catch (error) {
+      if (error.code !== 'GenericFailure') throw error;
+      return null;
+    }
+  }
+  assert.equal(await readShortcut(oldPins[1]), null, 'A new device cannot decrypt the original shortcut');
   launch('/app/ops/monitor.mjs', { STATE_DIR: monitor, DATA_DIR: monitorFiles, WORKSPACE_LINKS: join(base, 'links.json') });
   const first = await eventually(async () => {
     const pins = await api(pinState, { token });
-    return pins.pinned.length === 3 && pins.pinned;
+    return pins.pinned.length === 3 && pins.pinned.slice(1).every(id => !oldPins.includes(id)) && pins.pinned;
   });
   assert.equal(first[0], preexisting.event_id);
-  for (const event of first.slice(1)) {
-    const raw = await api('/_matrix/client/v3/rooms/' + encodeURIComponent(alerts) + '/event/' + encodeURIComponent(event), { token });
-    assert.equal(raw.type, 'm.room.encrypted');
+  for (const [index, expected] of Object.values(links).entries()) {
+    const content = await eventually(() => readShortcut(first[index + 1]));
+    assert.ok(content.body.endsWith(expected));
+    assert.ok(content.formatted_body.includes(`href="${expected}"`));
   }
   await writeFile(join(base, 'links.json'), JSON.stringify({ ...links, dashboard: 'https://fixture.test:9443/' }));
   const changed = await eventually(async () => {
@@ -378,7 +419,8 @@ try {
     return pins.pinned.some(item => !first.includes(item)) && pins.pinned;
   });
   assert.deepEqual(changed.slice(0, 2), [first[0], first[2]]);
-  console.log('VPS Alerts published actual encrypted shortcut pins and retained the operator pin.');
+  pinReader.crypto.engine.machine.close();
+  console.log('A new operator device decrypted both repaired VPS Alerts pins. The operator pin was retained.');
 
   const dot = join(base, 'dot');
   const bridgeSecret = 'synthetic-private-bridge-token-0123456789';
@@ -428,8 +470,8 @@ try {
   assert.equal(foreign.result.isError, true);
   assert.match(foreign.result.content[0].text, /No task with that ID/);
   console.log('Dot reused one encrypted task and rejected an unpublished task ID.');
-  const { entries } = JSON.parse(await readFile(join(monitor, 'shortcut-pins.json'), 'utf8'));
-  const pinLinks = Object.fromEntries(Object.entries(entries).map(([key, pin]) => [key,
+  const { entries: managedPins } = JSON.parse(await readFile(join(monitor, 'shortcut-pins.json'), 'utf8'));
+  const pinLinks = Object.fromEntries(Object.entries(managedPins).map(([key, pin]) => [key,
     'https://matrix.to/#/' + encodeURIComponent(alerts) + '/' + encodeURIComponent(pin.event)]));
   await welcomeFixture(office, await room('chief-of-staff-dm'), token, pinLinks, tool, catalog);
 } finally {
