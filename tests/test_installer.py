@@ -238,13 +238,13 @@ class InstallerTest(unittest.TestCase):
         with redirect_stdout(output):
             show_element_setup(self.settings)
         rendered = output.getvalue()
-        self.assertIn('Constellation workspace', rendered)
+        self.assertEqual(rendered.lstrip().splitlines()[0], '✨ Finalize your Constellation setup')
         self.assertNotIn('\x1b[', rendered)
         self.assertIn('https://element.io/download', rendered)
-        self.assertIn('Under Account provider, find the current server (usually matrix.org).\n'
-                      '  Click Edit to the right of the server name, above Continue.', rendered)
-        self.assertIn('Other account provider is the address of your Matrix homeserver.', rendered)
-        self.assertIn('Other account provider: https://fixture.test', rendered)
+        self.assertIn('Choose Sign in. Under Account provider', rendered)
+        self.assertIn('Click Edit to the right of the server name, above Continue.', rendered)
+        self.assertIn('Paste your Matrix homeserver into Other account provider and select Continue.', rendered)
+        self.assertIn('https://fixture.test', [line.strip() for line in rendered.splitlines()])
         self.assertIn('Username: operator', rendered)
         self.assertIn('Your Matrix operator password from setup', rendered)
         self.assertIn('Agents → Office', rendered)
@@ -252,28 +252,40 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('Agents → VPS Alerts → Pinned messages', rendered)
         self.assertIn(self.settings['dashboard_url'], rendered)
         self.assertIn(self.settings['context_url'], rendered)
-        self.assertIn('Username: neo4j', rendered)
+        self.assertIn('Enter neo4j as the username.', rendered)
         self.assertIn('sudo cat -- /srv/constellation-matrix/context/neo4j-password', rendered)
+        self.assertIn('docs/setup-guide.md', rendered)
+        self.assertIn('sudo ./constellation_matrix setup-guide', rendered)
         output = StringIO()
         with redirect_stdout(output):
             show_element_setup({**self.settings, 'tailscale': False})
         self.assertNotIn('Tailscale', output.getvalue())
 
-    def test_setup_guide_prints_custom_graph_password_command_without_disclosing_password(self):
+    def test_setup_guide_uses_custom_paths_without_disclosing_stored_credentials(self):
         with TemporaryDirectory() as work:
             data = Path(work).resolve() / 'fixture workspace'
-            (data / 'context').mkdir(parents=True)
+            secrets = {
+                'context/neo4j-password': 'synthetic-graph-password',
+                'dot/runtime-key': 'sk-synthetic-runtime-key',
+                'telegram/bridge/config.yaml': 'synthetic-telegram-api-hash',
+            }
+            for name, value in secrets.items():
+                (data / name).parent.mkdir(parents=True, exist_ok=True)
+                save(data / name, value)
             save(data / 'settings.json', self.settings)
-            (data / 'context/neo4j-password').write_text('synthetic-graph-password')
             command = ['constellation_matrix', '--data-dir', str(data), 'setup-guide']
             output = StringIO()
             with patch('installer.os.geteuid', return_value=0), patch('sys.argv', command), redirect_stdout(output):
                 main()
-            self.assertIn(f"sudo cat -- '{data}/context/neo4j-password'", output.getvalue())
-            self.assertNotIn('synthetic-graph-password', output.getvalue())
+            rendered = output.getvalue()
+            lines = [line.strip() for line in rendered.splitlines()]
+            self.assertIn(f"sudo cat -- '{data}/context/neo4j-password'", lines)
+            for secret in secrets.values():
+                self.assertNotIn(secret, rendered)
             invocation = f"sudo ./constellation_matrix --data-dir '{data}'"
-            self.assertIn(f'{invocation} dot-connect tunnel_REPLACE_WITH_YOUR_ID', output.getvalue())
-            self.assertIn(f'{invocation} telegram prepare /path/to/telegram-api.json', output.getvalue())
+            self.assertIn(f'{invocation} dot-connect tunnel_REPLACE_WITH_YOUR_ID', lines)
+            self.assertIn(f'{invocation} telegram prepare "$HOME/telegram-api.json"', lines)
+            self.assertIn(f'{invocation} setup-guide', lines)
 
     def test_setup_guide_shows_steps_for_selected_integrations(self):
         for dot, telegram in ((False, False), (True, False), (False, True), (True, True)):
@@ -282,13 +294,42 @@ class InstallerTest(unittest.TestCase):
                 with redirect_stdout(output):
                     show_element_setup({**self.settings, 'dot': dot, 'telegram': telegram})
                 rendered = output.getvalue()
+                headings = ['💬 Element Desktop', '📊 Dashboard', '🧠 Context Intelligence · Neo4j Browser']
+                if dot:
+                    headings.append('🔌 Dot · Secure MCP Tunnel')
+                if telegram:
+                    headings.append('✈️ Telegram · Bridge and drafting agent')
+                positions = [rendered.index(heading) for heading in headings]
+                self.assertEqual(positions, sorted(positions))
                 self.assertEqual('docs/dot.md' in rendered, dot)
                 self.assertEqual('dot-connect tunnel_REPLACE_WITH_YOUR_ID' in rendered, dot)
+                self.assertEqual('https://platform.openai.com/settings/organization/tunnels' in rendered, dot)
+                self.assertEqual('https://platform.openai.com/settings/organization/api-keys' in rendered, dot)
+                self.assertEqual('https://chatgpt.com/plugins' in rendered, dot)
                 self.assertEqual('docs/telegram.md' in rendered, telegram)
-                self.assertEqual('@telegrambot:fixture.test and send !tg login' in rendered, telegram)
+                self.assertEqual('https://my.telegram.org/apps' in rendered, telegram)
+                self.assertEqual('@telegrambot:fixture.test' in rendered, telegram)
+                self.assertEqual('!tg login qr' in rendered, telegram)
                 self.assertEqual('telegram activate' in rendered, telegram)
                 for step in ('prepare-agent', 'sign-in', 'probe', 'start-agent'):
                     self.assertEqual(f'telegram {step}' in rendered, telegram)
+
+    def test_setup_guide_explains_how_to_create_integration_credentials(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            show_element_setup(self.settings)
+        rendered = output.getvalue()
+        for instruction in ('Read + Manage', 'Restricted runtime API key with Tunnels Read + Use',
+                            'hidden prompt', 'No authentication', 'App api_id and App api_hash',
+                            'Link Desktop Device'):
+            self.assertIn(instruction, rendered)
+        lines = [line.strip() for line in rendered.splitlines()]
+        self.assertIn('chmod 600 "$HOME/telegram-api.json"', lines)
+        example = next(line for line in lines if line.startswith('{"api_id":'))
+        self.assertEqual(json.loads(example), {
+            'api_id': 1234567,
+            'api_hash': 'REPLACE_WITH_YOUR_API_HASH',
+        })
 
     def test_setup_guide_explains_dot_systemd_requirement(self):
         output = StringIO()
@@ -328,12 +369,12 @@ class InstallerTest(unittest.TestCase):
                 earlier = StringIO()
                 with patch('sys.argv', [*command, 'manager']), redirect_stdout(earlier):
                     main()
-                self.assertNotIn('Constellation workspace', earlier.getvalue())
+                self.assertNotIn('Finalize your Constellation setup', earlier.getvalue())
 
                 final = StringIO()
                 with patch('sys.argv', [*command, 'coder']), redirect_stdout(final):
                     main()
-                self.assertIn('Constellation workspace', final.getvalue())
+                self.assertIn('Finalize your Constellation setup', final.getvalue())
                 self.assertIn(f'{data}/context/neo4j-password', final.getvalue())
 
     def test_legacy_connection_config_preserves_existing_agent_identity(self):
@@ -374,6 +415,7 @@ class InstallerTest(unittest.TestCase):
             self.assertIn('Local agents awaiting provider setup: Manager, Coder', rendered)
             self.assertIn(f"sudo ./constellation_matrix --data-dir '{data}' agent configure", rendered)
             self.assertIn('Agent remote-worker awaits remote setup.', rendered)
+            self.assertIn('Finalize your Constellation setup', rendered)
             self.assertIn('Element Desktop', rendered)
 
     def test_catalog_keeps_unconfigured_agents_pending_during_health_refresh(self):

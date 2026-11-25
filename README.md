@@ -131,7 +131,7 @@ In each agent’s Amplifier menu, add a provider, complete sign-in, pick a model
 
 Download Element Desktop and follow the installer’s sign-in guide. Choose **Sign in** and click **Edit** to the right of `matrix.org` under **Account provider**. Paste the printed URL into **Other account provider**, then select **Continue**. Sign in with your Matrix username and password, then open **Agents → Office**. Use the mention picker and try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.” [Download Element](https://element.io/download) · [Element setup](docs/runbook.md#connect-in-element)
 
-If you selected Dot or Telegram, the setup guide also prints the commands for the selected integrations. Use the dedicated guides to connect and verify them. [Dot setup](docs/dot.md) · [Telegram setup](docs/telegram.md)
+Use the post-install checklist to open the dashboard and Context Intelligence and connect any selected integrations. Reprint your deployment’s URLs and commands with `sudo ./constellation_matrix setup-guide`. [Finalize your setup](docs/setup-guide.md) · [Dot setup](docs/dot.md) · [Telegram setup](docs/telegram.md)
 
 **ChatGPT via Codex is the only provider tested with a live account.** Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
 
