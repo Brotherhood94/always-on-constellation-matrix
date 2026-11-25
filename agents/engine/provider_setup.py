@@ -61,10 +61,13 @@ def main():
     os.chdir(HOME.parent)
     # Only show providers pre-installed from the release's pinned packages.
     from amplifier_app_cli.provider_sources import DEFAULT_PROVIDER_SOURCES
+    from rich.console import Console
+
     DEFAULT_PROVIDER_SOURCES.clear()
     from amplifier_app_cli.__main__ import main as amplifier
     sys.argv[:] = ['amplifier', 'provider', 'manage', '--scope', 'global']
-    amplifier()
+    with Console().screen(hide_cursor=False):
+        amplifier()
 
 
 if __name__ == '__main__':

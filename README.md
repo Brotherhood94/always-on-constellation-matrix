@@ -125,6 +125,8 @@ sudo ./constellation_matrix agent configure
 2. Choose **Open Amplifier provider setup** when the workspace is ready, or run `sudo ./constellation_matrix agent configure` later. In each agent’s Amplifier menu, add a provider, complete its login, pick its model, and choose **Done**.
 3. Download Element Desktop. Choose **Sign in → Edit** and enter the homeserver URL printed by the installer. Sign in with your Matrix username and password, then open **Agents → Office**. Use the mention picker and try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.” [Download Element](https://element.io/download) · [Element setup](docs/runbook.md#connect-in-element)
 
+**ChatGPT via Codex is the only provider tested with a live account.** Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
+
 For a repeatable setup, edit the [example configuration](deploy/config.example.json), check it with `./constellation_matrix validate --config <file>`, and pass the same file to `sudo ./constellation_matrix install --config <file>`.
 
 The installer enables startup at boot. Docker restarts application containers, Tailscale Serve serves the static dashboard, and systemd runs the host services, including the Dot tunnel once connected. [Boot and service placement](docs/runbook.md#boot-and-service-placement)

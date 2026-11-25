@@ -99,3 +99,8 @@ assert configured_provider(initialize.BACKEND / 'amplifier')['provider'] == 'pro
 assert token.read_text() == 'synthetic-token-fixture'
 print('Amplifier provider discovery, private homes, startup persistence, and native ACP mounts passed.')
 PY
+
+source_dir=$(cd -- "$(dirname -- "$0")/.." && pwd)
+docker run --rm -i --network none --read-only \
+  --tmpfs /tmp --entrypoint /opt/amplifier-cli/.venv/bin/python \
+  "${OFFICE_ENGINE_TEST_IMAGE:-constellation-office-engine:0.22.17}" -B - <"$source_dir/tests/provider-pages.py"

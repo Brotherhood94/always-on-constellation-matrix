@@ -14,8 +14,9 @@ RUN git init /opt/amplifier-cli \
         && uv pip check --python "/opt/$app/.venv/bin/python" || exit 1; \
     done \
     && rm -rf /root/.cache/uv
-COPY agents/engine/initialize.py agents/engine/provider_setup.py agents/engine/prepare_runtime.py /opt/office/
-RUN /opt/amplifier-acp/.venv/bin/python /opt/office/prepare_runtime.py
+COPY agents/engine/initialize.py agents/engine/provider_setup.py agents/engine/prepare_runtime.py agents/engine/prepare_provider_pages.py /opt/office/
+RUN /opt/amplifier-acp/.venv/bin/python /opt/office/prepare_runtime.py \
+    && /opt/amplifier-cli/.venv/bin/python /opt/office/prepare_provider_pages.py
 COPY --chmod=0755 agents/engine/start /usr/local/bin/office-start
 USER 991:991
 WORKDIR /workspace
