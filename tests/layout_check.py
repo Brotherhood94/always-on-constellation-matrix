@@ -15,11 +15,12 @@ class LayoutTest(unittest.TestCase):
         chief = login('chief-of-staff', password)
         dot = login('dot', password)
         analyst = login('analyst', password)
+        manager = login('manager', password)
         token = owner['access_token']
         rooms = create_layout(server, owner['user_id'], token)
         self.assertEqual(create_layout(server, owner['user_id'], token), rooms)
         join(rooms['alerts'], monitor['user_id'], monitor['access_token'])
-        for account in (dot, analyst):
+        for account in (dot, analyst, manager):
             invite(rooms['office'], account['user_id'], token)
             join(rooms['office'], account['user_id'], account['access_token'])
         request('PUT', room_route(rooms['alerts']) + '/state/m.room.pinned_events', {'pinned': []}, monitor['access_token'])

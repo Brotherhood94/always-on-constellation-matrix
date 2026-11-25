@@ -56,13 +56,15 @@ def definition(settings, data, registry, secrets):
                     'volumes': [volume(data / 'context/data', '/data'), volume(data / 'context/config', '/etc/context', True)],
                     'healthcheck': health('python', '-c', 'import json,urllib.request; s=json.load(urllib.request.urlopen("http://127.0.0.1:8000/status",timeout=5)); assert s["neo4j_connected"] and s["neo4j_query_connected"]')},
         'neo4j': {**common, 'image': 'neo4j:5.26.22-community', 'networks': ['memory'],
-                  'env_file': [str(data / 'context/neo4j.env')],
-                  'environment': {'NEO4J_server_memory_heap_initial__size': '256m',
+                  'environment': {'NEO4J_AUTH_FILE': '/run/secrets/neo4j-auth',
+                                  'NEO4J_server_memory_heap_initial__size': '256m',
                                   'NEO4J_server_memory_heap_max__size': '512m',
                                   'NEO4J_server_memory_pagecache_size': '256m',
                                   'NEO4J_server_bolt_advertised__address': f"{server}:{settings['bolt_https_port']}"},
-                  'volumes': [volume(data / 'context/graph', '/data')],
-                  'healthcheck': {'test': ['CMD-SHELL', 'cypher-shell -u neo4j -p "$${NEO4J_AUTH#neo4j/}" "RETURN 1" >/dev/null'],
+                  'volumes': [volume(data / 'context/graph', '/data'),
+                              volume(data / 'context/neo4j-auth', '/run/secrets/neo4j-auth', True)],
+                  'healthcheck': {'test': ['CMD-SHELL', 'auth=$$(cat /run/secrets/neo4j-auth) && '
+                                           'NEO4J_PASSWORD="$${auth#neo4j/}" cypher-shell -u neo4j "RETURN 1" >/dev/null'],
                                   'interval': '8s', 'timeout': '7s', 'retries': 20}},
     }
     services['private-edge'] = {

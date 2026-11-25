@@ -22,7 +22,7 @@ for key in settings['agents']:
     register_entry(settings, registry, key, load(PRESETS)[key])
 definition = definition(settings, data, registry, {'POSTGRES_PASSWORD': 'fixture'})
 (data / 'context').mkdir()
-(data / 'context/neo4j.env').write_text('NEO4J_AUTH=neo4j/fixture\n')
+(data / 'context/neo4j-auth').write_text('neo4j/fixture\n')
 (data / 'compose.yaml').write_text(json.dumps(definition))
 PYTHON
 docker compose -f "$work/compose.yaml" --profile agents config --quiet

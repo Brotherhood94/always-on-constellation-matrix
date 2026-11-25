@@ -3,6 +3,7 @@
 | Policy | Rule | Implementation and checks |
 | --- | --- | --- |
 | Assignment | The operator, Dot, or an authorized handoff can activate one registered Office agent with a real Matrix mention in new text. | [Matrix routing](../agents/connector/matrix-routing.mjs) · [Mention tests](../agents/tests/pilot.mjs) |
+| Welcome | The operator confirms the final setup page before Constellation sends one encrypted welcome assignment to Office. Retrying setup reuses its event. | [Onboarding](../deploy/onboarding.py) · [Matrix smoke](../tests/operations-fixture.mjs) |
 | Handoffs | Keep work in the original thread. Match the recipient’s registered capability and resource scope. Limit a task to 15 agent replies and reserve the final managed reply for Manager. Direct status answers, polls, and retries are outside the reply budget. | [Managed task rules](../agents/connector/managed-task.mjs) · [Capability routing tests](../agents/tests/capability-routing.mjs) |
 | Reactions | Add 👀 when an agent accepts an assignment and clear it after delivery. Mark the original request once with ✅ for verified success or ❌ for a terminal blocker. | [Office policy](../agents/connector/office-policy.mjs) · [Connector and durability](../agents/connector/connector.mjs) · [Delivery tests](../agents/tests/instance-acp.mjs) |
 | Attachments | Check the room, authorized sender, file integrity, and the VPS’s 60 MB upload limit. Pass approved file references within the thread. | [Encrypted media](../agents/connector/matrix-media.mjs) · [Workspace tests](../agents/tests/workspace-mcp.mjs) |

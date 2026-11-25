@@ -15,12 +15,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
-    PRESETS, agent_activate, agent_sign_in, install, interactive, load, main,
-    normalized, password, prepare_storage, register_entry, save, show_element_setup, tailscale_dns,
+    PRESETS, agent_activate, agent_sign_in, context_config, install, interactive, load, main,
+    normalized, password, prepare_graph_password, prepare_storage, register_entry, save,
+    show_element_setup, tailscale_dns,
 )
 from agent_catalog import document
 from compose import definition
+from onboarding import finish, guide
 from remote import compose_remote
+from setup_guide import confirm_page
 
 
 class InstallerTest(unittest.TestCase):
@@ -254,7 +257,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIn(self.settings['context_url'], rendered)
         self.assertIn('Enter neo4j as the username.', rendered)
         self.assertIn('sudo cat -- /srv/constellation-matrix/context/neo4j-password', rendered)
-        self.assertIn('docs/setup-guide.md', rendered)
+        self.assertNotIn('Keep the full setup checklist handy', rendered)
         self.assertIn('sudo ./constellation_matrix setup-guide', rendered)
         output = StringIO()
         with redirect_stdout(output):
@@ -306,6 +309,7 @@ class InstallerTest(unittest.TestCase):
                 self.assertEqual('https://platform.openai.com/settings/organization/tunnels' in rendered, dot)
                 self.assertEqual('https://platform.openai.com/settings/organization/api-keys' in rendered, dot)
                 self.assertEqual('https://chatgpt.com/plugins' in rendered, dot)
+                self.assertEqual('Suggested plugin name: Constellation Office' in rendered, dot)
                 self.assertEqual('docs/telegram.md' in rendered, telegram)
                 self.assertEqual('https://my.telegram.org/apps' in rendered, telegram)
                 self.assertEqual('@telegrambot:fixture.test' in rendered, telegram)
@@ -348,6 +352,139 @@ class InstallerTest(unittest.TestCase):
                     show_element_setup(self.settings)
                 self.assertEqual('\x1b[1;36m' in output.getvalue(), colored)
 
+    def test_setup_page_clears_terminal_and_accepts_enter_or_pause(self):
+        output = StringIO()
+        with redirect_stdout(output), patch('builtins.input', side_effect=['later', '', 'q']) as answer:
+            self.assertTrue(confirm_page('Element', 'Install Element.'))
+            self.assertFalse(confirm_page('Dashboard', 'Open the dashboard.'))
+        self.assertEqual(output.getvalue().count('\x1b[2J\x1b[H'), 2)
+        self.assertTrue(all('[Continue]' in call.args[0] for call in answer.call_args_list))
+
+    def test_wizard_resumes_at_first_unconfirmed_page(self):
+        settings = {**self.settings, 'agents': [], 'dot': False}
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
+            data = Path(work)
+            save(data / 'agents.json', {'agents': {}})
+            command = 'sudo ./constellation_matrix'
+            with patch('onboarding.confirm_page', side_effect=[True, False]) as confirm:
+                guide(data, settings, command, None)
+            self.assertEqual([call.args[0] for call in confirm.call_args_list], ['💬 Element Desktop', '📊 Dashboard'])
+            self.assertEqual(load(data / 'onboarding.json'), {'confirmed': ['element']})
+            self.assertIn(f'{command} setup-guide', output.getvalue())
+            with patch('onboarding.confirm_page', return_value=True) as confirm, \
+                 patch('onboarding.finish', return_value={'room': '!office', 'event': '$welcome'}) as launch:
+                guide(data, settings, command, None)
+            self.assertEqual([call.args[0] for call in confirm.call_args_list], [
+                '📊 Dashboard', '🧠 Context Intelligence · Neo4j Browser',
+                '✈️ Telegram · Bridge and drafting agent', '👋 Hello Collaboration',
+            ])
+            self.assertEqual(confirm.call_args.args[-1], 'Finish')
+            launch.assert_called_once_with(data, command, None)
+            self.assertIn('https://matrix.to/#/%21office/%24welcome', output.getvalue())
+            self.assertEqual((data / 'onboarding.json').stat().st_mode & 0o777, 0o600)
+
+    def test_explicit_print_bypasses_the_wizard_in_a_terminal(self):
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
+            data = Path(work).resolve()
+            save(data / 'settings.json', self.settings)
+            argv = ['constellation_matrix', '--data-dir', str(data), 'setup-guide', '--print']
+            with patch('installer.os.geteuid', return_value=0), patch('sys.argv', argv), \
+                 patch('setup_guide.interactive_terminal', return_value=True), patch('onboarding.guide') as wizard:
+                main()
+            wizard.assert_not_called()
+            self.assertIn('💬 Element Desktop', output.getvalue())
+            self.assertIn('👋 Hello Collaboration', output.getvalue())
+            self.assertFalse((data / 'onboarding.json').exists())
+
+    def test_graph_password_is_confirmed_and_kept_across_reruns(self):
+        graph_password = """Graph test #'$" \\!"""
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            def shown(title, validate, **kwargs):
+                self.assertTrue(kwargs['masked'])
+                self.assertIsNone(validate(graph_password))
+                self.assertIsNotNone(validate('bad'))
+                self.assertIsNotNone(validate('fixture/slash password'))
+                self.assertIsNotNone(validate('-fixture password'))
+                return graph_password
+
+            with patch('installer.prompt_text', side_effect=shown) as prompt:
+                prepare_graph_password(data, None, interactive=True)
+                prepare_graph_password(data, None, interactive=True)
+            self.assertEqual([call.args[0] for call in prompt.call_args_list], [
+                'Context Intelligence password', 'Confirm Context Intelligence password',
+            ])
+            saved = data / 'context/neo4j-password'
+            self.assertEqual(saved.read_text(), graph_password + '\n')
+            self.assertEqual(saved.stat().st_mode & 0o777, 0o600)
+            with patch('installer.os.chown'), patch('installer.os.fchown'):
+                context_config({**self.settings, 'telegram': False}, data, {'agents': {}})
+            self.assertEqual((data / 'context').stat().st_mode & 0o777, 0o700)
+            self.assertEqual((data / 'context/neo4j-auth').read_text(), f'neo4j/{graph_password}\n')
+            self.assertEqual(load(data / 'context/config/server.json')['neo4j_password'], graph_password)
+
+    def test_configured_graph_password_requires_a_private_file_and_preserves_existing_auth(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            supplied = data / 'private.txt'
+            save(supplied, 'separate config password\n', mode=0o644)
+            with self.assertRaisesRegex(ValueError, 'must be private'):
+                prepare_graph_password(data, str(supplied), interactive=False)
+            supplied.chmod(0o600)
+            prepare_graph_password(data, str(supplied), interactive=False)
+            save(supplied, 'different config password\n')
+            with self.assertRaisesRegex(ValueError, 'existing Context Intelligence password'):
+                prepare_graph_password(data, str(supplied), interactive=False)
+            self.assertEqual((data / 'context/neo4j-password').read_text(), 'separate config password\n')
+
+    def test_welcome_waits_for_confirmations_active_agents_and_matrix_membership(self):
+        settings = {**self.settings, 'agents': ['coder', 'manager'], 'dot': False, 'telegram': False}
+        with TemporaryDirectory() as work, patch('onboarding.open_existing', return_value=(settings, self.registry)), \
+             patch('onboarding.session_token', return_value='fixture-token') as token, \
+             patch('onboarding.publish', return_value='$welcome') as publish, patch('onboarding.request') as request:
+            data = Path(work)
+            save(data / 'rooms.json', {'office': '!office', 'owner': '@operator:fixture.test'})
+            self.assertIn('Confirm each', finish(data, 'fixture')['waiting'])
+            save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
+            self.assertIn('Coder', finish(data, 'fixture')['waiting'])
+            token.assert_not_called()
+            for agent in ('manager', 'coder'):
+                self.registry['agents'][agent]['active'] = True
+            request.return_value = {'joined': {'@manager:fixture.test': {}}}
+            self.assertIn('join Office', finish(data, 'fixture')['waiting'])
+            publish.assert_not_called()
+            request.return_value['joined']['@coder:fixture.test'] = {}
+            self.assertEqual(finish(data, 'fixture'), {'room': '!office', 'event': '$welcome'})
+            self.assertEqual(finish(data, 'fixture'), {'room': '!office', 'event': '$welcome'})
+            publish.assert_called_once()
+            self.assertEqual([agent['name'] for agent in publish.call_args.args[-2:]], ['Manager', 'Coder'])
+
+    def test_welcome_uses_only_office_agents_for_solo_or_peer_handoffs(self):
+        register_entry(self.settings, self.registry, 'analyst', self.presets['analyst'])
+        for entry in self.registry['agents'].values():
+            entry['active'] = True
+        for selected, expected in (
+            (['analyst', 'coder', 'root'], ['Analyst', 'Coder']),
+            (['coder', 'root'], ['Coder', None]),
+            (['chief-of-staff', 'root'], []),
+        ):
+            with self.subTest(selected=selected), TemporaryDirectory() as work:
+                data = Path(work)
+                settings = {**self.settings, 'agents': selected, 'dot': False, 'telegram': False}
+                save(data / 'rooms.json', {'office': '!office', 'owner': '@operator:fixture.test'})
+                save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
+                members = {f'@{key}:fixture.test': {} for key in selected}
+                with patch('onboarding.open_existing', return_value=(settings, self.registry)), \
+                     patch('onboarding.session_token'), patch('onboarding.publish', return_value='$welcome') as publish, \
+                     patch('onboarding.request', return_value={'joined': members}):
+                    receipt = finish(data, 'fixture')
+                self.assertEqual('event' in receipt, bool(expected))
+                if expected:
+                    self.assertEqual([agent['name'] if agent else None for agent in publish.call_args.args[-2:]],
+                                     expected)
+                else:
+                    publish.assert_not_called()
+
     def test_last_local_agent_configuration_prints_element_setup(self):
         self.registry['agents']['chief-of-staff']['active'] = True
         self.registry['agents']['root']['active'] = True
@@ -387,7 +524,7 @@ class InstallerTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             normalized({**raw, 'connection': 'unsupported'}, self.presets)
 
-    def test_interactive_install_deploys_selected_local_instances_together_and_defers_setup(self):
+    def test_interactive_install_deploys_local_instances_then_configures_them_before_the_wizard(self):
         config = {**self.raw, 'systemd': False, 'agents': ['manager', 'coder', 'remote-worker']}
         with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
             data = Path(work) / 'fixture workspace'
@@ -396,10 +533,18 @@ class InstallerTest(unittest.TestCase):
                 command_output=DEFAULT, compose_config=DEFAULT, compose=DEFAULT, service_units=DEFAULT,
                 write_config=DEFAULT, up=DEFAULT, provision_layout=DEFAULT, prepare_images=DEFAULT,
                 sync_workshop=DEFAULT, publish_inventory=DEFAULT, configure_network=DEFAULT,
-                agent_sign_in=DEFAULT, choose_option=DEFAULT,
-            ) as steps:
+                agent_sign_in=DEFAULT, choose_option=DEFAULT, finalize_setup=DEFAULT, prepare_graph_password=DEFAULT,
+            ) as steps, patch('setup_guide.interactive_terminal', return_value=True):
                 steps['interactive'].return_value = config
                 steps['command_output'].return_value = '[]'
+                steps['password'].return_value = 'matrix-fixture-password'
+
+                def after_sign_in(path, *, passphrase):
+                    self.assertEqual(path, data)
+                    self.assertEqual(passphrase, 'matrix-fixture-password')
+                    steps['agent_sign_in'].assert_called_once_with(data)
+
+                steps['finalize_setup'].side_effect = after_sign_in
                 install(data, SimpleNamespace(config=None))
 
             groups = [args[1:] for args, _ in steps['up'].call_args_list if len(args) > 1]
@@ -407,16 +552,13 @@ class InstallerTest(unittest.TestCase):
                 ('postgres', 'synapse', 'context'),
                 ('monitor', 'private-edge', 'dot', 'engine-manager', 'engine-coder'),
             ])
-            steps['agent_sign_in'].assert_not_called()
             steps['choose_option'].assert_not_called()
+            steps['finalize_setup'].assert_called_once()
+            steps['prepare_graph_password'].assert_called_once_with(data, None, interactive=True)
             registry = load(data / 'agents.json')
             self.assertFalse(any(row['active'] for row in registry['agents'].values()))
             rendered = output.getvalue()
-            self.assertIn('Local agents awaiting provider setup: Manager, Coder', rendered)
-            self.assertIn(f"sudo ./constellation_matrix --data-dir '{data}' agent configure", rendered)
             self.assertIn('Agent remote-worker awaits remote setup.', rendered)
-            self.assertIn('Finalize your Constellation setup', rendered)
-            self.assertIn('Element Desktop', rendered)
 
     def test_catalog_keeps_unconfigured_agents_pending_during_health_refresh(self):
         observed = [{'name': 'Coder', 'status': 'Available'}]

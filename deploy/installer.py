@@ -114,6 +114,11 @@ def normalized(raw, presets):
         raise ValueError('Use standard Docker Engine for this deployment')
     settings = {**PORTS, 'project': 'constellation-matrix', 'tailscale': True, 'systemd': True,
                 'dot': False, 'telegram': False, **raw}
+    if 'neo4j_password' in settings:
+        raise ValueError('Use neo4j_password_file for Context Intelligence credentials')
+    if 'neo4j_password_file' in settings and (
+            not isinstance(settings['neo4j_password_file'], str) or not settings['neo4j_password_file']):
+        raise ValueError('Provide a path to a private neo4j_password_file')
     if settings.pop('connection', LEGACY_CONNECTION) != LEGACY_CONNECTION:
         raise ValueError('Configure the provider in each agent’s Amplifier home')
     if not SERVER.fullmatch(settings.get('server_name', '')) or not PROJECT.fullmatch(settings['project']):
@@ -201,8 +206,9 @@ def context_config(settings, data, registry):
         token = private_secret(data / 'context' / (key + '.token'), uid=ROOT_UID if key == 'root' else RUNTIME_UID)
         identities[sha256(token.encode()).hexdigest()] = {'id': key}
         grants[key] = {'workspaces': [workspace], 'capabilities': capabilities}
-    password = private_secret(data / 'context/neo4j-password')
-    save(data / 'context/neo4j.env', f'NEO4J_AUTH=neo4j/{password}\n')
+    password = read_password_file(data / 'context/neo4j-password', 'Context Intelligence')
+    # The host directory is private. The bind-mounted copy must be readable by Neo4j.
+    save(data / 'context/neo4j-auth', f'neo4j/{password}\n', mode=0o444)
     save(data / 'context/config/server.json', {
         'auth_mode': 'static', 'allow_unauthenticated': False, 'access_control_mode': 'scoped',
         'api_keys_store_path': '/data/identity/api-keys.json', 'api_keys': identities,
@@ -252,13 +258,47 @@ def password(settings, file=None):
             'Matrix operator password', password_error, masked=True,
             notice='Save this password in a password manager before continuing. You need it to sign in to Element.',
         )
-    path = Path(path)
-    if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_mode & 0o077:
-        raise ValueError('The operator password file must be private')
-    value = path.read_text().rstrip('\r\n')
+    value = read_password_file(Path(path), 'Matrix operator')
     if error := password_error(value):
         raise ValueError(error)
     return value
+
+
+def read_password_file(path, label):
+    if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_mode & 0o077:
+        raise ValueError(f'The {label} password file must be private and a regular file')
+    return path.read_text().rstrip('\r\n')
+
+
+def prepare_graph_password(data, source, *, interactive):
+    path = data / 'context/neo4j-password'
+    supplied = read_password_file(Path(source), 'Context Intelligence') if source else None
+    if path.exists() or path.is_symlink():
+        if supplied is not None and supplied != read_password_file(path, 'Context Intelligence'):
+            raise ValueError('Use the existing Context Intelligence password for this workspace')
+        return
+    if (data / 'context/graph/data').exists() or (data / 'context/graph/databases').exists():
+        raise ValueError('Recover the existing Context Intelligence password before reinstalling')
+
+    def validate(value):
+        if len(value) < 12 or not value.isprintable():
+            return 'Use at least 12 printable characters for the Context Intelligence password'
+        if '/' in value or value.startswith('-'):
+            return 'Choose a Context Intelligence password without / or a leading -'
+        return None
+
+    directory(path.parent)
+    if interactive:
+        supplied = prompt_text('Context Intelligence password', validate, masked=True,
+                               notice='Save this password for Neo4j Browser.')
+        prompt_text('Confirm Context Intelligence password',
+                    lambda value: None if value == supplied else 'Enter the same password again', masked=True)
+    if supplied is None:
+        save(path, secrets.token_hex(32) + '\n')
+        return
+    if error := validate(supplied):
+        raise ValueError(error)
+    save(path, supplied + '\n')
 
 
 def docker_build(tag, directory, *, dockerfile=None):
@@ -533,90 +573,22 @@ def workspace_command(data):
 
 
 def show_element_setup(settings, data=DATA):
-    server = settings['server_name']
-    color = sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and 'NO_COLOR' not in os.environ
-    accent, reset = ('\x1b[1;36m', '\x1b[0m') if color else ('', '')
-    command = workspace_command(data)
-    print(f'\n{accent}✨ Finalize your Constellation setup{reset}')
-    print('  Sign in to your workspace, then connect the integrations you selected.')
-    print(f'\n{accent}💬 Element Desktop{reset}')
-    print('  1. Download and install Element Desktop.')
-    print('     https://element.io/download')
-    if settings['tailscale']:
-        print('     Connect this computer to Tailscale before opening the workspace links.')
-    print('  2. Choose Sign in. Under Account provider, find the current server (usually matrix.org).')
-    print('     Click Edit to the right of the server name, above Continue.')
-    print('  3. Paste your Matrix homeserver into Other account provider and select Continue.')
-    print(f'     https://{server}')
-    print('  4. Enter your Matrix credentials, select Sign in, and open Agents → Office.')
-    print(f"     Username: {settings['owner']}")
-    print('     Password: Your Matrix operator password from setup')
+    from setup_guide import show_printable
+    show_printable(settings, data, workspace_command(data))
 
-    print(f'\n{accent}📊 Dashboard{reset}')
-    print('  • Open the resource and agent dashboard in your browser.')
-    print('    ' + settings['dashboard_url'])
 
-    print(f'\n{accent}🧠 Context Intelligence · Neo4j Browser{reset}')
-    print('  1. Open Neo4j Browser.')
-    print('     ' + settings['context_url'])
-    print('  2. Enter neo4j as the username.')
-    print('     Password: Run this command privately on the VPS and enter the result.')
-    print(f"     sudo cat -- {quote(str(data / 'context/neo4j-password'))}")
-    print('  3. Select Connect.')
-    print('  • Find both links in Agents → VPS Alerts → Pinned messages.')
-
-    if settings['dot']:
-        print(f'\n{accent}🔌 Dot · Secure MCP Tunnel{reset}')
-        if settings['systemd']:
-            print('  1. Browser · Open Platform Tunnels and create a tunnel in your organization.')
-            print('     Associate your ChatGPT workspace and copy the tunnel ID.')
-            print('     Creating a tunnel requires Tunnels Read + Manage.')
-            print('     https://platform.openai.com/settings/organization/tunnels')
-            print('  2. Browser · Create a Restricted runtime API key with Tunnels Read + Use.')
-            print('     https://platform.openai.com/settings/organization/api-keys')
-            print('  3. VPS terminal · Replace the placeholder with your tunnel ID.')
-            print(f'     {command} dot-connect tunnel_REPLACE_WITH_YOUR_ID')
-            print('     If prompted, enter the runtime key privately at the hidden prompt.')
-            print('  4. Browser · In ChatGPT Plugins, add a private custom MCP server named Dot.')
-            print('     Choose Tunnel, select the same tunnel ID, and choose No authentication.')
-            print('     https://chatgpt.com/plugins')
-            print('  5. Verify Dot can open a small Office task and read its reply.')
-        else:
-            print('  • Enable systemd on the deployment to connect the Dot tunnel.')
-        print('  • Full instructions and connection test in docs/dot.md.')
-
-    if settings['telegram']:
-        print(f'\n{accent}✈️ Telegram · Bridge and drafting agent{reset}')
-        print('  1. Browser · Sign in with your phone number and the code Telegram sends in the app.')
-        print('     Create or open an application and copy App api_id and App api_hash.')
-        print('     https://my.telegram.org/apps')
-        print('  2. VPS terminal · Reuse a valid private file or create one outside the checkout.')
-        print('     (umask 077; touch "$HOME/telegram-api.json")')
-        print('     chmod 600 "$HOME/telegram-api.json"')
-        print('     nano "$HOME/telegram-api.json"')
-        print('     In a private editor, replace both example values with your credentials.')
-        print('     {"api_id": 1234567, "api_hash": "REPLACE_WITH_YOUR_API_HASH"}')
-        print('  3. VPS terminal · Prepare and activate the bridge.')
-        print('     If you reused a file elsewhere, use that path in the prepare command.')
-        print(f'     {command} telegram prepare "$HOME/telegram-api.json"')
-        print(f'     {command} telegram activate')
-        print(f'  4. Element · Open a private DM with @telegrambot:{server} and send:')
-        print('     !tg login qr')
-        print('     Telegram mobile · Open Settings → Devices → Link Desktop Device and scan the code.')
-        print('  5. Verify and allow one test chat using docs/telegram.md.')
-        print('  6. VPS terminal · For drafts and updates, run these commands in order.')
-        for step in ('prepare-agent', 'sign-in', 'probe', 'start-agent'):
-            print(f'     {command} telegram {step}')
-        print('     At sign-in, open the printed verification page and complete Codex device login.')
-        print('  7. Bind the verified chat in draft mode and approve one test delivery.')
-        print('     Follow docs/telegram.md for the binding and delivery check.')
-
-    print('\n  • Keep the full setup checklist handy in docs/setup-guide.md.')
-    print('  • Reprint these deployment-specific steps from the repository on the VPS.')
-    print(f'    {command} setup-guide\n')
+def finalize_setup(data, *, print_only=False, passphrase=None):
+    from setup_guide import interactive_terminal
+    settings = load(data / 'settings.json')
+    if print_only or not interactive_terminal():
+        show_element_setup(settings, data)
+        return
+    from onboarding import guide
+    guide(data, settings, workspace_command(data), passphrase)
 
 
 def install(data, args):
+    from setup_guide import interactive_terminal
     presets = load(PRESETS)
     previous = data / 'settings.json'
     if args.config:
@@ -624,6 +596,8 @@ def install(data, args):
     else:
         raw = interactive(presets, load(previous) if previous.exists() else {})
     settings = normalized(raw, presets)
+    if args.config and not settings.get('owner_password_file'):
+        raise ValueError('Config-file installation requires a private owner_password_file')
     passphrase = password(settings)
     directory(data, 0o711)
     with operator_lock(data):
@@ -632,6 +606,7 @@ def install(data, args):
             for key in ('server_name', 'owner', 'project', 'matrix_port'):
                 if current[key] != settings[key]:
                     raise ValueError(f'{key} belongs to the existing deployment identity')
+        prepare_graph_password(data, settings.pop('neo4j_password_file', None), interactive=not args.config)
         if settings['systemd']:
             from host_services import enable_host_dependencies
             enable_host_dependencies(settings)
@@ -675,15 +650,25 @@ def install(data, args):
             from host_services import enable_services
             enable_services(settings)
     print('Workspace deployed.')
-    pending = pending_local_agents(registry)
-    if pending:
-        print('Local agents awaiting provider setup: ' + ', '.join(registry['agents'][key]['name'] for key in pending))
-        print('When ready, open each agent’s Amplifier provider and model setup.')
-        print(f'  {workspace_command(data)} agent configure')
     for key, entry in registry['agents'].items():
         if entry['placement'] == 'remote' and not entry['active']:
             print(f'Agent {key} awaits remote setup.')
-    show_element_setup(settings, data)
+    pending = pending_local_agents(registry)
+    command = workspace_command(data)
+    if args.config or not interactive_terminal():
+        next_step = 'agent configure' if pending else 'setup-guide'
+        print(f'Continue setup from an interactive terminal.\n  {command} {next_step}')
+        return
+    if pending:
+        try:
+            agent_sign_in(data)
+        except KeyboardInterrupt:
+            print(f'\nResume provider setup with {command} agent configure')
+            return
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            print(f'Resume provider setup with {command} agent configure')
+            raise
+    finalize_setup(data, passphrase=passphrase)
 
 
 def agent_add(data, args):
@@ -864,7 +849,8 @@ def main():
     confirm.add_argument('--receipt', type=Path, required=True)
     status = commands.add_parser('status', help='Read the dashboard snapshots')
     status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services')
-    commands.add_parser('setup-guide', help='Show workspace sign-in and integration setup')
+    setup = commands.add_parser('setup-guide', help='Resume workspace onboarding')
+    setup.add_argument('--print', dest='print_only', action='store_true', help='Print the full setup guide')
     removal = commands.add_parser('uninstall', help='Remove workspace services, with optional data deletion')
     removal.add_argument('--data-dir', type=Path, default=argparse.SUPPRESS,
                          help='Deployment data directory, defaults to /srv/constellation-matrix.')
@@ -903,7 +889,7 @@ def main():
     if args.command == 'install':
         install(data, args)
     elif args.command == 'setup-guide':
-        show_element_setup(load(data / 'settings.json'), data)
+        finalize_setup(data, print_only=args.print_only)
     elif args.command == 'uninstall':
         from uninstall import uninstall
         uninstall(data, purge=args.purge)
@@ -913,7 +899,7 @@ def main():
         else:
             agent_sign_in(data, args.key)
             if not pending_local_agents(load(data / 'agents.json')):
-                show_element_setup(load(data / 'settings.json'), data)
+                finalize_setup(data)
     elif args.command == 'remote':
         from remote import execute
         execute(data, args)

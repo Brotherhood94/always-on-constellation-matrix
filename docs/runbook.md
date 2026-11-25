@@ -14,11 +14,9 @@ Choose the suggested Tailscale DNS name if available. On the next screen, type t
 
 The workspace and integrations checklist opens with **Done** highlighted. On a fresh install, **Element workspace**, **Telegram**, and **Dot** are checked. Use the arrow keys and Enter to toggle Telegram or Dot, then choose **Done**. Element workspace is required. Reruns start with the integrations already saved for that workspace.
 
-Type a Matrix operator password of at least 12 characters on the next screen. The field masks what you type. Save the password in your password manager before pressing Enter. You need it to sign in to Element.
+Type a Matrix operator password of at least 12 characters. The field masks what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
 
-Installation starts the selected local Amplifier Instances together and prints the Element sign-in guide. The dashboard shows **Sign-in required** for agents awaiting provider setup.
-
-When ready, open the provider setup for all pending local agents with this command.
+Installation starts the selected local Amplifier Instances together and opens their provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup or to start sign-in after unattended provisioning.
 
 ```sh
 sudo ./constellation_matrix agent configure
@@ -28,9 +26,11 @@ Each agent runs Amplifier’s own provider manager. It offers Anthropic for Clau
 
 Check the agent name at the top of each page. **Add a provider** creates an additional connection for that agent. Choose **Done** to verify that agent and move to the next one in batch setup. Each agent can use a different provider and model.
 
-Run `agent configure` later to continue with pending agents, or pass an agent ID to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow. Remote workers configure Amplifier during enrollment on their own host.
+After the final local agent signs in, the installer opens the guided checklist. Use `sudo ./constellation_matrix setup-guide` to resume it or `setup-guide --print` to print every step. At **Finish**, the wizard checks the selected agents’ Matrix membership and starts one **Hello Collaboration** task in Office. Remote workers configure Amplifier during enrollment on their own host and must be confirmed before the welcome starts. [Guided setup](setup-guide.md)
 
-State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, keep the owner password file outside the checkout with mode `0600`. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
+Pass an agent ID to `agent configure` to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow.
+
+State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, provide `owner_password_file` and optionally `neo4j_password_file`. Keep both files outside the checkout with mode `0600`. The installer generates a Neo4j password when the file is omitted and preserves an existing Neo4j password on reruns. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
 
 `./constellation_matrix status` reads dashboard snapshots as a regular user. Run `sudo ./constellation_matrix status --refresh` to publish current Docker inventory.
 
@@ -48,17 +48,17 @@ In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar*
 
 ## Sign in to Context Intelligence
 
-Open **Context Intelligence** from the dashboard or VPS Alerts to launch Neo4j Browser. Enter `neo4j` in **Username**. Retrieve the generated password on the server, paste it into **Password**, and select **Connect**.
+Open **Context Intelligence** from the dashboard or VPS Alerts to launch Neo4j Browser. Enter `neo4j` and your Context Intelligence password, then select **Connect**. You can retrieve the stored password privately on the VPS.
 
 ```sh
 sudo cat -- /srv/constellation-matrix/context/neo4j-password
 ```
 
-Run `sudo ./constellation_matrix setup-guide` to see the sign-in links, password-file command, and setup steps for the integrations you selected. Pass the same `--data-dir` used during installation if you changed the default.
+Run `sudo ./constellation_matrix setup-guide --print` to see the deployment URLs and the actual password-file path. Pass the same `--data-dir` used during installation if you changed the default.
 
 ## Connect Dot and Telegram
 
-The installer prints separate setup steps for each selected integration. Set up Dot with an OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. For Telegram, prepare the bridge, sign in from its Element DM, and verify a chat. Follow the Telegram guide to bind that chat to the drafting agent for drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
+The wizard opens a separate page for each selected integration. Set up Dot with an OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. For Telegram, prepare the bridge, sign in from its Element DM, and verify a chat. Follow the Telegram guide to bind that chat to the drafting agent for drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
 
 ## Boot and service placement
 

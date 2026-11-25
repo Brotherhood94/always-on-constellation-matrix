@@ -13,6 +13,9 @@ cleanup() {
 }
 trap cleanup EXIT
 printf '%s\n' 'synthetic-matrix-password-88' > "$work/password"
+cat > "$work/graph-password" <<'PASSWORD'
+Fixture graph #'$" \!
+PASSWORD
 python3 - "$work" <<'PYTHON'
 import json
 from pathlib import Path
@@ -32,6 +35,7 @@ config = {
     'server_name': 'fixture.test', 'owner': 'operator',
     'agents': ['manager', 'coder'],
     'owner_password_file': str(work / 'password'),
+    'neo4j_password_file': str(work / 'graph-password'),
     'project': project, 'systemd': False, 'tailscale': False, **ports,
 }
 (work / 'install.json').write_text(json.dumps(config))
@@ -40,6 +44,13 @@ PYTHON
 cp "$data/rooms.json" "$work/initial-rooms.json"
 "$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cmp "$work/initial-rooms.json" "$data/rooms.json"
+cmp "$work/graph-password" "$data/context/neo4j-password"
+! grep -q 'neo4j_password' "$data/settings.json"
+docker compose --project-directory "$data" exec -T neo4j sh -ec '
+  IFS= read -r NEO4J_PASSWORD
+  export NEO4J_PASSWORD
+  cypher-shell -u neo4j "RETURN 1" >/dev/null
+' < "$work/graph-password"
 running=$(docker compose --project-directory "$data" --profile agents ps --services --status running)
 grep -Fxq engine-manager <<< "$running"
 grep -Fxq engine-coder <<< "$running"

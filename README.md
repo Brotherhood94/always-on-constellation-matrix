@@ -119,23 +119,21 @@ On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup wi
 sudo ./constellation_matrix install
 ```
 
-Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** and press Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above. The installer deploys the workspace and starts the selected local Amplifier Instances together.
+Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** to confirm. Select Manager and at least one Office worker for a collaborative welcome. Choose your Matrix and Context Intelligence passwords when prompted.
 
-When you’re ready to choose providers and models, run the second command from the same checkout.
+The installer deploys the workspace, then opens each local agent’s Amplifier provider setup. Complete its sign-in, pick a model, and choose **Done**. After the agents pass their checks, the terminal wizard walks through Element, the dashboard, Context Intelligence, and any selected integrations. On **Finish**, it opens **Hello Collaboration** in Office once all selected agents are ready.
+
+If agent sign-in was interrupted, resume it from the same checkout.
 
 ```sh
 sudo ./constellation_matrix agent configure
 ```
 
-In each agent’s Amplifier menu, add a provider, complete sign-in, pick a model, and choose **Done**. Constellation starts the agent’s Matrix connector after its checks pass.
-
-Download Element Desktop and follow the installer’s sign-in guide. Choose **Sign in** and click **Edit** to the right of `matrix.org` under **Account provider**. Paste the printed URL into **Other account provider**, then select **Continue**. Sign in with your Matrix username and password, then open **Agents → Office**. Use the mention picker and try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.” [Download Element](https://element.io/download) · [Element setup](docs/runbook.md#connect-in-element)
-
-Use the post-install checklist to open the dashboard and Context Intelligence and connect any selected integrations. Reprint your deployment’s URLs and commands with `sudo ./constellation_matrix setup-guide`. [Finalize your setup](docs/setup-guide.md) · [Dot setup](docs/dot.md) · [Telegram setup](docs/telegram.md)
+Run `sudo ./constellation_matrix setup-guide` to resume the wizard or add `--print` to see the full checklist. In Element, choose **Sign in → Account provider → Edit** and paste the printed homeserver in **Other account provider**. After sign-in, open **Agents → Office** to follow the welcome thread. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
 
 **ChatGPT via Codex is the only provider tested with a live account.** Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
 
-For a repeatable setup, edit the [example configuration](deploy/config.example.json), check it with `./constellation_matrix validate --config <file>`, and pass the same file to `sudo ./constellation_matrix install --config <file>`.
+For unattended provisioning, edit the example configuration, check it with `./constellation_matrix validate --config <file>`, and run `sudo ./constellation_matrix install --config <file>`. Run `agent configure` from an interactive terminal afterwards. [Example configuration](deploy/config.example.json)
 
 The installer enables startup at boot. Docker restarts application containers, Tailscale Serve serves the static dashboard, and systemd runs the host services, including the Dot tunnel once connected. [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 
