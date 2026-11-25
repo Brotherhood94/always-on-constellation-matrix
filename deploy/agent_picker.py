@@ -70,7 +70,7 @@ def choose_numbered_option(title, options, default):
         print('Choose one of the numbers above.')
 
 
-def text_page(screen, title, validate, default, *, masked=False):
+def text_page(screen, title, validate, default, *, masked=False, notice=''):
     value = ''
     cursor = 0
     error = None
@@ -90,12 +90,14 @@ def text_page(screen, title, validate, default, *, masked=False):
         visible = value[start:start + field_width]
         shown = '*' * len(visible) if masked else visible.encode('ascii', 'replace').decode('ascii')
         screen.addnstr(3, 0, shown.ljust(field_width), field_width, curses.A_UNDERLINE)
-        messages = [f'Leave blank to keep {default}.'] if default and not masked else []
+        messages = [(notice, curses.A_BOLD)] if notice else []
+        if default and not masked:
+            messages.append((f'Leave blank to keep {default}.', 0))
         if error:
-            messages.append(error)
-        lines = [line for message in messages for line in wrap(message, width - 1)]
-        for row, line in enumerate(lines[:height - 5], start=5):
-            screen.addnstr(row, 0, line, width - 1)
+            messages.append((error, 0))
+        lines = [(line, style) for message, style in messages for line in wrap(message, width - 1)]
+        for row, (line, style) in enumerate(lines[:height - 5], start=5):
+            screen.addnstr(row, 0, line, width - 1, style)
 
         screen.move(3, cursor - start)
         screen.refresh()
@@ -125,11 +127,13 @@ def text_page(screen, title, validate, default, *, masked=False):
             cursor += 1
 
 
-def prompt_text(title, validate, *, default='', masked=False):
-    answer = terminal_picker(text_page, title, validate, default, masked=masked)
+def prompt_text(title, validate, *, default='', masked=False, notice=''):
+    answer = terminal_picker(text_page, title, validate, default, masked=masked, notice=notice)
     if answer is not None:
         return answer
     prompt = f'{title} [{default}]: ' if default and not masked else f'{title}: '
+    if notice:
+        print(notice)
     while True:
         answer = getpass(prompt) if masked else input(prompt).strip() or default
         error = validate(answer)

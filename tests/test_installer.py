@@ -146,6 +146,8 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(password({}), fixture)
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
         self.assertIn('Matrix operator password', rendered)
+        self.assertIn('Save this password in a password manager before continuing.', rendered)
+        self.assertIn('You need it to sign in to Element.', ' '.join(rendered.split()))
         self.assertIn('Use an operator password of at least 12 characters', rendered)
         self.assertIn('*' * len(fixture), rendered)
         self.assertNotIn('short', rendered)
@@ -155,10 +157,11 @@ class InstallerTest(unittest.TestCase):
         fixture = '  synthetic-password  '
         with patch('agent_picker.terminal_picker', return_value=None), \
              patch('agent_picker.getpass', return_value=fixture) as getpass, \
-             patch('builtins.input') as line_input:
+             patch('builtins.input') as line_input, redirect_stdout(StringIO()) as output:
             self.assertEqual(password({}), fixture)
         getpass.assert_called_once_with('Matrix operator password: ')
         line_input.assert_not_called()
+        self.assertIn('Save this password in a password manager before continuing.', output.getvalue())
 
     def test_password_file_bypasses_the_screen_and_requires_private_permissions(self):
         with TemporaryDirectory() as work, patch('installer.prompt_text') as prompt:

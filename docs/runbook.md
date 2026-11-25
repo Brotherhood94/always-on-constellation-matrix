@@ -14,7 +14,7 @@ Choose the suggested Tailscale DNS name if available. On the next screen, type t
 
 The workspace and integrations checklist opens with **Done** highlighted. On a fresh install, **Element workspace**, **Telegram**, and **Dot** are checked. Use the arrow keys and Enter to toggle Telegram or Dot, then choose **Done**. Element workspace is required. Reruns start with the integrations already saved for that workspace.
 
-Type your Matrix operator password on the next screen and press Enter. The field masks what you type. Use at least 12 characters.
+Type a Matrix operator password of at least 12 characters on the next screen. The field masks what you type. Save the password in your password manager before pressing Enter. You need it to sign in to Element.
 
 Installation starts the selected local Amplifier Instances together and prints the Element sign-in guide. The dashboard shows **Sign-in required** for agents awaiting provider setup.
 

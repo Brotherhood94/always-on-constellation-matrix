@@ -248,7 +248,10 @@ def password_error(value):
 def password(settings, file=None):
     path = file or settings.get('owner_password_file')
     if not path:
-        return prompt_text('Matrix operator password', password_error, masked=True)
+        return prompt_text(
+            'Matrix operator password', password_error, masked=True,
+            notice='Save this password in a password manager before continuing. You need it to sign in to Element.',
+        )
     path = Path(path)
     if not stat.S_ISREG(path.lstat().st_mode) or path.stat().st_mode & 0o077:
         raise ValueError('The operator password file must be private')
