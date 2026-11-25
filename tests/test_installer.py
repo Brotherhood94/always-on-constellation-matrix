@@ -7,14 +7,15 @@ from pathlib import Path
 from subprocess import CalledProcessError, CompletedProcess
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import DEFAULT, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
-    PRESETS, agent_activate, agent_sign_in, interactive, load, main,
+    PRESETS, agent_activate, agent_sign_in, install, interactive, load, main,
     normalized, password, prepare_storage, register_entry, save, show_element_setup, tailscale_dns,
 )
 from agent_catalog import document
@@ -316,6 +317,45 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(self.registry['agents']['coder']['subscription'], 'Personal')
         with self.assertRaises(ValueError):
             normalized({**raw, 'connection': 'unsupported'}, self.presets)
+
+    def test_interactive_install_deploys_selected_local_instances_together_and_defers_setup(self):
+        config = {**self.raw, 'systemd': False, 'agents': ['manager', 'coder', 'remote-worker']}
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
+            data = Path(work) / 'fixture workspace'
+            with patch.multiple(
+                'installer', interactive=DEFAULT, password=DEFAULT, prepare_storage=DEFAULT,
+                command_output=DEFAULT, compose_config=DEFAULT, compose=DEFAULT, service_units=DEFAULT,
+                write_config=DEFAULT, up=DEFAULT, provision_layout=DEFAULT, prepare_images=DEFAULT,
+                sync_workshop=DEFAULT, publish_inventory=DEFAULT, configure_network=DEFAULT,
+                agent_sign_in=DEFAULT, choose_option=DEFAULT,
+            ) as steps:
+                steps['interactive'].return_value = config
+                steps['command_output'].return_value = '[]'
+                install(data, SimpleNamespace(config=None))
+
+            groups = [args[1:] for args, _ in steps['up'].call_args_list if len(args) > 1]
+            self.assertEqual(groups, [
+                ('postgres', 'synapse', 'context'),
+                ('monitor', 'private-edge', 'dot', 'engine-manager', 'engine-coder'),
+            ])
+            steps['agent_sign_in'].assert_not_called()
+            steps['choose_option'].assert_not_called()
+            registry = load(data / 'agents.json')
+            self.assertFalse(any(row['active'] for row in registry['agents'].values()))
+            rendered = output.getvalue()
+            self.assertIn('Local agents awaiting provider setup: Manager, Coder', rendered)
+            self.assertIn(f"sudo ./constellation_matrix --data-dir '{data}' agent configure", rendered)
+            self.assertIn('Agent remote-worker awaits remote setup.', rendered)
+            self.assertIn('Element Desktop', rendered)
+
+    def test_catalog_keeps_unconfigured_agents_pending_during_health_refresh(self):
+        observed = [{'name': 'Coder', 'status': 'Available'}]
+        for inventory in ([], observed):
+            with self.subTest(inventory=inventory):
+                roster = document(self.registry, inventory, self.settings['server_name'], 100)['agents']
+                coder = next(row for row in roster if row['key'] == 'coder')
+                self.assertEqual(coder['status'], 'Sign-in required')
+                self.assertFalse(coder['active'])
 
     def test_batch_sign_in_resumes_with_pending_local_agents(self):
         self.registry['agents']['root']['active'] = True

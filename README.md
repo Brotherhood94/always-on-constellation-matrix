@@ -117,13 +117,19 @@ On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup wi
 
 ```sh
 sudo ./constellation_matrix install
-sudo ./constellation_matrix agent configure
-./constellation_matrix status
 ```
 
-1. Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** and press Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above.
-2. Choose **Open Amplifier provider setup** when the workspace is ready, or run `sudo ./constellation_matrix agent configure` later. In each agent’s Amplifier menu, add a provider, complete its login, pick its model, and choose **Done**.
-3. Download Element Desktop and follow the installer’s sign-in guide. Choose **Sign in** and click **Edit** to the right of `matrix.org` under **Account provider**. Paste the printed URL into **Other account provider**, then select **Continue**. Sign in with your Matrix username and password, then open **Agents → Office**. Use the mention picker and try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.” [Download Element](https://element.io/download) · [Element setup](docs/runbook.md#connect-in-element)
+Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** and press Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above. The installer deploys the workspace and starts the selected local Amplifier Instances together.
+
+When you’re ready to choose providers and models, run the second command from the same checkout.
+
+```sh
+sudo ./constellation_matrix agent configure
+```
+
+In each agent’s Amplifier menu, add a provider, complete sign-in, pick a model, and choose **Done**. Constellation starts the agent’s Matrix connector after its checks pass.
+
+Download Element Desktop and follow the installer’s sign-in guide. Choose **Sign in** and click **Edit** to the right of `matrix.org` under **Account provider**. Paste the printed URL into **Other account provider**, then select **Continue**. Sign in with your Matrix username and password, then open **Agents → Office**. Use the mention picker and try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.” [Download Element](https://element.io/download) · [Element setup](docs/runbook.md#connect-in-element)
 
 **ChatGPT via Codex is the only provider tested with a live account.** Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
 

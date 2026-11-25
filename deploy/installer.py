@@ -429,8 +429,7 @@ def publish_inventory(settings, data, registry):
         integrations['Telegram'] = 'configured' if (data / 'telegram/connector/config.json').exists() else 'setup required'
     for key, entry in registry['agents'].items():
         row = health.get(key, {})
-        status = 'Sign-in required' if not entry['active'] else (
-            'Registered' if entry['placement'] == 'remote' else 'Unavailable')
+        status = 'Registered' if entry['placement'] == 'remote' else 'Unavailable'
         if row.get('State') == 'running' and entry['active']:
             status = {'healthy': 'Available', 'starting': 'Starting', 'unhealthy': 'Unavailable'}.get(row.get('Health'), 'Running')
         observed.append({'name': entry['name'], 'server': entry['server'], 'status': status})
@@ -592,32 +591,33 @@ def install(data, args):
         if not homeserver.exists():
             compose(data, 'run', '--rm', '--no-deps', 'synapse', 'generate')
             write_config(data, environment)
-        up(data, 'postgres', 'synapse')
         if (data / 'context/data/identity/api-keys.json').exists():
+            up(data, 'postgres', 'synapse')
             refresh_context(data)
         else:
-            up(data, 'context')
+            up(data, 'postgres', 'synapse', 'context')
         provision_layout(settings, data, registry, passphrase)
         prepare_images(settings, registry)
-        up(data, 'monitor', 'private-edge', *(['dot'] if settings['dot'] else []))
-        up(data, *(f'engine-{key}' for key, entry in registry['agents'].items() if entry['placement'] == 'local'))
+        local_agents = [key for key, entry in registry['agents'].items() if entry['placement'] == 'local']
+        services = ['monitor', 'private-edge']
+        if settings['dot']:
+            services.append('dot')
+        services.extend(f'engine-{key}' for key in local_agents)
+        up(data, *services)
         sync_workshop(settings, data, registry)
-        up(data, *(key for key, entry in registry['agents'].items()
-                   if entry['placement'] == 'local' and entry['active']))
+        up(data, *(key for key in local_agents if registry['agents'][key]['active']))
         publish_inventory(settings, data, registry)
         configure_network(settings, data, current)
         if settings['systemd']:
             from host_services import enable_services
             enable_services(settings)
-    print('Workspace created.')
-    if pending_local_agents(registry):
-        if not args.config and choose_option('Configure each local agent in Amplifier?', {
-            True: 'Open Amplifier provider setup',
-            False: 'Configure agents later',
-        }):
-            agent_sign_in(data)
-        else:
-            print('Configure local agents with sudo ./constellation_matrix agent configure')
+    print('Workspace deployed.')
+    pending = pending_local_agents(registry)
+    if pending:
+        print('Local agents awaiting provider setup: ' + ', '.join(registry['agents'][key]['name'] for key in pending))
+        print('When ready, open each agent’s Amplifier provider and model setup.')
+        target = '' if data == DATA else f' --data-dir {quote(str(data))}'
+        print(f'  sudo ./constellation_matrix{target} agent configure')
     for key, entry in registry['agents'].items():
         if entry['placement'] == 'remote' and not entry['active']:
             print(f'Agent {key} awaits remote setup.')

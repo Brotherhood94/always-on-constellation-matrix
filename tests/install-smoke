@@ -30,7 +30,7 @@ ports = dict(zip(keys, [sock.getsockname()[1] for sock in listeners]))
 project = 'constellation-fixture-' + token_hex(6)
 config = {
     'server_name': 'fixture.test', 'owner': 'operator',
-    'agents': ['manager'],
+    'agents': ['manager', 'coder'],
     'owner_password_file': str(work / 'password'),
     'project': project, 'systemd': False, 'tailscale': False, **ports,
 }
@@ -40,6 +40,13 @@ PYTHON
 cp "$data/rooms.json" "$work/initial-rooms.json"
 "$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
 cmp "$work/initial-rooms.json" "$data/rooms.json"
+running=$(docker compose --project-directory "$data" --profile agents ps --services --status running)
+grep -Fxq engine-manager <<< "$running"
+grep -Fxq engine-coder <<< "$running"
+if grep -Exq '(manager|coder)' <<< "$running"; then
+  printf '%s\n' 'A Matrix connector started before provider sign-in.' >&2
+  exit 1
+fi
 graph=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["neo4j_port"])' "$data/settings.json")
 python3 - "$graph" <<'PYTHON'
 from gzip import decompress
@@ -106,12 +113,13 @@ assert not settings['systemd']
 assert 'connection' not in settings
 registry = json.loads((data / 'agents.json').read_text())
 assert registry['agents']['manager']['active'] is False
+assert registry['agents']['coder']['active'] is False
 worker = registry['agents']['fixture-worker']
 assert worker['active'] is False and worker['subscription'] == 'Fixture secondary'
 
 first = json.loads((work / 'initial-targets.json').read_text())
 targets = json.loads((data / 'workshop-management/targets.json').read_text())
-assert set(targets) == {'manager', 'fixture-worker'}
+assert set(targets) == {'manager', 'coder', 'fixture-worker'}
 for key in targets:
     assert targets[key]['target'] == first[key]['target']
 
@@ -130,7 +138,7 @@ assert (dashboard / 'dashboard.mjs').is_file()
 assert json.loads((dashboard / 'links.json').read_text())['context'] == settings['context_url']
 agents = json.loads((dashboard / 'agents.json').read_text())['agents']
 assert {agent['name']: agent['status'] for agent in agents} == {
-    'Manager': 'Sign-in required', 'Fixture Worker': 'Sign-in required',
+    'Manager': 'Sign-in required', 'Coder': 'Sign-in required', 'Fixture Worker': 'Sign-in required',
 }
 print('New agent joined Office once, retained its Workshop target, and appeared pending sign-in on the dashboard.')
 PYTHON

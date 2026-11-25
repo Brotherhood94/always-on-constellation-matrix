@@ -6,8 +6,6 @@ On Ubuntu 24.04, install standard Docker Engine with Compose V2, Python 3, curl,
 
 ```sh
 sudo ./constellation_matrix install
-sudo ./constellation_matrix agent configure
-./constellation_matrix status
 ```
 
 Use ↑ and ↓ to browse the agent checklist and inspect each agent’s role, suggested model, capabilities, and limits. Press Enter to select or deselect the highlighted agent. Move to **Done** and press Enter to confirm the roster. An empty selection provisions the workspace so you can add agents later.
@@ -18,7 +16,15 @@ The workspace and integrations checklist opens with **Done** highlighted. On a f
 
 Type your Matrix operator password on the next screen and press Enter. The field masks what you type. Use at least 12 characters.
 
-At the end of installation, choose **Open Amplifier provider setup** to configure the local agents one at a time. Each agent runs Amplifier’s own provider manager. It offers Anthropic for Claude, OpenAI with an API key, and ChatGPT for Codex sign-in. The terminal clears between provider selection, credential prompts, sign-in, and model selection. Add or edit a provider, follow its login prompts, pick the model, and choose **Done**. Amplifier keeps credentials and settings in that Instance’s private persistent home. Constellation activates the agent after its request and session-resume checks pass. [Amplifier provider setup](https://github.com/microsoft/amplifier-app-cli#readme)
+Installation starts the selected local Amplifier Instances together and prints the Element sign-in guide. The dashboard shows **Sign-in required** for agents awaiting provider setup.
+
+When ready, open the provider setup for all pending local agents with this command.
+
+```sh
+sudo ./constellation_matrix agent configure
+```
+
+Each agent runs Amplifier’s own provider manager. It offers Anthropic for Claude, OpenAI with an API key, and ChatGPT for Codex sign-in. The terminal clears between provider selection, credential prompts, sign-in, and model selection. Add or edit a provider, follow its login prompts, pick the model, and choose **Done**. Amplifier keeps credentials and settings in that Instance’s private persistent home. Constellation starts the agent’s Matrix connector after its request and session-resume checks pass. [Amplifier provider setup](https://github.com/microsoft/amplifier-app-cli#readme)
 
 Check the agent name at the top of each page. **Add a provider** creates an additional connection for that agent. Choose **Done** to verify that agent and move to the next one in batch setup. Each agent can use a different provider and model.
 
