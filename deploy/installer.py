@@ -18,7 +18,7 @@ from tempfile import NamedTemporaryFile, TemporaryDirectory
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from agent_picker import choose_option, placement as agent_placement, select_agents
+from agent_picker import choose_option, placement as agent_placement, prompt_text, select_agents
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
@@ -499,16 +499,16 @@ def interactive(presets, saved):
         server = input('Private Matrix DNS name: ').strip()
 
     saved_owner = saved.get('owner', '')
-    default = f' [{saved_owner}]' if saved_owner else ''
-    while True:
-        owner = input(f'Matrix operator username{default}: ').strip() or saved_owner
-        if saved_owner and owner != saved_owner:
-            print('Use the existing Matrix operator username for this workspace.')
-        elif valid_operator_username(owner, presets):
-            break
-        else:
-            print('Use up to 64 lowercase letters, digits, periods, underscores, and hyphens. '
-                  'Start with a letter or digit and choose a name distinct from the agents and services.')
+
+    def username_error(value):
+        if saved_owner and value != saved_owner:
+            return 'Use the existing Matrix operator username for this workspace.'
+        if not valid_operator_username(value, presets):
+            return ('Use up to 64 lowercase letters, digits, periods, underscores, and hyphens. '
+                    'Start with a letter or digit and choose a name distinct from the agents and services.')
+        return None
+
+    owner = prompt_text('Matrix operator username', username_error, default=saved_owner)
 
     integrations = {
         (False, False): 'Workspace only',

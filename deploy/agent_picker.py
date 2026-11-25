@@ -65,6 +65,72 @@ def choose_option(title, options, default=None):
         print('Choose one of the numbers above.')
 
 
+def text_page(screen, title, validate, default):
+    value = ''
+    cursor = 0
+    error = None
+    while True:
+        height, width = screen.getmaxyx()
+        screen.erase()
+        if height < 12 or width < 42:
+            screen.addnstr(0, 0, 'Resize the terminal to see the entry field.', width - 1)
+            screen.refresh()
+            screen.get_wch()
+            continue
+
+        screen.addnstr(0, 0, title, width - 1, curses.A_BOLD)
+        screen.addnstr(1, 0, 'Enter: continue', width - 1)
+        field_width = min(65, width - 1)
+        start = max(0, cursor - field_width + 1)
+        shown = value[start:start + field_width].encode('ascii', 'replace').decode('ascii')
+        screen.addnstr(3, 0, shown.ljust(field_width), field_width, curses.A_UNDERLINE)
+        messages = [f'Leave blank to keep {default}.'] if default else []
+        if error:
+            messages.append(error)
+        lines = [line for message in messages for line in wrap(message, width - 1)]
+        for row, line in enumerate(lines[:height - 5], start=5):
+            screen.addnstr(row, 0, line, width - 1)
+
+        screen.move(3, cursor - start)
+        screen.refresh()
+        key = screen.get_wch()
+        keycode = ord(key) if isinstance(key, str) else key
+        if keycode in ENTER:
+            answer = value.strip() or default
+            error = validate(answer)
+            if error is None:
+                return answer
+        elif keycode in (curses.KEY_BACKSPACE, 8, 127) and cursor:
+            value = value[:cursor - 1] + value[cursor:]
+            cursor -= 1
+        elif keycode == curses.KEY_DC:
+            value = value[:cursor] + value[cursor + 1:]
+        elif keycode == curses.KEY_LEFT:
+            cursor = max(0, cursor - 1)
+        elif keycode == curses.KEY_RIGHT:
+            cursor = min(len(value), cursor + 1)
+        elif keycode == curses.KEY_HOME:
+            cursor = 0
+        elif keycode == curses.KEY_END:
+            cursor = len(value)
+        elif isinstance(key, str) and key.isprintable():
+            value = value[:cursor] + key + value[cursor:]
+            cursor += 1
+
+
+def prompt_text(title, validate, *, default=''):
+    answer = terminal_picker(text_page, title, validate, default)
+    if answer is not None:
+        return answer
+    prompt = f'{title} [{default}]: ' if default else f'{title}: '
+    while True:
+        answer = input(prompt).strip() or default
+        error = validate(answer)
+        if error is None:
+            return answer
+        print(error)
+
+
 def placement(key, preset):
     return preset.get('placement', 'remote' if key == 'remote-worker' else 'local')
 

@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
-from agent_picker import checklist, choose_option, menu, select_agents
+from agent_picker import checklist, choose_option, menu, select_agents, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, interactive, load, main,
     normalized, prepare_storage, register_entry, save, tailscale_dns,
@@ -85,11 +85,36 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(choose_option('Choose', options), 'second')
             self.assertEqual(choose_option('Choose', options, 'second'), 'second')
 
+    def test_username_page_edits_and_retries_on_the_same_screen(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        screen.get_wch.side_effect = [
+            *'Fixturx', '\n', curses.KEY_HOME, curses.KEY_DC, 'f',
+            curses.KEY_END, curses.KEY_BACKSPACE, 'e', '\n',
+        ]
+        validate = Mock(side_effect=['Use a valid username.', None])
+        self.assertEqual(text_page(screen, 'Matrix operator username', validate, ''), 'fixture')
+        self.assertEqual([call.args[0] for call in validate.call_args_list], ['Fixturx', 'fixture'])
+        rendered = [call.args[2] for call in screen.addnstr.call_args_list]
+        self.assertIn('Matrix operator username', rendered)
+        self.assertIn('Use a valid username.', rendered)
+        self.assertGreater(screen.erase.call_count, 1)
+
+    def test_username_page_can_keep_the_existing_username(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (24, 80)
+        screen.get_wch.return_value = '\n'
+        validate = Mock(return_value=None)
+        self.assertEqual(text_page(screen, 'Matrix operator username', validate, 'my-operator'), 'my-operator')
+        validate.assert_called_once_with('my-operator')
+        self.assertIn('Leave blank to keep my-operator.', [call.args[2] for call in screen.addnstr.call_args_list])
+
     def test_interactive_installer_requests_username_directly(self):
         choices = ['tailscale', (True, True)]
         options = ['Choose private access for Matrix and the dashboard', 'Choose optional integrations']
         with patch('installer.choose_option', side_effect=choices) as choose, \
              patch('installer.select_agents', return_value=['coder', 'reviewer']) as picker, \
+             patch('agent_picker.terminal_picker', return_value=None), \
              patch('installer.tailscale_dns', return_value='fixture.test'), \
              patch('builtins.input', return_value='my-operator') as answer:
             settings = normalized(interactive(self.presets, {}), self.presets)
@@ -107,6 +132,7 @@ class InstallerTest(unittest.TestCase):
         choices = ['proxy', (False, False)]
         with patch('installer.choose_option', side_effect=choices) as choose, \
              patch('installer.select_agents', return_value=[]), patch('installer.tailscale_dns', return_value=None), \
+             patch('agent_picker.terminal_picker', return_value=None), \
              patch('builtins.input', side_effect=['matrix.example', '', 'Coder', 'coder', 'my-operator']) as answer, \
              redirect_stdout(StringIO()):
             settings = normalized(interactive(self.presets, {}), self.presets)
@@ -119,6 +145,7 @@ class InstallerTest(unittest.TestCase):
     def test_interactive_rerun_keeps_the_existing_operator_username(self):
         with patch('installer.choose_option', side_effect=['tailscale', (False, False)]), \
              patch('installer.select_agents', return_value=[]), \
+             patch('agent_picker.terminal_picker', return_value=None), \
              patch('installer.tailscale_dns', return_value='fixture.test'), \
              patch('builtins.input', side_effect=['different-operator', '']) as answer, redirect_stdout(StringIO()):
             settings = normalized(interactive(self.presets, {'owner': 'my-operator'}), self.presets)
