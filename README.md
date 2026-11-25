@@ -147,6 +147,17 @@ For unattended provisioning, edit the example configuration, check it with `./co
 
 The installer enables startup at boot. Docker restarts application containers, Tailscale Serve serves the static dashboard, and systemd runs the host services, including the Dot tunnel once connected. [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 
+### Remote worker setup
+
+Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
+
+1. **Worker.** Install Docker Engine with Compose V2, Tailscale, and SSHFS. Generate a dedicated Ed25519 key for the shared desktop.
+2. **VPS.** Register the **Remote Worker** profile, authorize the worker’s public key with `remote desktop`, and create its private enrollment with `remote export`.
+3. **Worker.** Verify the VPS desktop host key, mount the shared desktop, and run `remote attach`. Complete Amplifier sign-in and send the resulting files back to the VPS.
+4. **VPS.** Run `persona-connect` and `remote confirm`. Check that the worker is registered, then verify an Office handoff and a shared-file round trip.
+
+[Copyable commands for both machines](docs/runbook.md#add-a-remote-worker)
+
 ## Operate and extend
 
 | Task | Start here |
@@ -161,6 +172,14 @@ The installer enables startup at boot. Docker restarts application containers, T
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
+
+## Planned features
+
+- Match natural-language requests in ChatGPT or Element to a verified Telegram chat, and ask when several registered chats match.
+- Show the full destination in Telegram Control for 10 seconds, then send without a separate approval.
+- Attach a named file from the VPS shared desktop to a Telegram message.
+
+[Telegram feature plan](next_features_plans/plan.md)
 
 ## Uninstall
 

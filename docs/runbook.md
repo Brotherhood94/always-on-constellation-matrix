@@ -135,30 +135,126 @@ Confirm the migration by typing `migrate`. Use the same migration command to res
 
 ## Add a remote worker
 
-Select `remote-worker` during setup or add a profile with `"placement": "remote"`. Generate a dedicated Ed25519 SSH key on the remote host for the desktop. On the coordinator, approve its public key and export the enrollment file.
+The VPS runs the workspace and holds the shared desktop. The worker runs its own Amplifier Instance and Matrix connector. Use the same repository revision on both Linux hosts. The commands below assume the default VPS data directory and Ubuntu 24.04 on the worker. Replace the example tailnet DNS names with those of your machines. If the VPS uses a custom data directory, pass `--data-dir` before each VPS subcommand.
+
+Both hosts need to be on the same tailnet. The worker needs access to the VPS’s Matrix, dashboard, and Context Intelligence endpoints, plus TCP 2222 for desktop SFTP. The VPS needs access to TCP 19444 on the worker for Persona Workshop. The file transfer examples use your normal SSH login to the VPS.
+
+### 1. Worker · Prepare the host and desktop key
+
+Install standard Docker Engine with Compose V2 and Tailscale on the worker. Join the tailnet before continuing. Use the same checkout as the VPS. [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) · [Tailscale installation](https://tailscale.com/docs/install)
+
+Install Python and SSHFS, then generate a dedicated key for the boot-time mount. Reuse that key on retries. Send only the public key to the VPS. Set `vps_login` to your VPS SSH login and keep the same worker shell for the following steps.
 
 ```sh
-sudo ./constellation_matrix remote desktop --public-key /path/to/remote-worker.pub
-sudo ./constellation_matrix remote export remote-worker --host worker.example --output /root/worker-enrollment.json
+sudo apt-get update
+sudo apt-get install -y python3 sshfs
+vps_login='operator@vps.example.ts.net'
+handoff="$HOME/.constellation-remote-worker"
+install -d -m 0700 "$handoff"
+sudo install -d -m 0700 /etc/constellation-desktop
+sudo ssh-keygen -t ed25519 -N '' -C constellation-desktop \
+  -f /etc/constellation-desktop/id_ed25519
+sudo cat /etc/constellation-desktop/id_ed25519.pub > "$handoff/desktop.pub"
+ssh "$vps_login" 'install -d -m 0700 "$HOME/.constellation-remote-worker"'
+scp "$handoff/desktop.pub" "$vps_login:.constellation-remote-worker/"
 ```
 
-Transfer the enrollment file privately. On the worker, install Docker, Tailscale, and SSHFS. Verify the desktop server’s SSH host key against the key reported by `remote desktop`. Mount `desktop-share@<tailnet-host>:/desktop` on the remote host over port 2222 with `allow_other,default_permissions,uid=991,gid=991`. Configure the SSHFS mount to come up before Docker after a reboot. The key only supports SFTP to the shared desktop.
+### 2. VPS · Authorize the key and export enrollment
+
+If you selected **Remote Worker** during setup, its profile is already registered. If you skipped it, run the following from the VPS checkout to register the built-in preset.
 
 ```sh
+handoff="$HOME/.constellation-remote-worker"
+(umask 077; python3 - <<'PY' > "$handoff/profile.json"
+import json
+from pathlib import Path
+
+preset = json.loads(Path('deploy/matrix/agent-profiles.json').read_text())['remote-worker']
+print(json.dumps({**preset, 'key': 'remote-worker', 'placement': 'remote'}, indent=2))
+PY
+)
+sudo ./constellation_matrix agent add --profile "$handoff/profile.json"
+```
+
+Authorize the worker key and copy the desktop host public key printed by `remote desktop` for use in the next step. The enrollment file contains the worker’s scoped Matrix and Context Intelligence credentials. Keep it outside the checkout with mode `0600`.
+
+```sh
+handoff="$HOME/.constellation-remote-worker"
+worker_host='worker.example.ts.net'
+sudo ./constellation_matrix remote desktop --public-key "$handoff/desktop.pub"
+sudo ./constellation_matrix remote export remote-worker \
+  --host "$worker_host" --output "$handoff/enrollment.json"
+sudo chown "$(id -u):$(id -g)" "$handoff/enrollment.json"
+```
+
+### 3. Worker · Pin the VPS key, mount the desktop, and attach
+
+Fetch the private enrollment over SSH. Substitute the actual VPS tailnet DNS name and the full `ssh-ed25519 …` public host key from the VPS terminal. This pins the dedicated SFTP endpoint before the worker connects.
+
+```sh
+scp "$vps_login:.constellation-remote-worker/enrollment.json" "$handoff/enrollment.json"
+chmod 0600 "$handoff/enrollment.json"
+vps_host='vps.example.ts.net'
+desktop_host_key='ssh-ed25519 REPLACE_WITH_THE_VPS_DESKTOP_HOST_PUBLIC_KEY'
+printf '[%s]:2222 %s\n' "$vps_host" "$desktop_host_key" \
+  | sudo tee /etc/constellation-desktop/known_hosts >/dev/null
+sudo chmod 0600 /etc/constellation-desktop/known_hosts
+sudo install -d -m 0755 /mnt/constellation-desktop
+```
+
+On a dedicated worker, add this line to `/etc/fstab` with `sudoedit /etc/fstab`, using the same VPS tailnet DNS name. UID and GID `991` let the worker containers use the mount. [SSHFS mount options](https://github.com/libfuse/sshfs/blob/master/sshfs.rst) · [systemd mount options](https://www.freedesktop.org/software/systemd/man/latest/systemd.mount.html)
+
+```fstab
+desktop-share@vps.example.ts.net:/desktop /mnt/constellation-desktop fuse.sshfs noauto,_netdev,x-systemd.requires=tailscaled.service,port=2222,IdentityFile=/etc/constellation-desktop/id_ed25519,IdentitiesOnly=yes,UserKnownHostsFile=/etc/constellation-desktop/known_hosts,StrictHostKeyChecking=yes,BatchMode=yes,allow_other,default_permissions,uid=991,gid=991,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 0 0
+```
+
+Open `sudo systemctl edit docker.service` and add this drop-in. On boot, Docker waits for the desktop mount before it starts the worker containers. [systemd mount dependencies](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#RequiresMountsFor=)
+
+```ini
+[Unit]
+RequiresMountsFor=/mnt/constellation-desktop
+```
+
+Mount the desktop, then run `remote attach` from the worker checkout. Complete the Amplifier provider and model prompts on the worker. Use that worker’s actual Tailscale DNS name for `--workshop-host`.
+
+```sh
+sudo systemctl daemon-reload
+sudo mount /mnt/constellation-desktop
+findmnt --mountpoint /mnt/constellation-desktop
+worker_host='worker.example.ts.net'
 sudo ./constellation_matrix --data-dir /srv/constellation-worker remote attach \
-  --enrollment /root/worker-enrollment.json --desktop-mount /mnt/constellation-desktop \
-  --workshop-host '<remote-worker-tailnet-dns-name>'
+  --enrollment "$handoff/enrollment.json" --desktop-mount /mnt/constellation-desktop \
+  --workshop-host "$worker_host"
 ```
 
-Transfer the resulting `workshop-token`, `workshop-ca.pem`, and `receipt.json` to the coordinator through a private channel. Enroll the live Instance in Workshop with the reported HTTPS management origin.
+Send the generated receipt, dedicated Workshop token, and TLS CA back to the VPS. The originals stay in the worker’s data directory.
 
 ```sh
-sudo ./constellation_matrix persona-connect remote-worker \
-  --url 'https://<remote-worker-tailnet-dns-name>:19444' \
-  --token-file /root/workshop-token --ca-file /root/workshop-ca.pem
+for artifact in receipt.json workshop-token workshop-ca.pem; do
+  sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" \
+    "/srv/constellation-worker/$artifact" "$handoff/$artifact"
+done
+scp "$handoff/receipt.json" "$handoff/workshop-token" "$handoff/workshop-ca.pem" \
+  "$vps_login:.constellation-remote-worker/"
 ```
 
-Then run `sudo ./constellation_matrix remote confirm remote-worker --receipt /path/to/receipt.json`. Verify a real Office handoff and a file round trip in both directions. The coordinator shows the remote worker as **Registered** after confirmation. Keep tailnet access scoped to the selected operator devices and worker hosts.
+### 4. VPS · Connect Persona Workshop and confirm the worker
+
+Use the HTTPS management origin printed by `remote attach`. `remote confirm` checks the enrollment device receipt and the worker’s Workshop connection before registering it for Office routing.
+
+```sh
+handoff="$HOME/.constellation-remote-worker"
+worker_host='worker.example.ts.net'
+sudo ./constellation_matrix persona-connect remote-worker \
+  --url "https://$worker_host:19444" \
+  --token-file "$handoff/workshop-token" --ca-file "$handoff/workshop-ca.pem"
+sudo ./constellation_matrix remote confirm remote-worker --receipt "$handoff/receipt.json"
+sudo ./constellation_matrix status --refresh
+```
+
+Check that **Remote Worker** appears as **Registered**. In Office, ask a local worker to write a test file under `desktop/`, then ask Manager to delegate reading and appending a line to **Remote Worker**. Have the local worker read the result back. After the next worker reboot, check the mount with `findmnt --mountpoint /mnt/constellation-desktop` and repeat the Office check. [Deployment scenarios](acceptance.md#post-deployment-scenarios)
+
+After confirmation, remove the transfer copies of `enrollment.json` and `workshop-token` from both handoff directories. Each service uses the credentials stored in its own data directory.
 
 ## Back up and recover
 
