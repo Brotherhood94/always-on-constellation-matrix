@@ -123,7 +123,7 @@ sudo ./constellation_matrix agent configure
 
 1. Browse the agent checklist with the arrow keys and press Enter to select or deselect an agent. Move to **Done** and press Enter to confirm. Choose Manager, Coder, and Reviewer to try the flow above.
 2. Choose **Open Amplifier provider setup** when the workspace is ready, or run `sudo ./constellation_matrix agent configure` later. In each agent’s Amplifier menu, add a provider, complete its login, pick its model, and choose **Done**.
-3. Sign in to Element, open **Agents → Office**, and use the mention picker. Try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.”
+3. Download Element Desktop. Choose **Sign in → Edit** and enter the homeserver URL printed by the installer. Sign in with your Matrix username and password, then open **Agents → Office**. Use the mention picker and try “@Manager Ask Coder to write a short deployment checklist and have Reviewer check it.” [Download Element](https://element.io/download) · [Element setup](docs/runbook.md#connect-in-element)
 
 For a repeatable setup, edit the [example configuration](deploy/config.example.json), check it with `./constellation_matrix validate --config <file>`, and pass the same file to `sudo ./constellation_matrix install --config <file>`.
 

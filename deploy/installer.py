@@ -525,6 +525,23 @@ def interactive(presets, saved):
     return raw
 
 
+def show_element_setup(settings):
+    homeserver = 'https://' + settings['server_name']
+    print()
+    print('Connect to your workspace in Element')
+    print('1. Download Element Desktop on your computer from https://element.io/download')
+    if settings['tailscale']:
+        print('   Connect that device to your Tailscale network before signing in.')
+    print('2. Open Element, choose Sign in, then Edit next to the homeserver.')
+    print(f'   Enter {homeserver} as your custom homeserver.')
+    print(f"3. Sign in as {settings['owner']} with the Matrix password you chose during setup.")
+    print('4. Open Agents → Office to work with the agents.')
+    print('   Open Agents → VPS Alerts → Pinned messages for the workspace shortcuts.')
+    print()
+    print('Dashboard: ' + settings['dashboard_url'])
+    print('Context Intelligence: ' + settings['context_url'])
+
+
 def install(data, args):
     presets = load(PRESETS)
     previous = data / 'settings.json'
@@ -580,8 +597,7 @@ def install(data, args):
         if settings['systemd']:
             from host_services import enable_services
             enable_services(settings)
-    print('Workspace created. Sign in to Element at https://' + settings['server_name'] + '.')
-    print('Dashboard: ' + settings['dashboard_url'])
+    print('Workspace created.')
     if pending_local_agents(registry):
         if not args.config and choose_option('Configure each local agent in Amplifier?', {
             True: 'Open Amplifier provider setup',
@@ -593,6 +609,7 @@ def install(data, args):
     for key, entry in registry['agents'].items():
         if entry['placement'] == 'remote' and not entry['active']:
             print(f'Agent {key} awaits remote setup.')
+    show_element_setup(settings)
 
 
 def agent_add(data, args):

@@ -28,7 +28,13 @@ State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before th
 
 The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 8444 for Neo4j Browser, and TLS TCP 17687 for Bolt. For a different private proxy, set `tailscale` to false and provide the dashboard and browser URLs in the install config. Serve the deployment’s `dashboard/` directory and proxy to the configured loopback ports, which default to 18008 for Matrix, 17474 for Neo4j Browser, and 17688 for Bolt.
 
-Sign in to Element with your Matrix operator account. The Agents Space links Office, VPS Alerts, and the private agent chats you selected. In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view. The monitor publishes its shortcuts once it sees the operator in VPS Alerts. Sign in to Neo4j Browser as `neo4j` using the deployment’s local `context/neo4j-password` file.
+## Connect in Element
+
+1. Download Element Desktop on your computer. If you selected Tailscale Serve, connect that computer to your tailnet. [Download Element](https://element.io/download)
+2. Open Element and choose **Sign in**, then **Edit** next to the homeserver. Enter the HTTPS homeserver URL printed by the installer and sign in with your Matrix username and password. [Element onboarding](https://docs.element.io/latest/element-support/quick-start-guide/onboarding/)
+3. Open **Agents → Office**. The Space also links VPS Alerts and the private agent chats you selected. Open **Agents → VPS Alerts → Pinned messages** for the dashboard and Context Intelligence shortcuts. The monitor publishes them once it sees the operator in VPS Alerts.
+
+In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view. Sign in to Neo4j Browser as `neo4j` using the deployment’s local `context/neo4j-password` file.
 
 ## Boot and service placement
 

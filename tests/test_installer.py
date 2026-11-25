@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, interactive, load, main,
-    normalized, password, prepare_storage, register_entry, save, tailscale_dns,
+    normalized, password, prepare_storage, register_entry, save, show_element_setup, tailscale_dns,
 )
 from agent_catalog import document
 from compose import definition
@@ -228,6 +228,23 @@ class InstallerTest(unittest.TestCase):
             self.assertIsNone(tailscale_dns())
         with patch('installer.run', side_effect=FileNotFoundError):
             self.assertIsNone(tailscale_dns())
+
+    def test_element_setup_prints_download_and_deployment_details(self):
+        output = StringIO()
+        with redirect_stdout(output):
+            show_element_setup(self.settings)
+        rendered = output.getvalue()
+        self.assertIn('https://element.io/download', rendered)
+        self.assertIn('https://fixture.test as your custom homeserver', rendered)
+        self.assertIn('Sign in as operator', rendered)
+        self.assertIn('Tailscale', rendered)
+        self.assertIn('Agents → VPS Alerts → Pinned messages', rendered)
+        self.assertIn(self.settings['dashboard_url'], rendered)
+        self.assertIn(self.settings['context_url'], rendered)
+        output = StringIO()
+        with redirect_stdout(output):
+            show_element_setup({**self.settings, 'tailscale': False})
+        self.assertNotIn('Tailscale', output.getvalue())
 
     def test_legacy_connection_config_preserves_existing_agent_identity(self):
         raw = dict(self.raw)
