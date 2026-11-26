@@ -145,6 +145,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, guide, po
     const picked = row.selection && JSON.parse(row.selection);
     if (picked) return { matches: [picked] };
     const result = await guide({ id: row.id, action: 'resolve', target: scope.target, type: scope.type,
+      ...(['draft', 'send'].includes(scope.action) && { allowGivenName: true }),
       linkedOnly: !['open', 'lookup'].includes(scope.action), forOpening: scope.action === 'open' });
     if (!result?.ok || !Array.isArray(result.rooms)) return { error: result?.message ?? 'Telegram Bridge is unavailable.' };
     return { matches: candidates(result.rooms, scope) };

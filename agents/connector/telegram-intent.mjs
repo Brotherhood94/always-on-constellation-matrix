@@ -46,21 +46,27 @@ export function telegramIntent(body, { office = false } = {}) {
   if (typeof body !== 'string' || Buffer.byteLength(body) > 4800 || /^\s*[>`]/u.test(body)) return null;
   let input = body.trim();
   if (office && !/\btelegram\b/iu.test(input)) return null;
-  input = input.replace(/^telegram\s*[,\-:]\s*/iu, '').replace(/^(?:please|per favore),?\s+/iu, '');
+  const telegramPrefix = /^telegram\s*[,\-:]\s*/iu;
+  const explicitChannel = telegramPrefix.test(input);
+  input = input.replace(telegramPrefix, '').replace(/^(?:please|per favore),?\s+/iu, '');
   const findAndDraft = /^(?:find|look up) (.{1,120}?) on telegram and (?:prepare|draft) a (private )?message (?:saying|that says) ([\s\S]+)$/iu.exec(input);
   if (findAndDraft) input = `prepare a ${findAndDraft[2] ?? ''}message to ${findAndDraft[1]} saying ${findAndDraft[3]}`;
   const plain = input.replace(/\s+(?:on|su) telegram[.!]?$/iu, '').replace(/[.!?]$/u, '');
   if (/^(?:list|show(?: me)?|elenca|mostrami)(?:\s+(?:my|the|le|mie))*\s+(?:(?:telegram\s+)?rooms|(?:stanze|chat)(?:\s+(?:di )?telegram)?)$/iu.test(plain)) {
     return { action: 'list' };
   }
-  const draft = /^(?<verb>prepare|draft|send|prepara|scrivi|invia)(?:\s+(?:a|an|un|una))?\s+(?:(?<private>private|privat[oa])\s+)?(?:(?:telegram\s+)?(?:message|messaggio|bozza|draft)(?:\s+(?<privateAfter>privat[oa]|private))?\s+)?(?:to|for|ad?|per|nel)\s+(?<target>[^\r\n]{1,130}?)\s*(?:\s+(?:on|su) telegram)?(?:\s+(?:saying|that says|dicendo|che dice|che)|\s*:\s+)\s*(?<text>[\s\S]+)$/iu.exec(input);
+  const draft = /^(?<verb>prepare|draft|send|prepara|scrivi|invia|manda)(?:\s+(?:a|an|un|una))?\s+(?:(?<private>private|privat[oa])\s+)?(?:(?:telegram\s+)?(?:message|messaggio|bozza|draft)(?:\s+(?<privateAfter>privat[oa]|private))?\s+)?(?:to|for|ad?|per|nel)\s+(?<target>[^\r\n]{1,130}?)(?:\s+(?:on|su) telegram)?(?:(?:\s+(?:saying|that says|dicendo|che dice|che)|\s*:\s+)\s*(?<text>[\s\S]+)|\s+(?<literal>["“«][\s\S]+))$/iu.exec(input);
   if (draft) {
-    const { verb, target, text } = draft.groups;
+    const { verb, target, text, literal } = draft.groups;
+    if (office && !explicitChannel && !/\btelegram\b/iu.test(input.slice(0, -(text ?? literal).length))) return null;
     const dest = destination(target, draft.groups.private || draft.groups.privateAfter ? 'direct' : undefined);
-    const quoted = /^(?:"([\s\S]+)"|“([\s\S]+)”)\.?$/u.exec(text.trim());
-    const message = quoted ? quoted[1] ?? quoted[2] : text.trim();
+    const value = (text ?? literal).trim();
+    const quoted = literal ? /^(?:"([^"]+)"|“([^”]+)”|«([^»]+)»)\.?$/u.exec(value)
+      : /^(?:"([\s\S]+)"|“([\s\S]+)”|«([\s\S]+)»)\.?$/u.exec(value);
+    if (literal && !quoted) return null;
+    const message = quoted ? quoted[1] ?? quoted[2] ?? quoted[3] : value;
     return dest && message && Buffer.byteLength(message) <= 3500 ? {
-      action: /^(?:send|invia|scrivi)$/iu.test(verb) ? 'send' : 'draft', ...dest, text: message,
+      action: /^(?:send|invia|scrivi|manda)$/iu.test(verb) ? 'send' : 'draft', ...dest, text: message,
     } : null;
   }
   const summary = /^(?:summarize|summarise|what happened|give me an update|riassumi|aggiornami|cosa è successo)\b.*?\b(?:in|nel|nella|su|about)\s+(.+)$/iu.exec(plain);

@@ -12,9 +12,12 @@ In **Telegram → Telegram Agent**, select **@Telegram Agent** from Element’s 
 
 - “@Telegram Agent, add Sam Example to my Telegram rooms.” You can also specify `@sample_contact`, a numeric Telegram user ID, or a known group name or ID.
 - “@Telegram Agent, prepare a private message to Sam Example saying tomorrow works for me.”
+- `@Telegram Agent, manda messaggio a Sam "ciao bello".`
 - “@Telegram Agent, summarize what I missed today in Project Room.”
 
 The agent uses the linked Telegram account to resolve contacts and groups. When several chats match, reply to the agent’s private thread with `telegram choose 2`, using the number it displayed. Opening a chat links it under **Telegram → Rooms**. To remove the link, ask the agent to unlink the chat from Telegram. Drafts and updates require a [verified chat binding](#bind-verified-chats-to-the-telegram-space). When you ask to send a message, review the draft and choose **Approve and send** in the private thread.
+
+The bridge and pinned guide can be active while the agent is still being set up. If the Telegram status lists only the guide and bridge, [finish setting up and starting the agent](#start-the-drafting-agent) before trying an example.
 
 ## Search for a Telegram user
 

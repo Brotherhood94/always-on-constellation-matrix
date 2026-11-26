@@ -54,6 +54,13 @@ test('the pinned requests and Italian Telegram requests have bounded intents', (
   }
   assert.equal(telegramIntent('Send a message to Sam: test', { office: true }), null);
   assert.equal(telegramIntent('Send a message to Sam on Telegram: "exact text!"').text, 'exact text!');
+  assert.deepEqual(telegramIntent('manda messaggio a Sam "ciao bello"'),
+    { action: 'send', target: 'Sam', text: 'ciao bello' });
+  assert.deepEqual(telegramIntent('Manda un messaggio a Sam su Telegram «ciao bello!»', { office: true }),
+    { action: 'send', target: 'Sam', text: 'ciao bello!' });
+  assert.equal(telegramIntent('Telegram: Manda un messaggio a Sam «ciao bello»', { office: true })?.action, 'send');
+  assert.equal(telegramIntent('Manda un messaggio a Sam "hai installato Telegram?"', { office: true }), null);
+  assert.equal(telegramIntent('Manda un messaggio a Sam "ciao" e a Jo "a domani"'), null);
   assert.deepEqual(telegramIntent('Cosa è successo oggi nel privato Sam?'),
     { action: 'read', target: 'Sam', type: 'direct', question: 'Cosa è successo oggi nel privato Sam?' });
 });
@@ -162,4 +169,17 @@ test('requests require a binding and draft-only and send tasks wait for differen
   assert.equal(draftReceipt({ state: 'cancelled' }, {}, 'send'), 'blocked');
   assert.equal(draftReceipt({ state: 'unknown' }, {}, 'send'), 'unconfirmed');
   assert.equal(draftReceipt({ state: 'bridge_confirmed' }, {}, 'send'), 'completed');
+});
+
+test('a short Italian send request queues one approval draft and does not deliver it', async () => {
+  const f = fixture();
+  f.setBinding({ id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 });
+  const event = direct('$short-request', 'manda messaggio a Sam "ciao bello"');
+  assert.equal(await f.broker().direct(event), true);
+  assert.equal(await f.broker().direct(event), true);
+  await f.broker().tick();
+  const queued = f.store.all('SELECT payload FROM control_request WHERE event=?', event.event_id);
+  assert.equal(queued.length, 1);
+  assert.equal(JSON.parse(queued[0].payload).text, 'ciao bello');
+  assert.deepEqual(f.effects, []);
 });

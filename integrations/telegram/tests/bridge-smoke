@@ -489,7 +489,7 @@ try {
   assert.equal(delegatedCalls, 1);
 
   const direct = await reader.encryptEvent(controlRoom, 'm.room.message', {
-    msgtype: 'm.text', body: '@Telegram Agent, prepare a private message to Pilot saying hello!',
+    msgtype: 'm.text', body: '@Telegram Agent: manda messaggio a Pilot "ciao bello"',
     'm.mentions': { user_ids: [agent.user_id] },
   });
   const directEvent = await reader.put(controlRoom, 'fixture-mention-telegram-agent', direct);
@@ -497,6 +497,9 @@ try {
   assert.equal(store.controlRequiresDot(directEvent), false);
   assert.equal(delegatedCalls, 2);
   const directDraft = store.get('SELECT * FROM draft WHERE control_event=?', directEvent);
+  assert.equal(directDraft.body, 'ciao bello');
+  assert.equal(directDraft.state, 'awaiting_approval');
+  assert.equal(directDraft.event, null);
   const cancelDirect = await reader.encrypted(controlRoom, 'telegram reject ' + directDraft.id + ' 1');
   await reader.put(controlRoom, 'fixture-reject-telegram-agent', cancelDirect);
   await waitFor(() => store.draft(directDraft.id).state === 'cancelled', 'the direct draft to be rejected');

@@ -155,9 +155,16 @@ export async function telegramOfficeAction(input, options) {
   if (input.action === 'resolve') {
     const link = groupLink.exec(target);
     const selector = link ? 'channel:' + link[1] : target;
-    const rows = eligible.filter(({ room, peer, name }) => linked.has(room) &&
-      (peer === selector || room === selector || names(name) === names(selector)));
-    if (input.linkedOnly && !username.test(selector)) return { ok: true, rooms: rows.slice(0, 11) };
+    const selectorName = names(selector);
+    const rooms = eligible.filter(({ room, peer }) => linked.has(room) &&
+      (!input.type || (input.type === 'direct') === peer.startsWith('user:')));
+    const rows = rooms.filter(({ room, peer, name }) => peer === selector || room === selector || names(name) === selectorName);
+    if (input.linkedOnly && !username.test(selector)) {
+      const shortName = input.allowGivenName === true && input.type !== 'group' && /^\p{L}{2,}$/u.test(selectorName);
+      const matches = rows.length || !shortName ? rows : rooms.filter(({ peer, name }) =>
+        peer.startsWith('user:') && names(name)?.startsWith(selectorName + ' '));
+      return { ok: true, rooms: matches.slice(0, 11) };
+    }
     if (groupId.test(selector) || userPeer.test(selector)) {
       if (rows.length) return { ok: true, rooms: rows };
       if (input.forOpening) return { ok: true, rooms: [{ peer: selector, name: selector }] };

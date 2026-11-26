@@ -107,6 +107,31 @@ test('an unexpected Control member blocks the Office draft before encryption', a
   assert.equal(result.ok, false);
 });
 
+test('a short contact name resolves only linked direct chats for drafting and preserves ambiguity', async () => {
+  const space = '!telegram:sample.test';
+  const control = '!control:sample.test';
+  const sam = { room: '!sam:sample.test', peer: 'user:1001', name: 'Sam Example' };
+  const second = { room: '!sam-other:sample.test', peer: 'user:1002', name: 'Sam Sample' };
+  const group = { room: '!team:sample.test', peer: 'channel:7', name: 'Sam Project' };
+  const hidden = { room: '!hidden:sample.test', peer: 'user:1003', name: 'Sam Hidden' };
+  const candidates = [sam, second, group, hidden];
+  const state = (type, content, state_key = '') => ({ type, content, state_key });
+  const options = { space, control, owner, guide: agent,
+    database: { query: async () => ({ rows: candidates }) },
+    client: { getRoomState: async () => [
+      state('m.room.create', { type: 'm.space', 'm.federate': false }),
+      state('m.room.join_rules', { join_rule: 'invite' }),
+      state('m.room.member', { membership: 'join' }, owner), state('m.room.member', { membership: 'join' }, agent),
+      ...[sam, second, group].map(({ room }) => state('m.space.child', { via: ['sample.test'] }, room)),
+    ] },
+  };
+  const request = { id: '$short', action: 'resolve', target: 'Sam', linkedOnly: true, allowGivenName: true };
+  assert.deepEqual((await telegramOfficeAction(request, options)).rooms, [sam, second]);
+  assert.deepEqual((await telegramOfficeAction({ ...request, target: sam.name }, options)).rooms, [sam]);
+  assert.deepEqual((await telegramOfficeAction({ ...request, type: 'group' }, options)).rooms, []);
+  assert.deepEqual((await telegramOfficeAction({ ...request, allowGivenName: false }, options)).rooms, []);
+});
+
 test('Telegram Control publishes an encrypted, bounded reply to an operator search', async () => {
   const control = '!control:sample.test';
   const event = { event_id: '$search', type: 'm.room.message', sender: owner, origin_server_ts: Date.now(),
