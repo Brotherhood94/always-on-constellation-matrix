@@ -103,8 +103,9 @@ function telegramGuide(command) {
       { label: 'Find a contact by name or open a group without a numeric link',
         url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#add-a-telegram-contact-or-group' },
     ]],
-    ['5. Element · Click the room link and send a message', [
-      'Click the room link in the bridge’s reply and join if prompted. Check the recipient, then send a message from that room. Once Telegram accepts it, the room appears in the Telegram Space.',
+    ['5. Element · Open the room from Telegram → Rooms', [
+      'Click the room link in the bridge’s reply and join if prompted. If the contact name is linked twice, the second link opens the room.',
+      'Find the chat under Telegram → Rooms. Check the recipient there before sending a message.',
       { label: 'Optional · Set up drafts and approvals in Telegram Control',
         url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#start-the-drafting-agent' },
     ]],

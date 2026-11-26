@@ -1,6 +1,6 @@
 # Telegram integration
 
-This optional integration adds a private, top-level **Telegram** Space with **Telegram Control**, the **Telegram Bridge** DM, and the rooms you use to send messages to Telegram. The optional drafting connector attaches over scoped ACP to one persistent Constellation Instance running Amplifier. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
+This optional integration adds a private, top-level **Telegram** Space with **Telegram Control**, the **Telegram Bridge** DM, and your bridged Telegram rooms. The optional drafting connector attaches over scoped ACP to one persistent Constellation Instance running Amplifier. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
 
 The installer joins your Matrix account to **Telegram** and **Telegram Control**. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
 
@@ -54,9 +54,11 @@ Enter your existing Matrix operator password to link the bridge DM. The command 
    - **Group without topics.** In Telegram, copy a link to a message in the group. For `https://t.me/c/1234567890/42`, send `!tg create-portal channel:1234567890` in Telegram Bridge. Use the first number from the link. [Telegram message links](https://core.telegram.org/api/links#message-links)
    - **Basic group or group with a public link.** In Telegram Desktop, open the group and choose **⋯ → Export chat history → JSON**. Check the chat name in `result.json` and use the top-level `id`. Send `!tg create-portal chat:<id>` for a basic group or `!tg create-portal channel:<id>` for a supergroup without topics. [Telegram Desktop export](https://telegram.org/blog/export-and-more) · [Export fields](https://core.telegram.org/import-export#chat)
 
-2. **Element.** Click the room link in the bridge’s reply and join if prompted. Check the name and recipient, then send a message in that room. Once Telegram accepts the message, the room appears in the **Telegram** Space. Your contact receives it in their existing Telegram conversation.
+2. **Element.** Click the room link in the bridge’s reply and join if prompted. If the contact name is linked twice, the second link opens the room. Find the chat under **Telegram → Rooms**, check the recipient, and send your message there. Your contact receives it in their existing Telegram conversation.
 
 If the bridge has not found the group yet, send `!tg sync-chats`, wait for it to finish, then retry `!tg create-portal`. If you use multiple Telegram accounts, send `!tg list-logins` to find your own account ID and put it before the username or group ID in the command. [Telegram bridge group sync](https://github.com/mautrix/telegram/blob/8d85e547208fcdeae47b08f57bca0a7c8cf910af/pkg/connector/commands.go)
+
+If Element also lists the room in **Home**, open **Settings → Sidebar** and turn off **Show all rooms**. [Element sidebar settings](https://docs.element.io/latest/element-support/element-webdesktop-client-settings/sidebar-settings/)
 
 ### Open a room on an incoming message
 
