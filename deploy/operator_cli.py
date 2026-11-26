@@ -173,6 +173,8 @@ def telegram_as_operator(data, args):
     if not settings['telegram']:
         raise ValueError('Select Telegram in the installer first')
     with matrix_session(current, password(settings, options.owner_password_file)) as token:
+        if action == 'activate':
+            print('Telegram activation uses sudo to start the bridge and reload Synapse.', flush=True)
         elevate(data, '_host', 'telegram-layout', payload={'action': action, 'token': token,
                                                          'bridge_room': options.bridge_room})
 

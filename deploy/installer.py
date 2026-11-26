@@ -683,7 +683,13 @@ def configure_network(settings, data, previous=None):
 @contextmanager
 def operator_lock(data):
     with (data / '.operator.lock').open('a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print('Another Constellation command is updating this workspace. Waiting for it to finish…',
+                  file=sys.stderr, flush=True)
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            print('Workspace lock acquired. Continuing.', file=sys.stderr, flush=True)
         yield
 
 

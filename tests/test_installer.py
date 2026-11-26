@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, close_office_setup_notice, context_config, install, interactive, load, main,
-    normalized, password, prepare_graph_password, prepare_storage, provision_layout, register_entry, save,
+    normalized, operator_lock, password, prepare_graph_password, prepare_storage, provision_layout, register_entry, save,
     show_element_setup, tailscale_dns, telegram,
 )
 from agent_catalog import document
@@ -1016,6 +1016,16 @@ class InstallerTest(unittest.TestCase):
             prepare_storage(self.settings, data)
             for name in ('index.html', 'dashboard.mjs', 'dashboard.css', 'links.json'):
                 self.assertEqual((data / 'dashboard' / name).stat().st_mode & 0o777, 0o644)
+
+    def test_workspace_lock_reports_contention_and_waits(self):
+        from fcntl import LOCK_EX, LOCK_NB
+
+        with TemporaryDirectory() as work, redirect_stderr(StringIO()) as output, \
+             patch('installer.fcntl.flock', side_effect=[BlockingIOError(), None]) as flock:
+            with operator_lock(Path(work)):
+                self.assertIn('Another Constellation command is updating this workspace', output.getvalue())
+                self.assertIn('Workspace lock acquired', output.getvalue())
+            self.assertEqual([item.args[1] for item in flock.call_args_list], [LOCK_EX | LOCK_NB, LOCK_EX])
 
     def test_status_refresh_republishes_dashboard_assets_from_the_checkout(self):
         with TemporaryDirectory() as work:
