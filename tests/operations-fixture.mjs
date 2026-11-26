@@ -489,7 +489,10 @@ try {
   });
   const notice = await eventually(() => readShortcut(officeSetup, office));
   assert.equal(notice.msgtype, 'm.notice');
-  assert.match(notice.body, /Choose the agents to install, select Done, and complete Amplifier setup/u);
+  assert.match(notice.body, /Installer still open\nContinue in the same VPS terminal/u);
+  assert.match(notice.body, /Installer closed or interrupted[\s\S]*already registered.*\n.* agent configure/u);
+  assert.match(notice.body, /still need to choose or register your agents.*\n.* setup-guide/u);
+  assert.ok(notice.formatted_body.includes("<pre><code>./constellation_matrix --data-dir '/srv/fixture workspace' agent configure</code></pre>"));
   assert.ok(notice.formatted_body.includes(`<pre><code>${officeCommand}</code></pre>`));
   assert.equal(notice['m.mentions'], undefined);
   assert.ok(!(await api(officeRoute + '/joined_members', { token })).joined[monitorId]);

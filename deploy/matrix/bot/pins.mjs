@@ -38,10 +38,15 @@ function message(title, sections) {
 
 export function officeSetupNotice(command) {
   return { ...message('Finish setting up Office', [
-    ['VPS terminal', [
-      'Return to the installer and confirm that you have signed in to Element.',
-      'Choose the agents to install, select Done, and complete Amplifier setup for each selected local agent.',
-      'If you closed the installer, run this from the Constellation checkout on the VPS.',
+    ['Installer still open', [
+      'Continue in the same VPS terminal. If you are still on the Element sign-in page, press Enter, choose your agents, and select Done.',
+      'The installer opens Amplifier provider setup for each selected local agent.',
+    ]],
+    ['Installer closed or interrupted', [
+      'Run the appropriate command from the Constellation checkout on the VPS.',
+      'If your agents are already registered, resume Amplifier provider setup.',
+      { code: command.replace(/ setup-guide$/u, ' agent configure') },
+      'If you still need to choose or register your agents, resume the installation guide.',
       { code: command },
     ]],
   ]), msgtype: 'm.notice' };
