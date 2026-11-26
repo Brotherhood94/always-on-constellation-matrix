@@ -4,6 +4,14 @@ The installer preselects five agents after you sign in to Element. Keep the ones
 
 On the dashboard, open **Persona and duties** next to any agent. Its page shows what it owns, how it works, its limits, whom it can contact, its verified tools, and its Workshop revision when available. Bookmark the page or open a contact’s profile from it. A remote specialist or an older profile with only a capability description also gets a page.
 
+## Team connections
+
+Each arrow in **Team connections** points from an assigner to an agent it may hand off to. Follow an agent name for its persona, or use **Connection list** to navigate the same routes. Pending and unavailable agents are labeled. An actual handoff also depends on capability, resource scope, readiness, and Office membership.
+
+Open **View connection changes** for the workspace log. Follow an arrow to see the changes for that direction and its classified handoffs over the last 30 days. Each recorded handoff links to the Office thread and shows its progress and the overall task outcome when available. Older evidence whose direction cannot be verified is labeled unclassified.
+
+The log shows its coverage start date. A fresh installation starts recording when it creates the roster. An upgrade takes a baseline from the existing roster on its first run. Coach changes, undo, registration, retirement, and profile changes are recorded when they affect the graph. The host monitor refreshes the report. For deployments with host monitoring disabled, run `sudo ./constellation_matrix status --refresh`. The current graph uses the agent catalog while the history catches up after a Context Intelligence outage.
+
 ## First interactions
 
 | From | Starting contacts for new Office assignments |

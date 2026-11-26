@@ -471,6 +471,7 @@ async function archiveOffice() {
     const completed = task.outcome === 'completed';
     await writeExecutionEvidence(executionEvidence({ ...common, sent: task.source_reply, target: handoff?.recipient,
       status: turn ? undefined : completed ? 'completed' : 'blocked',
+      flow: handoff?.recipient ? 'return' : undefined,
       step: completed ? 'returned' : 'blocked', receipt: task.id,
       evidence: completed && !turn && task.audit_event ? [task.audit_event] : [],
       now: new Date(task.finished_at) }), '/office-token');

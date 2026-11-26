@@ -28,17 +28,23 @@ for attempt in $(seq 1 40); do
   sleep 1
 done
 docker exec "$neo4j" cypher-shell 'RETURN 1' >/dev/null
+mounts=(-v "$here/smoke.py:/tmp/smoke.py:ro")
+if [[ -n ${MATRIX_TOPOLOGY_DIR:-} ]]; then
+  test -s "$MATRIX_TOPOLOGY_DIR/office-evidence.json"
+  mounts+=(-v "$MATRIX_TOPOLOGY_DIR/office-evidence.json:/tmp/office-evidence.json:ro")
+fi
 docker run -d --platform linux/amd64 --name "$server" --network "$prefix" --network-alias context \
   -e AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE=/tmp/server.json \
   -e CONTEXT_EXECUTION_MIN_EPOCH_MS=1700000000000 \
-  -v "$fixture/server.json:/tmp/server.json:ro" -v "$here/smoke.py:/tmp/smoke.py:ro" \
+  -v "$fixture/server.json:/tmp/server.json:ro" "${mounts[@]}" \
   "$image" >/dev/null
 for attempt in $(seq 1 35); do
   if [[ $(docker inspect -f '{{.State.Running}}' "$server") != true ]]; then break; fi
   if docker exec "$server" /app/.venv/bin/python -c \
     'import json, urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8000/status", timeout=3))["neo4j_connected"]' >/dev/null 2>&1; then
-    docker exec "$server" /app/.venv/bin/python /tmp/smoke.py
-    exit 0
+      if docker exec "$server" /app/.venv/bin/python /tmp/smoke.py; then exit 0; fi
+      docker logs --tail 85 "$server" >&2
+      exit 1
   fi
   sleep 1
 done

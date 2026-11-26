@@ -10,6 +10,7 @@ import uuid
 from contextlib import closing
 from datetime import datetime, timezone
 from agent_catalog import REGISTRY, document as agent_catalog_document, read as read_agent_registry, workshop_profiles
+from connection_history import refresh_connections
 
 THRESHOLDS = {"CPU": (50, 45, 5), "RAM": (50, 45, 5), "Disk": (25, 22.5, 1)}
 RETENTION_SECONDS = 30 * 24 * 60 * 60
@@ -193,6 +194,7 @@ def export(db, outbox, acknowledgements, dashboard, timestamp, data):
         replace_json(dashboard / "integrations.json", {"time": timestamp, "services": integration_status()}, 0o644)
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as error:
         print(f"Agent catalog unavailable: {error}", flush=True)
+    refresh_connections(data)
 
 
 def run():

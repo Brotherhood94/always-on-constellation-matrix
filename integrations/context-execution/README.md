@@ -16,6 +16,8 @@ RETURN p LIMIT 80
 
 Each new Office assignment gets an `ExecutionTask`, keyed by its original request event. Assignments in the same Matrix thread share an `ExecutionTrace`. Each handoff records its source, target, and dispatch event. The recipient’s authenticated writes show whether it accepted, returned, or was blocked on the handoff.
 
+New dispatch evidence records the catalog policy revision when available. A returned result updates its original handoff. The dashboard’s directional history reports classified dispatches from the last 30 days. The deployment also publishes contact-policy revisions to the same workspace, starting with a baseline. [Dashboard connection history](../../docs/team.md#team-connections)
+
 ```cypher
 MATCH (task:ExecutionTask {workspace: 'agents-team'})-[:HAS_HANDOFF]->(handoff:OfficeHandoff)
 RETURN task.office_request AS request, handoff.source AS sender,

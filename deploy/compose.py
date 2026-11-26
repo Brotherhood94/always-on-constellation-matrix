@@ -54,7 +54,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                                     'SYSTEMD_ENABLED': str(settings['systemd']).lower()},
                     'volumes': [volume(data / 'bot', '/state'), volume(data / 'monitor/outbox', '/monitor/outbox', True),
                                 volume(data / 'monitor/acks', '/monitor/acks'), volume(dashboard, '/dashboard', True)]},
-        'context': {**restricted, 'image': 'constellation-context:6.13.0-1622b48-team1',
+        'context': {**restricted, 'image': 'constellation-context:6.13.0-1622b48-topology1',
                     'build': {'context': str(SOURCE), 'dockerfile': 'deploy/context.Dockerfile'},
                     'networks': ['memory'], 'depends_on': {'neo4j': {'condition': 'service_healthy'}},
                     'environment': {'AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE': '/etc/context/server.json'},

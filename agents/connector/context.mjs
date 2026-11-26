@@ -24,10 +24,12 @@ export function assignmentEvidence({ roomId, actor, event, now = new Date() }) {
     fields: { assignment: event.id, ...(event.delegator && { from: event.delegator }) } });
 }
 
-export function executionEvidence({ roomId, actor, event, sent, status, target, step, evidence = [], receipt, need, now = new Date() }) {
+export function executionEvidence({ roomId, actor, event, sent, status, target, step, flow, policyRevision,
+  evidence = [], receipt, need, now = new Date() }) {
   return officeEvidence({ roomId, actor, event, now, kind: 'execution', matrixEvent: sent,
     fields: { assignment: event.id, reply: sent, outcome: status ?? 'progress',
-      ...(target && { to: target }), ...(step && { step }), ...(evidence.length && { references: evidence }),
+      ...(target && { to: target }), ...(step && { step }), ...(flow && { flow }),
+      ...(flow === 'dispatch' && policyRevision && { policyRevision }), ...(evidence.length && { references: evidence }),
       ...(receipt && { operation: receipt }), ...(need && { need }) } });
 }
 

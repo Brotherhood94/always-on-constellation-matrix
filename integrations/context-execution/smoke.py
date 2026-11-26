@@ -3,7 +3,8 @@
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import sys
 import time
 import urllib.request
@@ -21,6 +22,7 @@ def post(endpoint, payload, key):
 writers = {name: f'fixture-writer-{name}' for name in ('first', 'second', 'manager', 'analyst', 'vps-manager', 'vps-manager-ops')}
 reader = 'fixture-reader'
 workspace = 'agents-team'
+publisher = 'fixture-topology-publisher'
 
 
 def event(name, pos, writer, session, trace=None, task=None):
@@ -71,9 +73,10 @@ async def verify():
 def office(kind, writer, stamp, request, assignment, **fields):
     room, thread = '!office:fixture.test', '$thread'
     actor = fields.pop('actor', f'@{writer}:fixture.test')
+    timestamp = fields.pop('timestamp', f'2026-11-24T16:00:{stamp:02d}Z')
     digest = lambda *items: hashlib.sha256(json.dumps(items, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
     trace = 'agents-thread-' + digest(room, thread)
-    data = {'session_id': trace + '-' + writer, 'timestamp': f'2026-11-24T16:00:{stamp:02d}Z',
+    data = {'session_id': trace + '-' + writer, 'timestamp': timestamp,
             'execution': {'trace_id': trace, 'task_id': 'agents-request-' + digest(room, request), 'sequence': stamp},
             'evidence': {'room': room, 'thread': thread, 'request': request, 'actor': actor,
                          'assignment': assignment, **fields}}
@@ -145,10 +148,89 @@ def verify_office():
     print('A scoped team desk read the reported blocker and attributed target verification to its authenticated sender.')
 
 
+def verify_topology():
+    room = {'room': '!office:fixture.test'}
+    now = datetime.now(timezone.utc)
+    baseline = {'id': 'a' * 32, 'sequence': 1, 'kind': 'baseline', 'at': now.isoformat(),
+                'actor': 'deployment', 'reason': 'tracking enabled', 'enforced': True, 'previous_enforced': False,
+                'added': [['manager', 'analyst']], 'removed': [],
+                'joined': ['manager', 'analyst'], 'left': [], 'renamed': {},
+                'names': {'manager': 'Task Manager', 'analyst': 'Analyst'}}
+    removed = {**baseline, 'id': 'b' * 32, 'sequence': 2, 'kind': 'change', 'previous_enforced': True,
+               'joined': [], 'added': [], 'removed': [['manager', 'analyst']], 'actor': 'coach',
+               'reason': 'coaching', 'evidence': '$evidence'}
+    for token, revision, code in [(writers['manager'], baseline, 403), (publisher, removed, 409)]:
+        try:
+            post('office/topology/revision', {**room, 'revision': revision}, token)
+            raise AssertionError('Unexpected permission write')
+        except urllib.error.HTTPError as error:
+            assert error.code == code, error.read()
+    for revision in (baseline, removed, baseline, removed):
+        assert post('office/topology/revision', {**room, 'revision': revision}, publisher) == {'id': revision['id']}
+    report = post('office/topology/report', room, publisher)
+    assert report['coverage'] and report['latest'] == 2
+    assert [row['id'] for row in report['changes']] == [removed['id'], baseline['id']]
+    assert post('office/topology/report', {'room': '!elsewhere:fixture.test'}, publisher)['changes'] == []
+    try:
+        post('office/topology/report', room, writers['manager'])
+        raise AssertionError('A write-only worker read the topology')
+    except urllib.error.HTTPError as error:
+        assert error.code == 403
+
+    # Return before the recipient and original dispatch are projected to exercise replay.
+    def write(kind, writer, index, assignment, **fields):
+        office(kind, writer, index, '$topology-task', assignment,
+               timestamp=(now + timedelta(seconds=index - 30)).isoformat(), **fields)
+
+    write('execution', 'analyst', 24, '$topology-dispatch', reply='$topology-return', flow='return',
+          to='@manager:fixture.test', step='returned')
+    write('assignment_accepted', 'manager', 21, '$topology-task')
+    write('execution', 'manager', 22, '$topology-task', reply='$topology-dispatch', flow='dispatch',
+          to='@analyst:fixture.test', policyRevision=baseline['id'])
+    write('assignment_accepted', 'analyst', 23, '$topology-dispatch', **{'from': '@manager:fixture.test'})
+    write('execution', 'manager', 25, '$topology-task', reply='$topology-result', outcome='completed',
+          references=['$topology-return'])
+    office('execution', 'analyst', 26, '$topology-task', '$topology-dispatch', reply='$topology-old-unclassified',
+           to='@manager:fixture.test', timestamp=(now - timedelta(seconds=6.5)).isoformat())
+    for _ in range(40):
+        report = post('office/topology/report', room, publisher)
+        if report['unclassified'] and any(h['status'] == 'returned' and h['outcome'] == 'verified' for h in report['handoffs']):
+            break
+        time.sleep(0.4)
+    assert [(h['sender'], h['recipient'], h['event'], h['status'], h['revision'], h['outcome'])
+            for h in report['handoffs']] == [('@manager:fixture.test', '@analyst:fixture.test', '$topology-dispatch',
+                                             'returned', baseline['id'], 'verified')], report
+    actual = report['handoffs'][0]
+    assert actual['acceptedAt'] and actual['returnedAt']
+    assert datetime.fromisoformat(actual['returnedAt']) < now - timedelta(seconds=5)
+    assert report['unclassified']
+    print('Authenticated contact revisions replay once, and only classified dispatches appear with their outcomes.')
+
+
+def verify_matrix_evidence(path):
+    records = json.loads(path.read_text())
+    room = {'room': records[0]['data']['evidence']['room']}
+    for record in records:
+        actor = record['data']['evidence']['actor'].split(':', 1)[0][1:]
+        assert post('events', record, writers[actor])['status'] == 'queued'
+    for _ in range(40):
+        report = post('office/topology/report', room, publisher)
+        if len(report['handoffs']) == 2 and all(row['outcome'] == 'verified' and row['status'] == 'returned'
+                                               for row in report['handoffs']):
+            break
+        time.sleep(0.4)
+    dispatches = {r['data']['evidence']['reply'] for r in records if r['data']['evidence'].get('flow') == 'dispatch'}
+    assert len(dispatches) == 2 and {row['event'] for row in report['handoffs']} == dispatches, report
+    assert all(row['sender'].startswith('@manager:') and row['recipient'].startswith('@analyst:') and
+               row['outcome'] == 'verified' and row['status'] == 'returned' for row in report['handoffs']), report
+    print('Evidence from two encrypted Matrix tasks projected through Neo4j with the original direction and outcomes.')
+
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['config']:
         ids = {**{token: f'writer-{name}' if name in ('first', 'second') else name
-                  for name, token in writers.items()}, reader: 'reader', 'fixture-desk-reader':'scouter'}
+                  for name, token in writers.items()}, reader: 'reader', 'fixture-desk-reader':'scouter',
+               publisher: 'office-topology@deployment'}
         print(json.dumps({'auth_mode': 'static', 'allow_unauthenticated': False,
                           'access_control_mode': 'scoped', 'neo4j_url': 'bolt://neo4j:7687',
                           'api_keys_store_path': '/data/identity/api-keys.json',
@@ -157,7 +239,7 @@ if __name__ == '__main__':
                           'contributor_grants': {identity: ({'all_workspaces': True, 'capabilities': ['data:read']}
                               if identity == 'reader' else {'workspaces': ['root-operations' if identity == 'vps-manager-ops'
                                                                          else workspace], 'capabilities': ['data:read','live:write']
-                                                                         if identity == 'scouter' else ['live:write']})
+                                                                         if identity in {'scouter', 'office-topology@deployment'} else ['live:write']})
                               for identity in ids.values()}}))
         raise SystemExit(0)
     asyncio.run(verify())
@@ -177,3 +259,7 @@ if __name__ == '__main__':
     assert query('MATCH (:ExecutionTask {workspace:$workspace})-[r:NEXT_TASK]->() RETURN count(r) AS links') == [{'links': 1}]
     print('Chronological steps, ordered tasks, independent traces, authenticated authors and cutoff verified.')
     verify_office()
+    verify_topology()
+    matrix_evidence = Path('/tmp/office-evidence.json')
+    if matrix_evidence.is_file():
+        verify_matrix_evidence(matrix_evidence)

@@ -5,7 +5,6 @@ import json
 import os
 from pathlib import Path
 import re
-from tempfile import NamedTemporaryFile
 
 
 REGISTRY = Path(os.environ.get('MATRIX_REGISTRY', '/srv/constellation-matrix/agents.json'))
@@ -91,21 +90,12 @@ def read(path=REGISTRY):
 
 
 def modify(change, path=REGISTRY):
-    with path.with_name('.agent-registry.lock').open('a') as lock:
+    from connection_history import commit_registry
+    with path.with_name('.operator.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         registry = read(path)
         change(registry)
-        with NamedTemporaryFile('w', dir=path.parent, prefix='.agent-placement.', delete=False) as stream:
-            pending = Path(stream.name)
-            try:
-                json.dump(registry, stream, indent=2)
-                stream.write('\n')
-                stream.flush()
-                os.fsync(stream.fileno())
-                pending.chmod(0o640)
-                pending.replace(path)
-            finally:
-                pending.unlink(missing_ok=True)
+        commit_registry(path, registry, reason='operator profile update', mode=0o640)
 
 
 def register(registry, key, definition, name=None, host=None):
@@ -170,7 +160,9 @@ def document(registry, inventory, server_name, now, workshop=None):
             row['persona']['working_style'] = installed.get('working_style', persona_for(entry)['working_style'])
     if any(sum(row['role'] == role for row in result) > 1 for role in ('coordinator', 'observer')):
         raise ValueError('There must be a single active coordinator and observer')
-    return dict(version=1, contactPolicy=governed, time=now, dynamicHandoffs=registry.get('dynamic_handoffs') is True, agents=result)
+    revision = registry.get('connection_history', {}).get('revision')
+    return dict(version=1, contactPolicy=governed, time=now, dynamicHandoffs=registry.get('dynamic_handoffs') is True,
+                agents=result, **({'policyRevision': revision} if revision else {}))
 
 
 def main():

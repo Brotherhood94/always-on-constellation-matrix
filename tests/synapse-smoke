@@ -40,8 +40,12 @@ docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
   -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/deploy:/telegram \
   "$name" python -B /test.py
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
+  mounts=(--tmpfs /welcome)
+  if [[ -n ${MATRIX_TOPOLOGY_DIR:-} ]]; then
+    mounts+=(-v "$MATRIX_TOPOLOGY_DIR:/topology" -e 'MATRIX_TOPOLOGY_EVIDENCE=/topology/office-evidence.json')
+  fi
   docker run --rm --network "$name" --user 0:0 --entrypoint node \
-    --tmpfs /welcome -v "$src/agents/connector/welcome.mjs:/app/welcome.mjs:ro" \
+    "${mounts[@]}" -v "$src/agents/connector/welcome.mjs:/app/welcome.mjs:ro" \
     -v "$src/integrations/chief-of-staff:/app/chief-of-staff:ro" \
     -v "$src/deploy/retire-worker.sql:/app/retire-worker.sql:ro" \
     -v "$src/deploy/matrix/bot:/app/ops:ro" -v "$src/tests/operations-fixture.mjs:/app/operations.mjs:ro" \

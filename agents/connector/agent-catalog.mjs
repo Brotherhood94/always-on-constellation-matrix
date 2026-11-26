@@ -48,6 +48,7 @@ export function parseCatalog(text, server) {
   const roles = new Set(['worker', 'coordinator', 'observer']);
   if (value?.version !== 1 || !Number.isSafeInteger(value.time) || typeof value.dynamicHandoffs !== 'boolean' ||
       ('contactPolicy' in value && typeof value.contactPolicy !== 'boolean') ||
+      ('policyRevision' in value && (typeof value.policyRevision !== 'string' || !/^[a-f0-9]{32}$/u.test(value.policyRevision))) ||
       !Array.isArray(value.agents) || value.agents.length > 128 ||
       !value.agents.every(agent => typeof agent.key === 'string' && agentKeyPattern.test(agent.key) &&
         (!value.contactPolicy || Array.isArray(agent.contacts) && agent.contacts.every(key => typeof key === 'string' && agentKeyPattern.test(key))) &&
@@ -142,5 +143,6 @@ export function evaluateDelegation(catalog, sender, joined, controls) {
   if (!target) return { blocker: 'The selected agent does not cover the required capability and resource.' };
   if (!canContact(snapshot, sender, target)) return { blocker: 'The selected agent is outside your permitted contacts.' };
   if (!canDispatch(target, joined)) return { blocker: 'The selected agent is unavailable or outside the Agents room.' };
-  return snapshot.contactPolicy ? { target, requirement: wanted } : { target };
+  return snapshot.contactPolicy ? { target, requirement: wanted,
+    ...(snapshot.policyRevision && { policyRevision: snapshot.policyRevision }) } : { target };
 }

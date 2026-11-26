@@ -191,6 +191,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   const manager = { id: '@manager:' + domain, key: 'manager', name: 'Manager', role: 'coordinator',
     limits: 'Fixture', status: 'Available', capabilities: [] };
   const handoff = { agent: 'analyst', capability: 'welcome-tip', resource: 'task:welcome' };
+  const policyRevision = 'a'.repeat(32);
   let turn = 0;
   let releaseRetire;
   const retirementWork = new Promise(resolve => { releaseRetire = resolve; });
@@ -226,7 +227,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   await once(context, 'listening');
   try {
     await writeFile(catalog, JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
-      dynamicHandoffs: true, contactPolicy: true, agents: [
+      dynamicHandoffs: true, contactPolicy: true, policyRevision, agents: [
         {...manager, contacts:[analyst.key]}, {...analyst, contacts:[]}] }));
     for (const agent of [manager, analyst]) {
       const agentState = join(base, 'welcome-' + agent.key);
@@ -290,6 +291,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     });
     assert.notEqual(result.isError, true, JSON.stringify(result));
     const fromDot = decodeURIComponent(new URL(result.structuredContent.thread_url).hash.split('/').at(-1));
+    const acceptedEvidence = [];
     for (const event of [fromElement, fromDot]) {
       const submitted = await eventually(() => findMessage(item => item.event_id === event));
       assert.equal(submitted.room_id, office);
@@ -305,6 +307,17 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       assert.ok(history.some(record => record.event === 'agents:assignment_accepted' &&
         record.data.evidence.actor === analyst.id && record.data.evidence.from === manager.id));
       assert.notEqual(history.find(record => record.data.evidence.actor === analyst.id).data.session_id, proof.data.session_id);
+      const dispatch = history.find(record => record.data.evidence.flow === 'dispatch')?.data.evidence;
+      assert.equal(dispatch?.actor, manager.id);
+      assert.equal(dispatch?.to, analyst.id);
+      assert.equal(dispatch?.policyRevision, policyRevision);
+      const returned = history.find(record => record.data.evidence.reply === tip.event_id)?.data.evidence;
+      assert.equal(returned?.flow, 'return');
+      assert.equal(returned?.assignment, dispatch?.reply);
+      acceptedEvidence.push(...history);
+    }
+    if (process.env.MATRIX_TOPOLOGY_EVIDENCE) {
+      await writeFile(process.env.MATRIX_TOPOLOGY_EVIDENCE, JSON.stringify(acceptedEvidence));
     }
     const unverified = await sendEncrypted(reader, office, 'fixture-unverified',
       mentionMessage('Unverified fixture. Draft a three-step checklist.', manager));

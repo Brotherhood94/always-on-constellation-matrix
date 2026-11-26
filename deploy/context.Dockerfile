@@ -13,5 +13,5 @@ USER 991:991
 ENV PYTHONDONTWRITEBYTECODE=1
 ENTRYPOINT ["/app/.venv/bin/context-intelligence-server"]
 
-COPY --chmod=0644 integrations/context-execution/engine/main.py integrations/context-execution/engine/neo4j_store.py integrations/context-execution/engine/execution_timeline.py /app/.venv/lib/python3.13/site-packages/context_intelligence_server/
+COPY --chmod=0644 integrations/context-execution/engine/main.py integrations/context-execution/engine/neo4j_store.py integrations/context-execution/engine/execution_timeline.py integrations/context-execution/engine/office_topology.py /app/.venv/lib/python3.13/site-packages/context_intelligence_server/
 COPY --chmod=0644 integrations/context-execution/engine/handlers/data_layer_1/default.py /app/.venv/lib/python3.13/site-packages/context_intelligence_server/handlers/data_layer_1/default.py

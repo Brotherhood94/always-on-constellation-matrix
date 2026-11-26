@@ -24,6 +24,7 @@ class LifecycleTest(TestCase):
         self.assertEqual(run.call_args_list, [
             call('systemctl', 'enable', '--now', 'docker.service', 'containerd.service'),
             call('systemctl', 'enable', '--now', 'docker.service', 'containerd.service', 'tailscaled.service'),
+            call('systemctl', 'try-restart', 'fixture-monitor.service'),
             call('systemctl', 'enable', '--now', 'fixture-stack.service', 'fixture-monitor.service', 'fixture-backup.timer'),
         ])
 

@@ -157,14 +157,14 @@ def handle(data, payload, *, now=None):
             save(path, {'status': 'pending', 'receipt': receipt})
         if operation['kind'] == 'add':
             token = read_password_file(root / 'inviter-token', 'Office invitation')
-            provision_agent(data, settings, registry, operation['profile'], token)
+            provision_agent(data, settings, registry, operation['profile'], token, actor=actor, approval=identifier)
             status = 'provisioned'
         elif operation['kind'] == 'tool':
             status = apply_tool(data, settings, registry, operation, identifier)
         elif operation['kind'] in {'coach', 'undo'}:
-            status = coach_change(data, settings, registry, operation, approved=True)
+            status = coach_change(data, settings, registry, operation, approved=True, approval=identifier)
         else:
-            status = retire_locked(data, settings, registry, key)
+            status = retire_locked(data, settings, registry, key, actor=actor, approval=identifier)
         save(path, {'status': 'pending' if status in {'draining', 'checking'} else status, 'receipt': receipt})
         return {'status': status, 'agent': key, **({'change':coaching_id(operation)} if actor == 'coach' else {})}
 

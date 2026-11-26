@@ -52,3 +52,27 @@ a { color: var(--accent); }
 #persona-view h3 { margin-top: 1.35rem; color: var(--text); }
 #persona-view p, #persona-view li { line-height: 1.55; }
 #persona-view ul { margin: .35rem 0; padding-inline-start: 1.35rem; }
+.connection-graph {
+  margin: .75rem 0;
+  overflow: auto;
+  max-height: 28rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: .7rem;
+}
+.connection-graph svg { display: block; width: 100%; }
+.graph-edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
+.graph-edge-line { fill: none; stroke: var(--muted); stroke-width: 1.4; pointer-events: none; }
+.graph-arrow { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+.graph-edge:hover .graph-edge-line, .graph-edge:focus .graph-edge-line { stroke: var(--accent); stroke-width: 2.6; }
+.graph-node rect { fill: var(--surface); stroke: var(--accent); stroke-width: 1.5; }
+.graph-node:hover rect, .graph-node:focus rect { stroke-width: 3; }
+.graph-node text { fill: var(--text); font-size: 13px; font-weight: 600; pointer-events: none; }
+.graph-node .graph-node-status { fill: var(--muted); font-size: 12px; font-weight: 400; }
+#connection-list ul, #connection-details ul, #connection-details ol { padding-inline-start: 1.4rem; }
+#connection-list li { margin-block: .25rem; }
+#connection-details { max-width: 54rem; margin-inline: auto; }
+#connection-details h2 { margin: 1.25rem 0 .5rem; overflow-wrap: anywhere; }
+#connection-details h3 { margin: 1.5rem 0 .5rem; color: var(--text); font-size: 1.08rem; }
+#connection-details ol > li { border-bottom: 1px solid var(--border); padding: .7rem 0; }
+#connection-details p { overflow-wrap: anywhere; }

@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from agent_catalog import KEY, clean, contact_keys, contacts_for, persona_for
-from installer import compose, directory, load, publish_inventory, read_password_file, save
+from installer import commit_registry, compose, directory, load, publish_inventory, read_password_file, save
 from persona_management import api, TARGETS
 from team_workshop import active_claims, apply_style, save_style
 
@@ -97,7 +97,7 @@ def coaching_id(operation):
     return sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
 
 
-def coach_change(data, settings, registry, operation, *, approved=False):
+def coach_change(data, settings, registry, operation, *, approved=False, approval=None):
     key = operation['agent']
     entry = registry['agents'].get(key)
     if not entry or entry.get('retirement'):
@@ -183,7 +183,8 @@ def coach_change(data, settings, registry, operation, *, approved=False):
     entry.update(office_contacts=contacts, applied_style=style, persona_revision=installed['revision'], last_coaching=operation_id)
     if kind == 'undo' and old.get('before_override') is None:
         entry.pop('office_contacts', None)
-    save(data / 'agents.json', registry)
+    commit_registry(data / 'agents.json', registry, actor='coach', reason='coaching undo' if kind == 'undo' else 'coaching',
+                    evidence=reference, approval=approval)
     publish_inventory(settings, data, registry)
     save(path, {**record, 'done': True})
     return 'applied'

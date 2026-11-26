@@ -30,6 +30,7 @@ def enable_host_dependencies(settings):
 
 def enable_services(settings):
     project = settings['project']
+    run('systemctl', 'try-restart', project + '-monitor.service')
     run('systemctl', 'enable', '--now', project + '-stack.service',
         project + '-monitor.service', project + '-backup.timer')
 
@@ -203,7 +204,7 @@ def units(settings, data, *, broker=False):
     deployment = safe_path(data)
     host = data / 'host'
     directory(host)
-    for filename in ('monitor.py', 'agent_catalog.py'):
+    for filename in ('monitor.py', 'agent_catalog.py', 'connection_history.py'):
         shutil.copyfile(SOURCE / 'deploy/matrix' / filename, host / filename)
     shutil.copyfile(SOURCE / 'deploy/recovery.py', host / 'recovery.py')
     if settings['telegram']:

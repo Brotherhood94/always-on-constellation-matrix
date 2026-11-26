@@ -78,9 +78,18 @@ def office_step(event: str, evidence: Any, scope: tuple[str, str] | None, graph:
     if not isinstance(reply, str) or not _MATRIX_EVENT.fullmatch(reply):
         return {}
     fields.update(office_kind="reply", office_reply=reply)
+    flow = evidence.get("flow")
+    if flow is not None and (flow not in ("dispatch", "return") or not peer):
+        return {}
+    if flow:
+        fields["office_flow"] = flow
+    revision = evidence.get("policyRevision")
+    if flow == "dispatch" and isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{32}", revision):
+        fields["office_policy_revision"] = revision
     if peer:
         fields["office_to"] = peer
-        fields["office_handoff"] = "office-handoff:" + _office_digest(room, reply)
+        if flow != "return":
+            fields["office_handoff"] = "office-handoff:" + _office_digest(room, reply)
     if evidence.get("step") in ("returned", "blocked"):
         fields["office_step"] = evidence["step"]
     references = evidence.get("references", [])
@@ -102,7 +111,10 @@ def office_step(event: str, evidence: Any, scope: tuple[str, str] | None, graph:
 async def attach_office_step(graph: Any, task: str, event_id: str, office: dict[str, Any]) -> None:
     if handoff := office.get("office_handoff"):
         await graph.upsert_node(handoff, {"labels": ["OfficeHandoff"], "source": office["office_actor"],
-                                         "target": office["office_to"], "dispatch_event": office["office_reply"]})
+                                         "target": office["office_to"], "dispatch_event": office["office_reply"],
+                                         **({"classification": "dispatch"} if office.get("office_flow") == "dispatch" else {}),
+                                         **({"policy_revision": office["office_policy_revision"]}
+                                            if "office_policy_revision" in office else {})})
         await graph.upsert_edge(task, handoff, {"type": "HAS_HANDOFF"})
         await graph.upsert_edge(handoff, event_id, {"type": "DISPATCHED_IN"})
 
@@ -138,6 +150,8 @@ WHERE ack.office_assignment=h.dispatch_event AND ack.office_actor=h.target AND a
 WITH t,h,head(collect(ack)) AS accepted
 OPTIONAL MATCH (t)-[:HAS_STEP]->(result:Event {office_kind:'reply'})
 WHERE result.office_assignment=h.dispatch_event AND result.office_actor=h.target
+      AND coalesce(result.office_flow,'legacy') <> 'dispatch'
+      AND (h.classification IS NULL OR result.office_flow='return' OR result.office_to IS NULL)
 WITH h,accepted,result ORDER BY result.occurred_at,result.node_id
 WITH h,accepted,head(collect(result)) AS returned
 SET h.status = CASE WHEN accepted IS NULL THEN 'dispatched' WHEN returned IS NULL THEN 'accepted'

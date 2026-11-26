@@ -1,7 +1,32 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshness, historyWithin, httpsLink } from '../dashboard/dashboard.mjs';
+import { connectionDetails, connectionGraph, connectionRoute } from '../dashboard/connections.mjs';
 import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from '../deploy/matrix/bot/pins.mjs';
+
+test('team connections use directional catalog permissions, including pending agents', () => {
+  const catalog = {contactPolicy:true, dynamicHandoffs:true, agents:[
+    {key:'coach', contacts:['scouter', 'removed'], status:'Available'},
+    {key:'scouter', contacts:[], status:'Sign-in required'},
+    {key:'observer', contacts:['coach'], role:'observer'},
+  ]};
+  const graph = connectionGraph(catalog);
+  assert.deepEqual(graph.edges, [['coach', 'scouter']]);
+  assert.deepEqual(graph.nodes.map(agent => agent.status), ['Available', 'Sign-in required']);
+  assert.deepEqual(connectionGraph({...catalog, contactPolicy:false}).edges, []);
+  assert.deepEqual(connectionGraph({...catalog, dynamicHandoffs:false}).edges, []);
+});
+
+test('a connection deep link filters both history and observed work by direction', () => {
+  const straight = {sender:'@coach:fixture.test', recipient:'@scouter:fixture.test', status:'returned'};
+  const reverse = {sender:straight.recipient, recipient:straight.sender, status:'blocked'};
+  const allowed = {added:[['coach','scouter']], removed:[]};
+  const other = {added:[], removed:[['scouter','coach']]};
+  const report = {changes:[allowed,other], handoffs:[straight,reverse]};
+  assert.deepEqual(connectionDetails(report, connectionRoute('#/connections/coach/scouter')),
+    {changes:[allowed], handoffs:[straight]});
+  assert.equal(connectionRoute('#/connections/coach/scouter/extra'), null);
+});
 
 test('dashboard accepts the graph link, filters history, and reports stale or missing data', () => {
   assert.equal(httpsLink('https://matrix.example:8444/browser/'), 'https://matrix.example:8444/browser/');

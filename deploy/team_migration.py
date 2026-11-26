@@ -8,6 +8,7 @@ from installer import (CLIENT, RUNTIME_UID, compose, compose_config, configure_n
                        publish_inventory, refresh_context, register_entry, request, save, service_units,
                        starter_profiles, sync_workshop, up)
 from layout import encoded, room_route
+from connection_history import commit_registry
 from persona_management import disconnect
 from roster import archive_worker, deactivate_worker, desk_pending, local_worker, prepare_management, retire_locked
 
@@ -146,7 +147,7 @@ def migrate(data, args):
                 settings['agents'] += [k for k in plan['add'] if k not in settings['agents']]
                 settings.get('subscriptions', {}).get('overrides', {}).pop('chief-of-staff', None)
                 settings['roster_management'] = False
-                save(data / 'agents.json', registry)
+                commit_registry(data / 'agents.json', registry, actor=settings['owner'], reason='starter-team migration')
                 save(data / 'settings.json', settings)
                 journal['phase'] = 'provision'
                 save(path, journal)

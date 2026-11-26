@@ -7,6 +7,7 @@ import json
 import logging
 import os
 from context_intelligence_server.execution_timeline import before_cutover
+from context_intelligence_server.office_topology import router as office_topology_router
 import re
 import secrets
 import sys
@@ -3398,6 +3399,8 @@ async def get_mapped_blob(
     except ValueError:  # an unsafe session id: the digest is already regex-validated
         raise HTTPException(status_code=404, detail=f"Blob not found: {uri}")
 
+
+app.include_router(office_topology_router)
 
 _OFFICE_REVIEWS = {
     "recent": ({"room"},

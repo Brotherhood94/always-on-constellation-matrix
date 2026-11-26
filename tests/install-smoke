@@ -49,6 +49,15 @@ config = {
 (work / 'install.json').write_text(json.dumps(config))
 PYTHON
 "$src/constellation_matrix" --data-dir "$data" install --config "$work/install.json"
+python3 - "$data/dashboard/connections.json" <<'PYTHON'
+import json
+import sys
+
+with open(sys.argv[1]) as stream:
+    snapshot = json.load(stream)
+assert snapshot['coverage'] and snapshot['latest'] == 1
+assert snapshot['changes'][0]['kind'] == 'baseline' and snapshot['changes'][0]['added'] == []
+PYTHON
 cp "$data/rooms.json" "$work/initial-rooms.json"
 cp "$data/telegram/layout.json" "$work/initial-telegram-layout.json"
 [[ -s "$data/telegram/guide/token" && ! -e "$data/telegram/database.json" ]]
@@ -62,13 +71,14 @@ import sys
 
 from installer import load, save
 from onboarding import select_roster
+from connection_history import commit_registry
 
 data, work = map(Path, sys.argv[1:])
 assert load(data / 'agents.json')['agents'] == {}
 # Recreate the on-disk layout of a pre-starter installation before enrolling its first agents.
 registry = load(data / 'agents.json')
 registry.pop('team_version', None)
-save(data / 'agents.json', registry)
+commit_registry(data / 'agents.json', registry, reason='legacy fixture')
 old_workshop = data / 'state/chief-of-staff/persona'
 old_workshop.parent.mkdir(exist_ok=True)
 (data / 'persona-workshop').rename(old_workshop)
@@ -226,6 +236,7 @@ PYTHON
 "$src/constellation_matrix" --data-dir "$data" agent migrate-team
 "$src/constellation_matrix" --data-dir "$data" agent migrate-team --apply --owner-password-file "$work/password"
 "$src/constellation_matrix" --data-dir "$data" agent migrate-team --apply --owner-password-file "$work/password"
+"$src/constellation_matrix" --data-dir "$data" status --refresh
 python3 - "$data" "$work" <<'PYTHON'
 import json
 from pathlib import Path
@@ -241,6 +252,15 @@ private = {(data / 'state' / key / 'matrix/control-room-id').read_text() for key
 assert len(private) == 3
 assert load(data / 'team-migration.json')['phase'] == 'complete'
 assert load(data / 'rooms.json') == load(work / 'initial-rooms.json')
+report = load(data / 'dashboard/connections.json')
+assert report['coverage'] and not report['pending']
+assert 'office-topology@deployment' not in json.dumps(report)
+assert [r['sequence'] for r in report['changes']] == list(range(report['latest'], 0, -1))
+after = report['changes'][0]
+assert after['reason'] == 'starter-team migration'
+assert ['manager', 'scouter'] in after['added'] and 'scouter' in after['joined']
+assert any(r['reason'] == 'retirement completed' and 'fixture-worker' in r['left'] for r in report['changes'])
+assert load(data / 'dashboard/agents.json')['policyRevision'] == after['id']
 print('Whole-stack starter-team migration reused the original coordinator and registered all replacement Workshop targets.')
 PYTHON
 if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then

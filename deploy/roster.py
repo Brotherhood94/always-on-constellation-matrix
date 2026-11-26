@@ -12,6 +12,7 @@ from installer import (CLIENT, KEY, RESERVED, RUNTIME_UID, SOURCE, command_outpu
                        login, open_existing, operator_lock, password, private_secret, publish_inventory,
                        read_password_file, refresh_context, request, run, save, sync_workshop, up)
 from layout import invite, join, room_route
+from connection_history import commit_registry
 from provision import MatrixError
 
 INVITER = 'roster-inviter'
@@ -149,7 +150,7 @@ def drain_host(path):
                                '(source_thread IS NOT NULL AND source_notified=0) LIMIT 1').fetchone())
 
 
-def retire_locked(data, settings, registry, key):
+def retire_locked(data, settings, registry, key, *, actor=None, approval=None):
     from persona_management import disconnect
 
     retired = registry.get('retired', {})
@@ -164,7 +165,11 @@ def retire_locked(data, settings, registry, key):
     progress = entry.get('retirement')
     if not progress:
         progress = entry['retirement'] = 'draining'
-        save(data / 'agents.json', registry)
+        entry['retirement_actor'] = actor or settings.get('owner', 'operator')
+        if approval:
+            entry['retirement_approval'] = approval
+        commit_registry(data / 'agents.json', registry, actor=entry['retirement_actor'],
+                        reason='retirement started', approval=approval)
     if progress == 'draining':
         matrix = data / 'state' / key / 'matrix'
         if key == 'vps-manager':
@@ -214,7 +219,8 @@ def retire_locked(data, settings, registry, key):
     archive_worker(data, key)
     registry.setdefault('retired', {})[key] = {'name': entry['name'], 'at': datetime.now(timezone.utc).isoformat()}
     save(data / 'settings.json', settings)
-    save(data / 'agents.json', registry)
+    commit_registry(data / 'agents.json', registry, actor=entry.get('retirement_actor', settings.get('owner', 'operator')),
+                    reason='retirement completed', approval=entry.get('retirement_approval'))
     publish_inventory(settings, data, registry)
     return 'retired'
 

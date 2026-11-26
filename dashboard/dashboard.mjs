@@ -1,3 +1,5 @@
+import { connectionRoute, renderConnectionDetails, renderConnections } from './connections.mjs';
+
 const resources = { cpu: 'CPU', memory: 'Memory', disk: 'Disk' };
 
 export function httpsLink(value) {
@@ -77,7 +79,6 @@ function showPersona(agents) {
   const view = document.getElementById('persona-view');
   const key = /^#\/agents\/([a-z0-9_-]+)$/u.exec(location.hash)?.[1];
   view.hidden = !key;
-  document.getElementById('overview').hidden = Boolean(key);
   if (!key) return;
   const back = document.createElement('a');
   back.href = '#agents-heading';
@@ -118,7 +119,16 @@ function showPersona(agents) {
   }
 }
 
-function render(metrics, catalog, links, integrationStates) {
+function showView(metrics, catalog, connections) {
+  const route = connectionRoute(location.hash);
+  const details = document.getElementById('connection-details');
+  details.hidden = route === null;
+  document.getElementById('overview').hidden = Boolean(route || /^#\/agents\/[a-z0-9_-]+$/u.test(location.hash));
+  showPersona(catalog?.agents ?? metrics?.agents ?? []);
+  if (route) renderConnectionDetails(details, route, connections, catalog, freshness);
+}
+
+function render(metrics, catalog, links, integrationStates, connections) {
   const now = Date.now();
   const el = id => document.getElementById(id);
   const make = (tag, text, className) => Object.assign(document.createElement(tag), { textContent: text, className });
@@ -173,7 +183,8 @@ function render(metrics, catalog, links, integrationStates) {
     row.append(cell);
     el('agents').append(row);
   }
-  showPersona(agents);
+  renderConnections(catalog);
+  showView(metrics, catalog, connections);
   const entries = Object.entries(integrationStates?.services ?? {});
   el('integrations').replaceChildren();
   for (const [name, state] of [...entries, ['Last successful backup', metrics?.lastBackup ?? 'Unavailable']]) {
@@ -197,13 +208,22 @@ async function fetchJson(path) {
 if (typeof document !== 'undefined') {
   let state = [];
   async function refresh() {
-    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations'].map(path => fetchJson(path + '.json')));
+    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections'].map(path => fetchJson(path + '.json')));
     state = reports.map(({ status, value }, index) => status === 'fulfilled' ? value : state[index]);
     render(...state);
   }
 
   document.getElementById('range').addEventListener('change', () => render(...state));
-  window.addEventListener('hashchange', () => showPersona(state[1]?.agents ?? state[0]?.agents ?? []));
+  window.addEventListener('hashchange', () => {
+    showView(state[0], state[1], state[4]);
+    const heading = document.querySelector('#connection-details:not([hidden]) h2, #persona-view:not([hidden]) h2');
+    if (heading) {
+      heading.tabIndex = -1;
+      heading.focus();
+    } else if (location.hash === '#connections-heading') {
+      document.getElementById('connections-heading').scrollIntoView();
+    }
+  });
   void refresh();
   setInterval(refresh, 30_000);
 }

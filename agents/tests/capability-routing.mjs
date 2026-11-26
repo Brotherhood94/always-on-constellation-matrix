@@ -110,11 +110,13 @@ test('directed contacts limit dispatch without turning a routing restriction int
   const a = {key:'a', id:'@a:x', role:'worker', status:'Available', contacts:[], capabilities:[]};
   const b = {key:'b', id:'@b:x', role:'worker', status:'Available', contacts:['a'],
     capabilities:[{code:'review',resources:['task:*']}]};
-  const value = {contactPolicy:true, agents:[a,b]};
+  const value = {contactPolicy:true, agents:[a,b], policyRevision:'a'.repeat(32)};
   const fixture = {fresh:()=>true, current:()=>value};
   const wanted = {agent:'b',capability:'review',resource:'task:example'};
   assert.match(evaluateDelegation(fixture,a.id,new Set([a.id,b.id]),{handoff:wanted}).blocker, /contact/i);
   assert.equal(evaluateDelegation(fixture,a.id,new Set([a.id,b.id]),{gap:{...wanted,reason:'check'}}).gap, undefined);
   a.contacts.push('b');
-  assert.equal(evaluateDelegation(fixture,a.id,new Set([b.id]),{handoff:wanted}).target.id, b.id);
+  const decision = evaluateDelegation(fixture,a.id,new Set([b.id]),{handoff:wanted});
+  assert.equal(decision.target.id, b.id);
+  assert.equal(decision.policyRevision, value.policyRevision);
 });

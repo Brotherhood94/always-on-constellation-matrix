@@ -16,7 +16,7 @@ cleanup() {
   rm -rf -- "$work"
 }
 trap cleanup EXIT
-cp "$src"/dashboard/{index.html,dashboard.mjs,dashboard.css} "$work/"
+cp "$src"/dashboard/{index.html,dashboard.mjs,dashboard.css,connections.mjs} "$work/"
 python3 - "$work" <<'PY'
 import json
 from pathlib import Path
@@ -26,11 +26,23 @@ import time
 root = Path(sys.argv[1])
 now = int(time.time())
 rows = {key: [[now - 90, 12], [now - 20, 23.4]] for key in ('CPU', 'RAM', 'Disk')}
+agents = [{'key':'analyst', 'role':'coordinator', 'persona':{'purpose':'Study the evidence','duties':['Review sources'],
+           'working_style':'Cite what can be verified.'}, 'contacts':['qa'],'tools':['Reader'], 'name':'Fixture Analyst',
+           'status':'Available', 'server':'fixture.test', 'model':'fixture-model'},
+          {'key':'qa','role':'worker','contacts':[],'name':'Fixture QA','status':'Sign-in required','server':'fixture.test'}]
+change = {'id':'a'*32, 'sequence':1,'kind':'change','at':'2026-11-24T16:00:00Z','actor':'coach','reason':'coaching',
+          'names':{'analyst':'Fixture Analyst', 'qa':'Fixture QA'},'added':[['analyst','qa']],'removed':[],
+          'joined':[],'left':[],'renamed':{},'enforced':True,'previous_enforced':True,'evidence':'$evidence'}
+handoff = {'sender':'@analyst:fixture.test','recipient':'@qa:fixture.test','status':'returned','outcome':'verified',
+           'thread':'$directed-thread','at':'2026-11-24T16:00:05Z','revision':'a'*32}
+reverse = {**handoff, 'sender':handoff['recipient'], 'recipient':handoff['sender'], 'thread':'$reverse-thread'}
 for name, content in {
     'metrics': {'time': now, 'history': rows},
     'links': {'context': 'https://fixture.test:8444/browser/?connectURL=bolt%2Bs%3A%2F%2Ffixture.test%3A17687'},
-    'agents': {'time': now - 600, 'agents': [{'key':'analyst', 'persona':{'purpose':'Study the evidence','duties':['Review sources'],'working_style':'Cite what can be verified.'}, 'contacts':['qa'],'tools':['Reader'], 'name': 'Fixture Analyst', 'status': 'Available', 'server': 'fixture.test', 'model': 'fixture-model'}]},
+    'agents': {'time': now - 600, 'agents': agents, 'contactPolicy':True, 'dynamicHandoffs':True,'policyRevision':'a'*32},
     'integrations': {'time': now, 'services': {'Context Intelligence': 'healthy'}},
+    'connections': {'version':1, 'time':now, 'room':'!office:fixture.test','coverage':'2026-11-24T15:00:00Z',
+                    'changes':[change],'handoffs':[handoff,reverse],'unclassified':True},
 }.items():
     (root / (name + '.json')).write_text(json.dumps(content))
 PY
@@ -64,4 +76,5 @@ for width in 375 1280; do
   grep -q 'href="#/agents/analyst"' "$page"
   grep -q 'healthy' "$page"
 done
+node "$src/tests/dashboard-navigation.mjs" "$browser" "$work" "$port"
 printf '%s\n' 'Desktop and mobile dashboard rendered samples, roster state and the Context Intelligence link.'

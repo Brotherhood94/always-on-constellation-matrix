@@ -23,6 +23,7 @@ from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
 from agent_catalog import KEY, PRIVATE_ROLES, profile
+from connection_history import PUBLISHER, PUBLISHER_TOKEN, commit_registry, refresh_connections
 from configure import write_config
 from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded
 from provision import MatrixError, request
@@ -207,7 +208,8 @@ def context_config(settings, data, registry):
     directory(data / 'context/data', uid=RUNTIME_UID)
     directory(data / 'context/graph', uid=7474)
     directory(data / 'context/config', mode=0o755)
-    keys = {'observation-reader': ('agents-team', ['data:read'])}
+    keys = {'observation-reader': ('agents-team', ['data:read']),
+            PUBLISHER: ('agents-team', ['live:write', 'data:read'])}
     for key in registry['agents']:
         keys[key] = ('agents-team', ['live:write', 'data:read'] if key in PRIVATE_ROLES and registry['agents'][key].get('starter_role') == key else ['live:write'])
     if 'vps-manager' in registry['agents']:
@@ -217,7 +219,10 @@ def context_config(settings, data, registry):
     identities = {}
     grants = {}
     for key, (workspace, capabilities) in keys.items():
-        token = private_secret(data / 'context' / (key + '.token'), uid=ROOT_UID if key in {'vps-manager', 'vps-manager-ops'} else RUNTIME_UID)
+        if key == PUBLISHER:
+            token = private_secret(data / PUBLISHER_TOKEN)
+        else:
+            token = private_secret(data / 'context' / (key + '.token'), uid=ROOT_UID if key in {'vps-manager', 'vps-manager-ops'} else RUNTIME_UID)
         identities[sha256(token.encode()).hexdigest()] = {'id': key}
         grants[key] = {'workspaces': [workspace], 'capabilities': capabilities}
     password = read_password_file(data / 'context/neo4j-password', 'Context Intelligence')
@@ -507,7 +512,7 @@ def prepare_storage(settings, data):
     for name in ('synapse', 'bot', 'monitor/acks', 'desktop'):
         directory(data / name, uid=RUNTIME_UID)
     for path in (SOURCE / 'dashboard').iterdir():
-        if path.name in {'index.html', 'dashboard.mjs', 'dashboard.css'}:
+        if path.name in {'index.html', 'dashboard.mjs', 'dashboard.css', 'connections.mjs'}:
             save(data / 'dashboard' / path.name, path.read_text(), mode=0o644)
     save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url']},
          mode=0o644)
@@ -736,7 +741,7 @@ def install(data, args, *, entered=None):
         if not args.config and not current and not onboarding_path.exists():
             save(onboarding_path, {'confirmed': [], 'select_agents': True})
         save(previous, settings)
-        save(registry_path, registry)
+        commit_registry(registry_path, registry, actor=settings['owner'], reason='installation')
         environment = compose_config(settings, data, registry)
         compose(data, 'config', '--quiet')
         service_units(settings, data, broker=registry['agents'].get('vps-manager', {}).get('active', False))
@@ -773,6 +778,7 @@ def install(data, args, *, entered=None):
             if state.pop('select_agents', False):
                 state.pop('selection', None)
                 save(onboarding_path, state)
+    refresh_connections(data)
     if any(registry['agents'].get(k, {}).get('active') for k in PRIVATE_ROLES | {'chief-of-staff'}):
         from roster import enable_management
         enable_management(data, automatic=True)
@@ -814,13 +820,13 @@ def provision_selected_agents(data, settings, registry, selection, passphrase, *
         prepare_images(roster, registry)
         up(data, *(f'engine-{key}' for key in selection if registry['agents'][key]['placement'] == 'local'))
         sync_workshop(roster, data, registry)
-        save(data / 'agents.json', registry)
+        commit_registry(data / 'agents.json', registry, actor=roster['owner'], reason='onboarding registration')
         publish_inventory(roster, data, registry)
         configure_network(roster, data, settings)
     save(data / 'settings.json', roster)
 
 
-def provision_agent(data, settings, registry, candidate, inviter):
+def provision_agent(data, settings, registry, candidate, inviter, *, actor=None, approval=None):
     key = candidate['key']
     if any(entry.get('retirement') in {'stopped', 'revoked'} for entry in registry['agents'].values()):
         raise ValueError('Resume the pending agent removal before adding another worker')
@@ -834,7 +840,8 @@ def provision_agent(data, settings, registry, candidate, inviter):
     if registry['agents'][key]['placement'] == 'local':
         prepare_images(settings, registry)
         up(data, 'engine-' + key)
-    save(data / 'agents.json', registry)
+    commit_registry(data / 'agents.json', registry, actor=actor or settings.get('owner', 'operator'),
+                    reason='registration', approval=approval)
     sync_workshop(settings, data, registry)
     publish_inventory(settings, data, registry)
     return key
@@ -1247,8 +1254,12 @@ def main():
             settings, _ = open_existing(data)
             connect(settings, data, args.tunnel_id)
     elif args.command == 'status':
-        settings, registry = open_existing(data)
+        with operator_lock(data):
+            settings, registry = open_existing(data)
+            if 'connection_history' not in registry:
+                commit_registry(data / 'agents.json', registry)
         publish_inventory(settings, data, registry)
+        refresh_connections(data)
         compose(data, '--profile', 'agents', 'ps')
     if args.command in {'install', 'setup-guide', 'agent'} or args.command == 'remote' and args.action == 'confirm':
         publish_metadata(data)

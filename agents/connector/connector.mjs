@@ -266,17 +266,20 @@ async function deliver(client, event) {
       ?.find(id => Object.hasOwn(members, id));
     const step = (delivery.issues.length || declaredOutcome(reply)?.status === 'blocked') ? 'blocked' : 'returned';
     const need = needFromReply(reply, catalog.current()?.agents.find(a => a.id === userId), decision);
-    outgoing = { content, notice, target, step, need };
+    outgoing = { content, notice, target, step, need, policyRevision: decision?.policyRevision };
     store.saveOutgoing(event.id, outgoing);
   }
   const { content, notice } = outgoing;
+  const turn = content[turnKey];
+  const flow = outgoing.target && (turn?.returning ? 'return' : turn?.handoff ? 'dispatch' : undefined);
   const txnId = createHash('sha256').update(event.id).digest('hex');
   const status = content[taskOutcomeKey]?.status;
   const outcomeKey = outcomeReaction[status];
   const sent = await sendEncrypted(client, roomId, txnId, content);
   if (notice) await sendEncrypted(client, roomId, reactionTransaction('capability-gap', event.id), notice);
   store.sent(event.id, sent, outcomeKey, process.env.CONTEXT_INTELLIGENCE_URL &&
-    executionEvidence({ roomId, actor: userId, event, sent, status, need:outgoing.need, target: outgoing.target, step: outgoing.step,
+    executionEvidence({ roomId, actor: userId, event, sent, status, need: outgoing.need, target: outgoing.target,
+      step: flow === 'dispatch' ? undefined : outgoing.step, flow, policyRevision: outgoing.policyRevision,
       evidence: content[taskOutcomeKey]?.evidence }));
   console.log('Encrypted agent reply delivered.');
 }

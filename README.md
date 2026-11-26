@@ -20,7 +20,7 @@ Start with five roles and add specialists as your work grows. Use the record of 
 | **Scouter** | Researches skills, MCP servers, and tools for existing duties and has the target agent verify approved access. | **Scouter** private chat |
 | **VPS Manager** | Prepares and verifies host maintenance. The operator votes on the exact operation before it runs. | **Office** for requests, **Root Operations** for approval |
 
-Open the dashboard from **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. New specialists appear in the same roster. [Starting contact permissions and role examples](docs/team.md#first-interactions)
+Open the dashboard from **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. **Team connections** shows the permitted directions. Follow an arrow to review that route’s changes and recent Office handoffs, or select **View connection changes** for the workspace log. [Team connections and history](docs/team.md#team-connections) · [Starting contact permissions and role examples](docs/team.md#first-interactions)
 
 ## Quick start
 

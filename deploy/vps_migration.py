@@ -9,6 +9,7 @@ from installer import (CLIENT, PRESETS, compose, compose_config, directory, load
                        operator_lock, password, prepare_agent_state, prepare_images, publish_inventory,
                        refresh_context, register_entry, request, run, save, sync_workshop, up)
 from layout import encoded, membership, missing, room_route
+from connection_history import commit_registry
 from persona_management import disconnect
 from roster import archive_worker, deactivate_worker
 
@@ -141,7 +142,7 @@ def migrate_root(data, password_file, confirmed):
             sync_workshop(settings, data, registry)
             up(data, *(key for key, entry in registry['agents'].items()
                        if entry['placement'] == 'local' and entry['active']))
-            save(data / 'agents.json', registry)
+            commit_registry(data / 'agents.json', registry, actor=settings['owner'], reason='VPS Manager migration')
             save(data / 'settings.json', settings)
             publish_inventory(settings, data, registry)
             save(journal, {'phase': 'complete'})

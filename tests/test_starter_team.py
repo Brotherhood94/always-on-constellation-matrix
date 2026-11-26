@@ -132,10 +132,12 @@ class StarterTeamTests(unittest.TestCase):
         first = 'a' * 64
         op = {'kind': 'undo', 'agent': 'scouter', 'evidence': '$proof', 'change': first, 'generation': 2}
         current = coaching_id(op)
-        registry = {'agents': {k: {**v, 'active': True} for k, v in installer.starter_profiles().items()}}
+        registry = {'team_version': 2, 'dynamic_handoffs': True,
+                    'agents': {k: {**v, 'active': True} for k, v in installer.starter_profiles().items()}}
         registry['agents']['scouter']['last_coaching'] = current
         with TemporaryDirectory() as folder:
             data = Path(folder)
+            installer.commit_registry(data / 'agents.json', registry)
             (data / 'workshop-management').mkdir()
             journal = data / 'team-changes'
             journal.mkdir()
@@ -162,3 +164,4 @@ class StarterTeamTests(unittest.TestCase):
                 self.assertEqual(coach_change(data, {}, registry, op), 'applied')
                 self.assertTrue(installer.load(receipt)['done'])
                 self.assertTrue(all(call.args[1] == 'GET' for call in api.call_args_list))
+                self.assertEqual(installer.load(data / 'agents.json')['connection_history']['sequence'], 1)
