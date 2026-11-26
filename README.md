@@ -1,16 +1,107 @@
 # Always-on Constellation via Matrix
 
-**A private workspace for a team of always-on AI agents.**
+**A private, always-on AI office you can shape around your work.**
 
-Assign work in Element or from Dot in ChatGPT. The agents coordinate in one encrypted Office thread, share files and evidence, and return a verified result to the original request. The team runs on a Linux VPS and stays available when your laptop is offline.
+Give Task Manager a request in Element or from Dot in ChatGPT. It can assign parts of the work to other agents, keep the handoffs in one encrypted Office thread, and return the result with evidence. The team runs on a Linux VPS and stays available when your laptop is offline.
 
-[Quick start](#quick-start) · [Architecture](#architecture) · [Follow an Office task](#follow-an-office-task) · [Deployment scenarios](docs/acceptance.md#post-deployment-scenarios)
+Start with five roles and add specialists as your work grows. Use the record of real assignments, handoffs, and outcomes to decide when to improve how agents work together, equip an existing agent, or add someone to the team.
+
+[Quick start](#quick-start) · [Starter team](#meet-the-starter-team) · [Office workflow](#follow-an-office-task) · [Architecture](#architecture) · [Deployment scenarios](docs/acceptance.md#post-deployment-scenarios)
 
 ![A compact server connected by illuminated traces to four agent modules](assets/constellation-vps-hero.jpg)
+
+## Meet the starter team
+
+| Agent | What it owns | Where to start |
+| --- | --- | --- |
+| **Task Manager** | Coordinates work, delegates by capability, and verifies the result in the original thread. | **Office** |
+| **Hiring Manager** | Spots recurring gaps in the team’s capabilities and proposes new personas or retirements. | **Hiring Manager** private chat |
+| **Coach** | Reviews handoffs in Context Intelligence and revises working styles and permitted contacts through Persona Workshop. | **Coach** private chat |
+| **Scouter** | Researches skills, MCP servers, and tools for existing duties and has the target agent verify approved access. | **Scouter** private chat |
+| **VPS Manager** | Prepares and verifies host maintenance. The operator votes on the exact operation before it runs. | **Office** for requests, **Root Operations** for approval |
+
+Open the dashboard from **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. New specialists appear in the same roster. [Starting contact permissions and role examples](docs/team.md#first-interactions)
+
+## Quick start
+
+From this checkout on an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Start setup as your regular user. The installer invokes sudo for Docker, protected deployment files, and host services. Tailscale Serve gives authorized devices private HTTPS access to Element’s homeserver, the dashboard, and the graph browser. [VPS prerequisites](docs/runbook.md#initial-setup) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
+
+```sh
+./constellation_matrix install
+```
+
+1. **Deploy the workspace.** Choose your network, Matrix username, and integrations. Set your Matrix password and a dedicated Context Intelligence password. The installer displays the homeserver and tells you how to sign in to Element Desktop.
+2. **Choose your team.** Confirm Element sign-in in the terminal. Use the arrow keys to review the five preselected roles, press Enter to toggle any of them, and choose **Done**. The installer registers your selection and opens Amplifier’s provider and model setup for each local agent.
+3. **Open the welcome.** Once the selected agents are ready, Hiring Manager sends a private welcome if selected. Otherwise, a ready Office agent posts it in Office. The welcome points to **Workspace shortcuts**.
+
+ChatGPT via Codex is the only provider tested with a live account. Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
+
+If agent sign-in was interrupted, resume it from the same checkout.
+
+```sh
+./constellation_matrix agent configure
+```
+
+Run `./constellation_matrix setup-guide` to resume onboarding or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md)
+
+### Finish in Element
+
+- **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
+- **Telegram → Telegram Control → Pinned messages.** If you enabled Telegram, the installer joins your account to both the Space and Control. Open **Set up Telegram**. **Telegram Bridge** and each verified chat appear in this Space as you connect them. [Telegram setup](docs/telegram.md)
+
+### Send your first task
+
+Task Manager is the entry point for coordinated Office tasks. Open **Agents → Office** in Element, select `@Task Manager` from the mention picker, and send “@Task Manager, coordinate a three-step checklist for getting started in Office and post the result in this thread.”
+
+If you enabled Dot, open a ChatGPT conversation with the **Constellation Office** plugin and ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” [Dot setup](docs/dot.md)
+
+If you skipped Task Manager, use the Office agent named in your welcome. If you skipped the Office roster, add a worker first. [Add a worker](docs/runbook.md#add-a-worker)
+
+## Follow an Office task
+
+Mention **Task Manager** when you want several agents to work on a request. Task Manager sets the acceptance criteria, delegates by capability, and verifies the evidence before closing the task.
+
+```mermaid
+---
+config:
+  sequence:
+    actorMargin: 26
+    width: 108
+    height: 44
+    messageMargin: 24
+    mirrorActors: false
+    wrap: true
+---
+sequenceDiagram
+    participant User as Requester
+    participant Office as Office thread
+    participant Manager as Task Manager
+    participant Scout as Scouter
+    User->>Office: Mention Task Manager with a tool research request
+    Office->>Manager: Deliver request
+    Manager->>Office: Add 👀 and give Scouter a research question
+    Office->>Scout: Deliver scoped handoff
+    Scout->>Office: Return publisher evidence to Task Manager
+    alt Verified
+        Manager->>Office: Post result and add ✅
+    else Blocked
+        Manager->>Office: Report blocker and add ❌
+    end
+```
+
+An agent adds 👀 when it accepts an assignment and clears it after delivery. A managed task has up to **15 agent replies**, with the final reply reserved for Task Manager. You can ask an agent directly for status without consuming a turn. [Communication policies](policy/README.md)
+
+### Improve the team from its work
+
+Context Intelligence records who handed off an assignment, whether the recipient accepted it, and whether the original task finished or was blocked. During a stalled release task, Scouter can propose narrowly scoped GitHub access for a Coder who already owns repository work. Coach can revise the working agreement if the handoff omitted acceptance criteria. Hiring Manager can propose a release editor if the team repeatedly has nobody responsible for release notes. [Execution timelines](integrations/context-execution/README.md)
+
+On a systemd deployment, these management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving VPS Manager in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
 
 ## Architecture
 
 Each agent has a Matrix identity, a private workspace, and a persistent Constellation Instance running Amplifier. The **Agents** Space groups **Office**, **VPS Alerts**, and the operator’s private chats with **Hiring Manager**, **Coach**, **Scouter**, and **VPS Manager** (in **Root Operations**). General Office workers also share a desktop for task files.
+
+The installer enables startup at boot. Docker restarts application containers, Tailscale Serve provides private dashboard access, and systemd runs host services, including the Dot tunnel once connected. [Architecture notes](docs/architecture.md) · [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 
 ![Architecture overview showing Element, Dot and Telegram connecting to Matrix and always-on Amplifier agents on a private VPS](assets/architecture.svg)
 
@@ -69,105 +160,9 @@ flowchart TB
 
 </details>
 
-## Meet the starter team
-
-| Agent | What to ask it to do |
-| --- | --- |
-| **Task Manager** | Coordinate an Office request, assign work by capability, and verify the result in the original thread. |
-| **Hiring Manager** | Investigate work nobody owns. Review its proposed persona, first assignment, or retirement in its private chat. |
-| **Coach** | Investigate a failed handoff. It can revise working style in Persona Workshop and change which teammates an agent may contact. |
-| **Scouter** | Find a skill, MCP server, or tool for an existing duty. Approve a scoped proposal in its private chat and see whether the target can use it. |
-| **VPS Manager** | Prepare a host change. Review the exact operation in **Root Operations** before it runs. |
-
-Open the dashboard from **Agents → VPS Alerts → Workspace shortcuts**. Choose **Persona and duties** on any roster entry to read its purpose, responsibilities, working style, contact list, and verified tools. Your own specialists appear in the same roster. [Starter team and first interactions](docs/team.md) · [Architecture notes](docs/architecture.md)
-
-## Follow an Office task
-
-Mention **Task Manager** when you want several agents to work on a request. Task Manager sets the acceptance criteria, delegates by capability, and verifies the evidence before closing the task.
-
-```mermaid
----
-config:
-  sequence:
-    actorMargin: 26
-    width: 108
-    height: 44
-    messageMargin: 24
-    mirrorActors: false
-    wrap: true
----
-sequenceDiagram
-    participant User as Requester
-    participant Office as Office thread
-    participant Manager as Task Manager
-    participant Scout as Scouter
-    User->>Office: Mention Task Manager with a tool research request
-    Office->>Manager: Deliver request
-    Manager->>Office: Add 👀 and give Scouter a research question
-    Office->>Scout: Deliver scoped handoff
-    Scout->>Office: Return publisher evidence to Task Manager
-    alt Verified
-        Manager->>Office: Post result and add ✅
-    else Blocked
-        Manager->>Office: Report blocker and add ❌
-    end
-```
-
-An agent adds 👀 when it accepts an assignment and clears it after delivery. A managed task has up to **15 agent replies**, with the final reply reserved for Task Manager. You can ask an agent directly for status without consuming a turn. [Communication policies](policy/README.md)
-
-## Quick start
-
-On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Start setup as your regular user. The installer invokes sudo for Docker, protected deployment files, and host services. For private access from your devices, connect the VPS to your tailnet and enable Tailscale HTTPS. [VPS setup](docs/runbook.md#initial-setup) · [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
-
-```sh
-./constellation_matrix install
-```
-
-Choose your network and Matrix username, then enter and confirm your Matrix password. Choose your integrations and set a dedicated Context Intelligence password. The installer deploys the workspace and shows how to sign in to Element Desktop.
-
-After confirming Element sign-in, use the arrow keys and Enter to review the five preselected starter agents. Toggle any of them with Enter, then choose **Done**. The installer registers the roster and opens Amplifier provider setup for each local agent. After everyone is ready, Hiring Manager sends a private welcome when selected. Otherwise, an available Office agent sends the welcome in Office. The welcome links to the **Workspace shortcuts** pin in **Agents → VPS Alerts**.
-
-On a systemd VPS, management becomes available as the selected agents activate. The operator decides hires, retirements, protected contact changes and tool grants in encrypted private chats. Coach can apply and undo ordinary working-style and contact improvements. [Decisions and examples](docs/team.md#first-interactions)
-
-If agent sign-in was interrupted, resume it from the same checkout.
-
-```sh
-./constellation_matrix agent configure
-```
-
-Run `./constellation_matrix setup-guide` to resume or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
-
-### Finish in Element
-
-- **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Telegram Control → Pinned messages.** If you enabled Telegram, the installer joins your account to both the Space and Control. Open **Set up Telegram**. **Telegram Bridge** and each verified chat appear in this Space as you connect them. [Telegram setup](docs/telegram.md)
-
-### Send your first task
-
-Task Manager is the entry point for coordinated Office tasks. Open **Agents → Office** in Element, select `@Task Manager` from the mention picker, and send “@Task Manager, coordinate a three-step checklist for getting started in Office and post the result in this thread.”
-
-If you enabled Dot, open a ChatGPT conversation with the **Constellation Office** plugin and ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” [Dot setup](docs/dot.md)
-
-If you skipped Task Manager, use the Office agent named in your welcome. If you skipped the Office roster, add a worker first. [Add a worker](docs/runbook.md#add-a-worker)
-
-**ChatGPT via Codex is the only provider tested with a live account.** Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
+## Operate and extend
 
 For unattended provisioning, edit the example configuration, check it with `./constellation_matrix validate --config <file>`, and run `sudo ./constellation_matrix install --config <file>`. Run `setup-guide` from an interactive terminal afterwards. [Example configuration](deploy/config.example.json)
-
-The installer enables startup at boot. Docker restarts application containers, Tailscale Serve serves the static dashboard, and systemd runs the host services, including the Dot tunnel once connected. [Boot and service placement](docs/runbook.md#boot-and-service-placement)
-
-### Remote worker setup
-
-Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
-
-1. **Worker.** Install Docker Engine with Compose V2, Tailscale, and SSHFS. Generate a dedicated Ed25519 key for the shared desktop.
-2. **VPS.** Register the optional [remote worker profile](agents/examples/remote-worker.json), authorize the worker’s public key with `remote desktop`, and create its private enrollment with `remote export`.
-3. **Worker.** Verify the VPS desktop host key, mount the shared desktop, and run `remote attach`. Complete Amplifier sign-in and send the resulting files back to the VPS.
-4. **VPS.** Run `persona-connect` and `remote confirm`. Check that the worker is registered, then verify an Office handoff and a shared-file round trip.
-
-[Copyable commands for both machines](docs/runbook.md#add-a-remote-worker)
-
-## Operate and extend
 
 | Task | Start here |
 | --- | --- |
@@ -182,6 +177,17 @@ Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
+
+### Remote worker setup
+
+Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
+
+1. **Worker.** Install Docker Engine with Compose V2, Tailscale, and SSHFS. Generate a dedicated Ed25519 key for the shared desktop.
+2. **VPS.** Register the optional [remote worker profile](agents/examples/remote-worker.json), authorize the worker’s public key with `remote desktop`, and create its private enrollment with `remote export`.
+3. **Worker.** Verify the VPS desktop host key, mount the shared desktop, and run `remote attach`. Complete Amplifier sign-in and send the resulting files back to the VPS.
+4. **VPS.** Run `persona-connect` and `remote confirm`. Check that the worker is registered, then verify an Office handoff and a shared-file round trip.
+
+[Copyable commands for both machines](docs/runbook.md#add-a-remote-worker)
 
 ## Planned features
 

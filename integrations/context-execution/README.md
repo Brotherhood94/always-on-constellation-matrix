@@ -1,6 +1,6 @@
 # Context Intelligence execution timelines
 
-The [deployment image](../../deploy/context.Dockerfile) builds Context Intelligence at the pinned upstream source revision and includes the timeline handlers in this directory. Office connectors contribute authenticated execution metadata. The Chief of Staff observes encrypted Matrix threads and records event and task references.
+The deployment image builds Context Intelligence at the pinned upstream source revision and includes the timeline handlers in this directory. Office connectors contribute authenticated execution metadata. Coach, Hiring Manager, and Scouter use scoped Office reports to review collaboration, staffing gaps, and tool blockers. On legacy deployments with Chief of Staff, its observer records references from encrypted Matrix threads. [Deployment image](../../deploy/context.Dockerfile) · [Starter team](../../docs/team.md)
 
 In Neo4j Browser, inspect steps within a task or adjacent tasks in a thread.
 
@@ -24,7 +24,7 @@ RETURN task.office_request AS request, handoff.source AS sender,
 LIMIT 80
 ```
 
-The task starts `in_progress`. It becomes `verified` when Manager, or the initial assignee for standalone work, references an encrypted Office reply or a delivered file as evidence. A terminal blocker from the same assignee sets `blocked`. Use `HAS_OUTCOME` to see the exact event. A direct status reply or failed subtask leaves the overall status open.
+The task starts `in_progress`. It becomes `verified` when Task Manager, or the initial assignee for standalone work, references an encrypted Office reply or a delivered file as evidence. A terminal blocker from the same assignee sets `blocked`. Use `HAS_OUTCOME` to see the exact event. A direct status reply or failed subtask leaves the overall status open.
 
 ```cypher
 MATCH (task:ExecutionTask {workspace: 'agents-team'})
