@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { requestTelegramOffice, telegramOfficeCommand } from '../agents/connector/telegram-office.mjs';
+import { telegramIntent } from '../agents/connector/telegram-intent.mjs';
 import { acceptedMessage } from '../agents/connector/matrix-routing.mjs';
 import { listenTelegramOffice, telegramControlSearch, telegramOfficeAction } from '../deploy/matrix/bot/telegram-office.mjs';
 import { addressedRequest, telegramRequest } from '../integrations/telegram/control.mjs';
@@ -131,6 +132,48 @@ test('a short contact name resolves only linked direct chats for drafting and pr
   assert.deepEqual((await telegramOfficeAction({ ...request, target: sam.name }, options)).rooms, [sam]);
   assert.deepEqual((await telegramOfficeAction({ ...request, type: 'group' }, options)).rooms, []);
   assert.deepEqual((await telegramOfficeAction({ ...request, allowGivenName: false }, options)).rooms, []);
+});
+
+test('an Italian exact-text request resolves an exact Telegram username with or without @', async () => {
+  const space = '!telegram:sample.test';
+  const control = '!bridge:sample.test';
+  const linked = { room: '!contact:sample.test', peer: 'user:1001', name: 'Example Contact' };
+  const unlinked = { room: '!other:sample.test', peer: 'user:1002', name: 'Other Contact' };
+  const state = (type, content, state_key = '') => ({ type, content, state_key });
+  const lookups = [];
+  let linkedRoom = linked.room;
+  let lookupError;
+  const options = { space, control, owner, guide: agent, key: 'fixture',
+    database: { query: async () => ({ rows: [linked, unlinked] }) },
+    client: { getRoomState: async () => [
+      state('m.room.create', { type: 'm.space', 'm.federate': false }),
+      state('m.room.join_rules', { join_rule: 'invite' }),
+      ...[owner, agent].map(member => state('m.room.member', { membership: 'join' }, member)),
+      state('m.space.child', { via: ['sample.test'] }, linkedRoom),
+    ] },
+    bridgeFetch: async url => {
+      assert.equal(new URL(url).searchParams.get('user_id'), owner);
+      lookups.push(decodeURIComponent(new URL(url).pathname.split('/').at(-1)));
+      return lookupError ? Response.json({ errcode: lookupError }, { status: 404 }) : Response.json({ id: '1001', name: linked.name });
+    },
+  };
+  const resolve = (target, type = 'direct') =>
+    telegramOfficeAction({ id: '$exact', action: 'resolve', target, type, linkedOnly: true, allowGivenName: true }, options);
+  for (const account of ['SampleHandle', '@SampleHandle']) {
+    const intent = telegramIntent('Telegram: manda un messaggio privato a ' + account +
+      ' con il testo esatto «ciao bello».', { office: true });
+    assert.deepEqual(intent, { action: 'send', target: account, type: 'direct', text: 'ciao bello' });
+    assert.deepEqual((await resolve(intent.target)).rooms, [linked]);
+  }
+  assert.deepEqual((await resolve(linked.name)).rooms, [linked]);
+  assert.deepEqual((await resolve('Example')).rooms, [linked]);
+  assert.deepEqual((await resolve('SampleHandle', 'group')).rooms, []);
+  assert.deepEqual(lookups, ['@SampleHandle', '@SampleHandle']);
+  linkedRoom = unlinked.room;
+  assert.deepEqual((await resolve('SampleHandle')).rooms, []);
+  lookupError = 'M_NOT_FOUND';
+  assert.deepEqual(await resolve('UnknownHandle'), { ok: true, rooms: [] });
+  assert.equal((await resolve('@UnknownHandle')).ok, false);
 });
 
 test('only a linked, operator-owned chat can use the private binding route', async () => {

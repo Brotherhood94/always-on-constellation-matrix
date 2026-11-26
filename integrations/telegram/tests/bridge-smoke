@@ -705,7 +705,7 @@ try {
   console.log('Telegram Agent accepted a direct Office mention and returned only encrypted status receipts with a private link.');
 
   const officeSend = await reader.put(officeRoom, 'fixture-office-decline', await reader.encryptEvent(officeRoom, 'm.room.message', {
-    msgtype: 'm.text', body: '@Telegram Agent, manda messaggio a Auto Pilot «Draft for decline»',
+    msgtype: 'm.text', body: '@Telegram Agent, manda un messaggio privato a Auto Pilot con il testo esatto «Draft for decline».',
     'm.mentions': { user_ids: [agent.user_id] },
   }));
   let declining;

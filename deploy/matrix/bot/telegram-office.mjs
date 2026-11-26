@@ -177,23 +177,33 @@ export async function telegramOfficeAction(input, options) {
     const rooms = eligible.filter(({ room, peer }) => linked.has(room) &&
       (!input.type || (input.type === 'direct') === peer.startsWith('user:')));
     const rows = rooms.filter(({ room, peer, name }) => peer === selector || room === selector || names(name) === selectorName);
-    if (input.linkedOnly && !username.test(selector)) {
+    let account = username.test(selector) ? selector : null;
+    if (input.linkedOnly && !account) {
       const shortName = input.allowGivenName === true && input.type !== 'group' && /^\p{L}{2,}$/u.test(selectorName);
       const matches = rows.length || !shortName ? rows : rooms.filter(({ peer, name }) =>
         peer.startsWith('user:') && names(name)?.startsWith(selectorName + ' '));
-      return { ok: true, rooms: matches.slice(0, 11) };
+      if (matches.length || input.type !== 'direct' || input.allowGivenName !== true || !username.test('@' + selector)) {
+        return { ok: true, rooms: matches.slice(0, 11) };
+      }
+      account = '@' + selector;
     }
     if (groupId.test(selector) || userPeer.test(selector)) {
       if (rows.length) return { ok: true, rooms: rows };
       if (input.forOpening) return { ok: true, rooms: [{ peer: selector, name: selector }] };
       return { ok: true, rooms: [] };
     }
-    if (username.test(selector)) {
+    if (account) {
       if (!key) return fail('Activate Telegram Bridge before looking up a username.');
-      const response = await bridgeFetch(bridgeProvisioning + 'resolve_identifier/' + encodeURIComponent(selector) +
+      const response = await bridgeFetch(bridgeProvisioning + 'resolve_identifier/' + encodeURIComponent(account) +
         '?' + new URLSearchParams({ user_id: owner }), { redirect: 'error', headers: { authorization: 'Bearer ' + key },
         signal: AbortSignal.timeout(15_000) });
-      if (!response.ok) return bridgeOpenFailure(response, true);
+      if (!response.ok) {
+        if (account !== selector && response.status === 404 &&
+            (await response.clone().json().catch(() => null))?.errcode === 'M_NOT_FOUND') {
+          return { ok: true, rooms: [] };
+        }
+        return bridgeOpenFailure(response, true);
+      }
       const result = await response.json();
       if (typeof result.id !== 'string' || !userPeer.test('user:' + result.id)) return fail('Telegram returned an invalid user ID.');
       const peer = 'user:' + result.id;

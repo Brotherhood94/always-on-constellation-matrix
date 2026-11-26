@@ -213,7 +213,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     }
     const { matches, error } = await resolve(row, scope);
     if (error) return feedback(row, error, 'blocked');
-    if (!matches.length) return feedback(row, 'No eligible chat matched. Use its exact Telegram username or ID, or verify its binding for drafts and updates.', 'blocked');
+    if (!matches.length) return feedback(row, 'No eligible Telegram chat matched. Check the exact @username, peer ID, or chat name. For drafts and updates, first open and join the chat under Telegram → People.', 'blocked');
     if (matches.length > 10) return feedback(row, 'More than ten chats matched. Start a request with a more specific name or exact Telegram ID.', 'blocked');
     const choices = matches.map((item, index) => `${index + 1}. ${item.name} (${item.type}, ${item.peer})`);
     if (scope.action === 'lookup') return feedback(row, choices.join('\n'), 'completed');
