@@ -413,9 +413,9 @@ test('a short Italian send request queues one approval draft and does not delive
 
 function officeHandoff(f, id, body, sender = owner, structured) {
   const manager = { name: 'Task Manager', id: caller.actor };
-  f.originalEvents.set(id, { event_id: id, type: 'm.room.message', sender,
+  f.originalEvents.set(id, { event_id: id, type: 'm.room.message', sender, origin_server_ts: 1_000,
     content: { ...mentionMessage(body, manager), ...(structured && { [dotPlanKey]: { task_id: 'telegram-test', telegram: structured } }) } });
-  return { event_id: id + '-handoff', type: 'm.room.message', sender: manager.id,
+  return { event_id: id + '-handoff', type: 'm.room.message', sender: manager.id, origin_server_ts: 1_000,
     content: { ...mentionMessage('Please handle this Telegram request.', { name: 'Telegram Agent', id: agent }),
       [telegramHandoffKey]: { request: id }, 'm.relates_to': { rel_type: 'm.thread', event_id: id } } };
 }
@@ -429,6 +429,7 @@ test('the Office handoff verifies the original sender and queues an exact send w
   await f.broker().tick();
   assert.equal(f.store.get('SELECT count(*) AS count FROM control_request').count, 0);
   assert.equal(await f.broker().receiveOffice({ ...handoff, sender: '@untrusted:sample.test' }), false);
+  assert.equal(await f.broker().receiveOffice({ ...handoff, origin_server_ts: -1_000_000 }), false);
   assert.equal(await f.broker().receiveOffice(handoff), true);
   assert.equal(await f.broker().receiveOffice(handoff), true);
   await f.broker().tick();
@@ -526,4 +527,23 @@ test('new groups retain the requested title including conjunctions', () => {
   const intent = telegramIntent('Telegram: create a group called Research and Development with @sample_contact.', { office: true });
   assert.equal(intent.target, 'Research and Development');
   assert.deepEqual(intent.members, ['@sample_contact']);
+});
+
+test('the connector resumes verification of a recent encrypted handoff after delayed Matrix visibility', async () => {
+  const f = fixture({ officeFirst: true });
+  const id = '$delayed-handoff';
+  const handoff = officeHandoff(f, id, 'Telegram: send a message to Sam Example saying Hello.');
+  const input = { ...caller, id, method: 'submit', handoff: handoff.event_id };
+  assert.deepEqual(await f.broker().office(input), { status: 'pending', office: true });
+  await f.broker().tick();
+  assert.equal(f.store.all('SELECT event FROM control_request').length, 0);
+  f.restart();
+  f.advance(3001);
+  f.originalEvents.set(handoff.event_id, handoff);
+  await f.broker().tick();
+  assert.equal(f.store.all('SELECT event FROM control_request').length, 1);
+  assert.equal(f.store.all('SELECT request FROM telegram_handoff_queue').length, 0);
+  await f.broker().office(input);
+  await f.broker().tick();
+  assert.equal(f.store.all('SELECT event FROM control_request').length, 1);
 });

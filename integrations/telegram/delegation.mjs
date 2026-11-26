@@ -93,9 +93,14 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     }
   }
   store.db.exec('CREATE TABLE IF NOT EXISTS telegram_remote_action (id TEXT PRIMARY KEY, result TEXT)');
+  store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_handoff_queue (
+    request TEXT PRIMARY KEY, handoff TEXT NOT NULL, actor TEXT NOT NULL, created INTEGER NOT NULL, retry INTEGER NOT NULL
+  )`);
   const officeFlow = Boolean(settings.officeFirst);
   const dot = settings.dot ?? `@dot:${settings.domain}`;
   const coordinator = id => ['task-manager', 'manager'].some(key => id === `@${key}:${settings.domain}`);
+  const recent = event => Number.isSafeInteger(event?.origin_server_ts) &&
+    event.origin_server_ts >= now() - jobAge && event.origin_server_ts <= now() + 60_000;
   const grants = new Map();
   const load = id => store.get('SELECT * FROM telegram_task WHERE id=?', id);
   const queued = () => store.get("SELECT * FROM telegram_task WHERE phase IN ('queued','feedback') ORDER BY created LIMIT 1");
@@ -136,12 +141,20 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     }
     if (input.method === 'status') {
       const row = load(input.id);
-      return row?.office ? receipt(row) : { status: 'missing' };
+      if (row?.office) return receipt(row);
+      const waiting = officeFlow && store.get('SELECT created FROM telegram_handoff_queue WHERE request=?', input.id);
+      if (!waiting) return { status: 'missing' };
+      return waiting.created + jobAge < now() ? { status: 'blocked' } : { status: 'pending', office: true };
     }
     if (input.method !== 'submit' || !await checkOffice() || !await checkRoom()) return { status: 'unavailable' };
     if (officeFlow) {
       const existing = load(input.id);
-      return existing?.office ? receipt(existing) : { status: 'pending', office: true };
+      if (existing?.office) return receipt(existing);
+      if (eventId.test(input.handoff ?? '')) {
+        store.run('INSERT OR IGNORE INTO telegram_handoff_queue VALUES (?,?,?,?,?)',
+          input.id, input.handoff, input.actor, now(), now());
+      }
+      return { status: 'pending', office: true };
     }
     if (Object.hasOwn(input, 'telegram')) {
       const telegram = input.sender === `@dot:${settings.domain}` && input.text === undefined && telegramTaskPayload(input.telegram);
@@ -150,17 +163,32 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     const intent = telegramIntent(input.text, { office: true });
     return intent ? submit(input.id, true, intent) : { status: 'forbidden' };
   }
+  async function retryOfficeHandoff() {
+    if (!officeFlow) return;
+    store.run('DELETE FROM telegram_handoff_queue WHERE created<?', now() - 24 * 60 * 60_000);
+    const record = store.get('SELECT * FROM telegram_handoff_queue WHERE created>=? AND retry<=? ORDER BY retry LIMIT 1',
+      now() - jobAge, now());
+    if (!record) return;
+    if (load(record.request)?.origin) {
+      store.run('DELETE FROM telegram_handoff_queue WHERE request=?', record.request);
+      return;
+    }
+    store.run('UPDATE telegram_handoff_queue SET retry=? WHERE request=?', now() + 3000, record.request);
+    const handoff = await getOfficeEvent(record.handoff).catch(() => null);
+    if (!handoff || handoff.sender !== record.actor || handoff.content?.[telegramHandoffKey]?.request !== record.request) return;
+    if (await receiveOffice(handoff)) store.run('DELETE FROM telegram_handoff_queue WHERE request=?', record.request);
+  }
   async function receiveOffice(event) {
     if (!officeFlow || event.type !== 'm.room.message') return false;
     if (event.sender === settings.owner && await choose(event, true)) return true;
     const request = event.content?.[telegramHandoffKey]?.request;
     const relation = event.content?.['m.relates_to'];
-    if (!coordinator(event.sender) || !eventId.test(request ?? '') || relation?.rel_type !== 'm.thread' ||
+    if (!coordinator(event.sender) || !recent(event) || !eventId.test(request ?? '') || relation?.rel_type !== 'm.thread' ||
         relation.event_id !== request || telegramMention(event.content, settings.agent, 'Telegram Agent') === null ||
         !await checkRoom() || !await checkOffice()) return false;
     if (load(request)?.origin) return true;
-    const original = await getOfficeEvent(request);
-    if (!original || ![settings.owner, dot].includes(original.sender) ||
+    const original = await getOfficeEvent(request).catch(() => null);
+    if (!recent(original) || ![settings.owner, dot].includes(original.sender) ||
         original.content?.['m.relates_to'] || original.content?.['m.mentions']?.user_ids?.length !== 1 ||
         original.content['m.mentions'].user_ids[0] !== event.sender) return false;
     const label = event.sender.startsWith('@task-manager:') ? 'Task Manager' : 'Manager';
@@ -304,7 +332,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     if (!binding && destination.room && (tool === 'prepare_draft' || (officeFlow && ['send_message', 'read_recent'].includes(tool)))) {
       // Pin the exact destination before changing its relay or binding.
       store.run("UPDATE telegram_task SET selection=? WHERE id=? AND phase='queued'", JSON.stringify(destination), row.id);
-      const prepared = await prepareBinding(destination, row.id);
+      const prepared = await prepareBinding(destination, row.id, officeFlow);
       if (!prepared.binding) return feedback(row, prepared.error, 'blocked');
       binding = prepared.binding;
     }
@@ -381,6 +409,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     } finally { grant.running = false; }
   }
   async function tick() {
+    await retryOfficeHandoff();
     // Expired choices and unresolved requests stop without touching the bridge.
     store.run(`UPDATE telegram_task SET phase='feedback',feedback='This Telegram request expired. Start a new request.',
       outcome='blocked',selection=NULL WHERE phase IN ('queued','choosing') AND created<?`, now() - jobAge);

@@ -91,7 +91,7 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
       };
       const annotations = { idempotentHint: true, destructiveHint: false, openWorldHint: false };
       server.registerTool('prepare_telegram_message', {
-        description: 'Queue an exact new or reply message in the private Telegram Bridge room for the operator to approve in Element. This tool cannot send to Telegram. Ask for one exact destination if unclear.',
+        description: 'Request a private preview of an exact new or reply message in Telegram Bridge. To request delivery or a result in Office, call publish_telegram_task.',
         inputSchema: { ...shared,
           text: z.string().min(1).refine(value => !!value.trim() && Buffer.byteLength(value) <= 3500),
           source_event: z.string().regex(event).optional().describe('Optional Matrix event ID of a received message in this same connected chat.'),

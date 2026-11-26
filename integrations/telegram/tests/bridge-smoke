@@ -175,7 +175,7 @@ docker run --rm --network "$network" --user 0:0 -v "$state:/fixture:ro" \
   -v "$src/../../agents/connector/telegram-office.mjs:/app/office-command.mjs:ro" \
   -v "$src/tests/space-fixture.mjs:/app/space-fixture.mjs:ro" \
   --entrypoint node "$connector_image" /app/space-fixture.mjs
-docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gid=991,mode=0700 \
+docker run --rm -i --network "$network" --user 991:991 -e "TELEGRAM_OFFICE_ONLY=${TELEGRAM_OFFICE_ONLY:-}" --tmpfs /state:uid=991,gid=991,mode=0700 \
   -v "$state:/fixture:ro" -v "$fixture:/acp-fixture:ro" \
   -v "$src/policy.mjs:/app/policy.mjs:ro" -v "$src/matrix.mjs:/app/matrix.mjs:ro" \
   -v "$src/../../deploy/matrix/bot/telegram-space.mjs:/app/telegram-space.mjs:ro" \
@@ -439,6 +439,7 @@ let officeWorker;
 let officeWorkerExit;
 let managerReader;
 let dotReader;
+let cursor = before.next_batch;
 async function waitFor(check, label) {
   for (let attempt = 0; attempt < 280; attempt++) {
     if (await check()) return;
@@ -458,6 +459,7 @@ async function castVote(device, draft, action, transaction) {
 }
 try {
   await waitFor(() => store.setting('last_sync'), 'the connector to sync');
+  if (!process.env.TELEGRAM_OFFICE_ONLY) {
   worker.kill('SIGSTOP');
   binder = spawn(process.execPath, ['/app/service.mjs', 'bind', 'binding-pilot.json'], {stdio:'inherit'});
   const bindExit = once(binder, 'exit');
@@ -717,7 +719,7 @@ try {
 
   const starting = await reader.sync(controlCursor, 0);
   await reader.applySync(starting, async () => {});
-  let cursor = starting.next_batch;
+  cursor = starting.next_batch;
   const officeAssignment = await reader.encryptEvent(officeRoom, 'm.room.message', {
     msgtype: 'm.text', body: '@Telegram Agent, list my Telegram rooms', 'm.mentions': { user_ids: [agent.user_id] },
   });
@@ -801,6 +803,7 @@ try {
   assert.equal(store.setting('pause_reason:pilot'), 'portal_membership_lost');
   console.log('Initial portal sync completed before activation, and later membership loss still paused the binding.');
 
+  }
   worker.kill('SIGTERM');
   await workerExit;
   officeWorker = spawn(process.execPath, ['/app/service.mjs'], { stdio: 'inherit',
@@ -819,12 +822,22 @@ try {
     'm.relates_to': { rel_type: 'm.thread', event_id: root },
   }).then(cipher => managerReader.put(officeRoom, 'handoff-' + root, cipher));
   const requested = await sendRoot(reader, 'office-first-send', 'Task Manager: Telegram: manda un messaggio a Auto Pilot con il testo esatto «Hello from Office».');
-  await assign(requested);
+  async function submitHandoff(root, source) {
+    const handoff = await assign(root);
+    return requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, { method: 'submit', id: root, handoff,
+      actor: taskManager.user_id, sender: source, room: officeRoom });
+  }
+  assert.equal((await submitHandoff(requested, b.user_id)).office, true);
   let exactSend;
   await waitFor(() => {
     exactSend = store.get('SELECT * FROM draft WHERE control_event=?', requested);
     return exactSend?.state === 'matrix_accepted';
-  }, 'a verified Office handoff to send without a poll');
+  }, 'a verified Office handoff to send without a poll').catch(error => {
+    console.error('Office fixture state', store.get('SELECT phase,outcome,feedback FROM telegram_task WHERE id=?', requested),
+      store.get('SELECT status,result FROM control_request WHERE event=?', requested),
+      exactSend && { state: exactSend.state, attempts: exactSend.attempts });
+    throw error;
+  });
   assert.equal(exactSend.body, 'Hello from Office');
   assert.equal(exactSend.room, autoPortal);
   assert.equal(exactSend.attempts, 1);

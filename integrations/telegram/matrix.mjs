@@ -77,7 +77,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     const raw = await request('GET', `${route(room)}/event/${encodeURIComponent(event)}`);
     if (raw.type !== encryptedType || raw.event_id !== event || raw.unsigned?.redacted_because) return null;
     const decrypted = (await sdk.crypto.decryptRoomEvent(new EncryptedRoomEvent(raw), room)).raw;
-    return { ...decrypted, event_id: raw.event_id, sender: raw.sender };
+    return { ...decrypted, event_id: raw.event_id, sender: raw.sender, origin_server_ts: raw.origin_server_ts };
   }
 
   async function recentMessages(room, range) {

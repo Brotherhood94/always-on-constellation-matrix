@@ -250,8 +250,8 @@ async function deliver(client, event) {
         `For a handoff use HANDOFF: followed by exactly one of these display names: ${peers.map(peer => peer.name).join(', ')}.`;
       const guidance = guidanceFor(catalog, event, userId, managed || legacyHandoff);
       const telegramGuidance = telegramHandoff && ('Telegram Agent handles Telegram through Office. If a private message request leaves the channel unclear, ask which service the requester means. ' +
-        'For a Telegram request that needs to be restated, ask for one instruction, for example “Telegram: Send a private message to Sample Contact saying «Hello».” ' +
-        'Telegram Agent will request the operator’s approval in Telegram Bridge.');
+        'For a Telegram request that needs to be restated, ask for one instruction, for example “Telegram: Send a message to Sample Contact saying «Hello».” ' +
+        'Telegram Agent resolves the verified chat and reports the result in the Office thread. An explicit send can deliver the message. A draft request returns a preview.');
       if (desk && !event.replyTo && reply === null && !raw?.content?.[turnKey]?.returning) desk.assignment(event);
       const profile = catalog.current()?.agents.find(a => a.id === userId)?.persona;
       const effectiveIdentity = helper ? helperIdentity : profile ? [identity, profile.purpose, ...profile.duties, profile.working_style].join('\n') : identity;
@@ -325,9 +325,9 @@ async function deliver(client, event) {
   console.log('Encrypted agent reply delivered.');
 }
 
-function telegramRequest(event, method, { sender = MATRIX_OWNER, text, telegram } = {}) {
+function telegramRequest(event, method, { sender = MATRIX_OWNER, text, telegram, handoff } = {}) {
   return requestTelegramService(telegramHandoff, { method, id: event, room: roomId, actor: userId,
-    sender, text, telegram }, 5000).catch(error => {
+    sender, text, telegram, handoff }, 5000).catch(error => {
     if (method === 'status' || ['ENOENT', 'ECONNREFUSED'].includes(error.code)) return { status: 'unavailable' };
     // Retry an interrupted submission with the original event ID.
     throw error;
@@ -347,7 +347,7 @@ async function delegateTelegram(client, event, request) {
   const dispatched = handoff && process.env.CONTEXT_INTELLIGENCE_URL &&
     executionEvidence({ roomId, actor: userId, event, sent: handoff, target: specialist.id, flow: 'dispatch' });
   if (dispatched) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(handoff, JSON.stringify(dispatched));
-  const result = handoff ? await telegramRequest(event.id, 'submit', request) : { status: 'unavailable' };
+  const result = handoff ? await telegramRequest(event.id, 'submit', { ...request, handoff }) : { status: 'unavailable' };
   if (!handoff && !Object.hasOwn(telegramTaskStatus, result.status)) {
     const sent = await sendEncrypted(client, roomId, reactionTransaction('telegram-unavailable', event.id), {
       msgtype: 'm.text', body: 'Telegram Agent is unavailable. Check its setup or service and retry.',

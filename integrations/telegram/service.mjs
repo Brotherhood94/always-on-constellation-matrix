@@ -349,8 +349,9 @@ async function run() {
       store.pause(undefined, 'control_room_sync_gap');
     }
     const officeTimeline = batch.rooms?.join?.[officeRoom]?.timeline;
+    const officeSenders = officeFirst ? [settings.owner, `@task-manager:${settings.domain}`, `@manager:${settings.domain}`] : [settings.owner];
     if (officeTimeline?.events) officeTimeline.events = officeTimeline.events.filter(event =>
-      event.type !== 'm.room.encrypted' || event.sender === settings.owner);
+      event.type !== 'm.room.encrypted' || officeSenders.includes(event.sender));
     await matrix.applySync(batch, (room, event, encrypted, unreadable) => dispatch(room, event, encrypted, unreadable, !previous));
     lastGood = Date.now();
     store.atomic(() => {
@@ -460,6 +461,7 @@ async function run() {
           await liveBinding(binding.room, target) !== target.audience) return;
       const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
       const evidence = { room: binding.room, event: latest.event_id };
+      if (officeFirst) return result(`Draft for ${recipient}\n\n${text}`, [], binding, true);
       if (!store.prepareControlDraft(request, binding, recipient, text, latest.event_id, Date.now(), evidence)) {
         result('The chat changed while the reply was being prepared. Ask again to draft for the latest message.', [], binding);
       }
