@@ -20,6 +20,17 @@ class MatrixError(Exception):
         super().__init__(f"{method} {path}: HTTP {status} {self.code or ''}")
 
 
+def retry_delay(payload, headers, attempt):
+    milliseconds = payload.get("retry_after_ms")
+    seconds = (headers or {}).get("Retry-After", "")
+    hints = []
+    if isinstance(milliseconds, int) and milliseconds >= 0:
+        hints.append(milliseconds / 1000)
+    if seconds.isascii() and seconds.isdecimal():
+        hints.append(int(seconds))
+    return max(0.15, max(hints, default=min(2 ** attempt, 30)) + 0.05)
+
+
 def request(method, path, body=None, token=None, *, local_port=None):
     port = os.environ['MATRIX_LOCAL_PORT'] if local_port is None else local_port
     url = f'http://127.0.0.1:{port}{path}'
@@ -36,9 +47,11 @@ def request(method, path, body=None, token=None, *, local_port=None):
                 payload = json.load(error)
             except ValueError:
                 payload = {}
-            if payload.get("errcode") == "M_LIMIT_EXCEEDED" and attempt < 7:
-                wait = payload.get("retry_after_ms")
-                time.sleep(min(10, max(0.15, wait / 1000 + 0.05)) if isinstance(wait, int) else 1)
+            if error.code == 429 and payload.get("errcode") == "M_LIMIT_EXCEEDED" and attempt < 7:
+                wait = retry_delay(payload, error.headers, attempt)
+                if wait >= 10:
+                    print(f"Matrix requested a pause. Retrying in {wait:.0f} seconds.", file=sys.stderr, flush=True)
+                time.sleep(wait)
                 continue
             raise MatrixError(method, path, error.code, payload) from None
 
