@@ -3,7 +3,7 @@ import { readFile, realpath, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
-import { acceptedMessage, declaredOutcome, requestedAttachments, returnDelegatedReview, taskOutcomeKey, team,
+import { acceptedMessage, declaredOutcome, requestedAttachments, returnDelegatedReview, taskOutcomeKey, team, telegramOfficeAssignment,
   threadRelation, threadReply, turnKey } from './matrix-routing.mjs';
 import { createCatalog } from './agent-catalog.mjs';
 import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
@@ -16,9 +16,9 @@ import { Store } from './store.mjs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
-import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramTaskStatus } from './telegram-office.mjs';
+import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramReceipt,
+  telegramReceiptKey, telegramTaskStatus } from './telegram-office.mjs';
 import { helperIdentity, supportEvidence } from './helper-support.mjs';
-import { telegramIntent, telegramMention } from './telegram-intent.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
   AGENT_STATE, AGENT_WORKSPACE, MATRIX_PLANNER, AGENT_INSTRUCTIONS } = process.env;
@@ -191,9 +191,9 @@ async function deliver(client, event) {
   if (telegramHandoff && event.reply === null && event.id === event.request && !event.delegator &&
       /\btelegram\b/iu.test(event.body)) {
     const original = await readEncryptedRoomMessage(client, roomId, event.id);
-    const text = original?.sender === MATRIX_OWNER ? telegramMention(original.content, userId, AGENT_NAME) : null;
-    if (telegramIntent(text, { office: true })) {
-      await delegateTelegram(client, event, text);
+    const request = telegramOfficeAssignment(original, { owner: MATRIX_OWNER, planner: MATRIX_PLANNER, userId, name: AGENT_NAME });
+    if (request) {
+      await delegateTelegram(client, event, request);
       return;
     }
   }
@@ -249,6 +249,9 @@ async function deliver(client, event) {
       const legacyHandoff = !event.replyTo && !event.managed && !dynamicTurn(catalog, event) &&
         `For a handoff use HANDOFF: followed by exactly one of these display names: ${peers.map(peer => peer.name).join(', ')}.`;
       const guidance = guidanceFor(catalog, event, userId, managed || legacyHandoff);
+      const telegramGuidance = telegramHandoff && ('Telegram Agent handles Telegram through Office. If a private message request leaves the channel unclear, ask which service the requester means. ' +
+        'For a Telegram request that needs to be restated, ask for one instruction, for example “Telegram: Send a private message to Sample Contact saying «Hello».” ' +
+        'Telegram Agent will request the operator’s approval in Telegram Bridge.');
       if (desk && !event.replyTo && reply === null && !raw?.content?.[turnKey]?.returning) desk.assignment(event);
       const profile = catalog.current()?.agents.find(a => a.id === userId)?.persona;
       const effectiveIdentity = helper ? helperIdentity : profile ? [identity, profile.purpose, ...profile.duties, profile.working_style].join('\n') : identity;
@@ -268,7 +271,7 @@ async function deliver(client, event) {
         }
       } else if (reply === null) {
         reply = await runTurn({ workspace, event: { ...context, files: paths }, store, identity:effectiveIdentity,
-          guidance: helper ? await supportEvidence(context.body) : guidance });
+          guidance: helper ? await supportEvidence(context.body) : [guidance, telegramGuidance].filter(Boolean).join('\n') });
       }
       if (!issues.length && AGENT_USERNAME === 'reviewer' && !event.replyTo && !event.managed && !dynamicTurn(catalog, event)) {
         const delegator = peers.find(peer => event.delegator ? peer.id === event.delegator : peer.name === 'Analyst');
@@ -322,24 +325,23 @@ async function deliver(client, event) {
   console.log('Encrypted agent reply delivered.');
 }
 
-const privateTelegramReceipt = /^https:\/\/matrix\.to\/#\/(?:%21|!)[A-Za-z0-9_.:%-]+\/(?:%24|\$)[A-Za-z0-9_:%.-]+$/iu;
-
-function telegramRequest(event, method, text) {
+function telegramRequest(event, method, { sender = MATRIX_OWNER, text } = {}) {
   return requestTelegramService(telegramHandoff, { method, id: event, room: roomId, actor: userId,
-    sender: MATRIX_OWNER, ...(text && { text }) }, 5000).catch(error => {
+    sender, ...(text && { text }) }, 5000).catch(error => {
     if (method === 'status' || ['ENOENT', 'ECONNREFUSED'].includes(error.code)) return { status: 'unavailable' };
     // Retry an interrupted submission with the original event ID.
     throw error;
   });
 }
 
-async function delegateTelegram(client, event, text) {
+async function delegateTelegram(client, event, request) {
   store.acceptEvidence(event.id, process.env.CONTEXT_INTELLIGENCE_URL && assignmentEvidence({ roomId, actor: userId, event }));
   await publishActivity(client, event.id);
-  const result = await telegramRequest(event.id, 'submit', text);
+  const result = await telegramRequest(event.id, 'submit', request);
   if (!Object.hasOwn(telegramTaskStatus, result.status)) {
     const sent = await sendEncrypted(client, roomId, reactionTransaction('telegram-unavailable', event.id), {
       msgtype: 'm.text', body: 'Telegram Agent is unavailable. Check its setup or service and retry.',
+      [telegramReceiptKey]: { status: 'blocked' },
       'm.relates_to': threadRelation(event),
     });
     store.sent(event.id, sent, outcomeReaction.blocked, process.env.CONTEXT_INTELLIGENCE_URL &&
@@ -354,14 +356,15 @@ async function pollTelegram(client) {
   const row = store.nextTelegram();
   if (!row) return;
   store.telegramProgress(row.id, row.status, Date.now());
-  const result = await telegramRequest(row.id, 'status');
-  if (!Object.hasOwn(telegramTaskStatus, result.status) || !privateTelegramReceipt.test(result.link ?? '')) return;
+  const result = telegramReceipt(await telegramRequest(row.id, 'status'));
+  if (!result?.link) return;
   const event = { id: row.id, request: row.id, thread: row.thread, number: 1 };
   const evidence = (sent, fields) => process.env.CONTEXT_INTELLIGENCE_URL && executionEvidence({
     roomId, actor: userId, event, sent, target: `@telegram-agent:${MATRIX_SERVER_NAME}`, ...fields,
   });
   const post = (status, text) => sendEncrypted(client, roomId, reactionTransaction('telegram-' + status, row.id), {
     msgtype: 'm.text', body: text + '\n' + result.link, 'm.relates_to': threadRelation(event),
+    [telegramReceiptKey]: { status, link: result.link },
   });
   if (!row.status) {
     const sent = await post('pending', telegramTaskStatus.pending);

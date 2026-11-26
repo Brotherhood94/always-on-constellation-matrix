@@ -47,6 +47,15 @@ export const telegramTaskStatus = {
   unconfirmed: 'Telegram delivery is unconfirmed. Check the private receipt before retrying.',
 };
 
+export const telegramReceiptKey = 'org.matrixconstellation.telegram.receipt';
+const privateTelegramLink = /^https:\/\/matrix\.to\/#\/(?:%21|!)[A-Za-z0-9_.:%-]+\/(?:%24|\$)[A-Za-z0-9_:%.-]+$/iu;
+
+export function telegramReceipt(result) {
+  if (!result || !Object.hasOwn(telegramTaskStatus, result.status)) return null;
+  if (typeof result.link === 'string' && privateTelegramLink.test(result.link)) return { status: result.status, link: result.link };
+  return result.status === 'blocked' && result.link === undefined ? { status: 'blocked' } : null;
+}
+
 export function requestTelegramOffice(socketPath, id, operation) {
   return requestTelegramService(socketPath, { id, ...operation });
 }

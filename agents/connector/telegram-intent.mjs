@@ -55,6 +55,14 @@ export function telegramIntent(body, { office = false } = {}) {
   if (/^(?:list|show(?: me)?|elenca|mostrami)(?:\s+(?:my|the|le|mie))*\s+(?:(?:telegram\s+)?rooms|(?:stanze|chat)(?:\s+(?:di )?telegram)?)$/iu.test(plain)) {
     return { action: 'list' };
   }
+  const exact = /^(?:invia|manda|send)\s+(?:(?:una sola volta|once)\s+)?(?:il testo(?: esatto)?|(?:the )?exact text)\s+(?:"([^"\r\n]+)"|“([^”\r\n]+)”|«([^»\r\n]+)»)\s+(?:alla chat privata(?: già autorizzata e verificata)? di|to the private chat (?:of|with))\s+(.+)$/iu.exec(plain);
+  if (exact) {
+    const namedChannel = /\s+(?:on|su) telegram[.!]?$/iu.test(input);
+    if (office && !explicitChannel && !namedChannel) return null;
+    const dest = destination(exact[4], 'direct');
+    const text = exact[1] ?? exact[2] ?? exact[3];
+    return dest?.type === 'direct' && text.trim() && Buffer.byteLength(text) <= 3500 ? { action: 'send', ...dest, text } : null;
+  }
   const draft = /^(?<verb>prepare|draft|send|prepara|scrivi|invia|manda)(?:\s+(?:a|an|un|una))?\s+(?:(?<private>private|privat[oa])\s+)?(?:(?:telegram\s+)?(?:message|messaggio|bozza|draft)(?:\s+(?<privateAfter>privat[oa]|private))?\s+)?(?:to|for|ad?|per|nel)\s+(?<target>[^\r\n]{1,130}?)(?:\s+(?:on|su) telegram)?(?:(?:\s+(?:saying|that says|dicendo|che dice|che)|\s*:\s+)\s*(?<text>[\s\S]+)|\s+(?<literal>["“«][\s\S]+))$/iu.exec(input);
   if (draft) {
     const { verb, target, text, literal } = draft.groups;

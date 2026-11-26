@@ -3,6 +3,7 @@ import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
 import { acceptedManaged, managedReply, replyLimit } from './managed-task.mjs';
 import { acceptsContact } from './agent-catalog.mjs';
 import { applyDispatch } from './capability-dispatch.mjs';
+import { telegramIntent, telegramMention } from './telegram-intent.mjs';
 
 export { mentionMessage, replyLimit };
 
@@ -12,6 +13,22 @@ export const directReplyKey = 'net.matrix_agents.direct_reply';
 export const taskOutcomeKey = 'net.matrix_agents.task_outcome';
 export const attachmentKey = 'net.matrix_agents.attachments';
 export const mediaTypes = new Set(['m.file', 'm.image', 'm.audio', 'm.video']);
+
+export function telegramOfficeAssignment(event, { owner, planner, userId, name }) {
+  const sender = event?.sender;
+  if (!sender || (sender !== owner && sender !== planner)) return null;
+  let text = telegramMention(event.content, userId, name);
+  if (text === null) return null;
+  if (sender !== owner) {
+    const { content } = event;
+    if (content['m.relates_to'] || !/^[a-z0-9_-]{8,80}$/iu.test(content[dotPlanKey]?.task_id ?? '')) return null;
+    const start = text.indexOf('\n\n');
+    if (start === -1) return null;
+    text = text.slice(start + 2).trim();
+    if (/\r|\n/u.test(text)) return null;
+  }
+  return telegramIntent(text, { office: true }) ? { sender, text } : null;
+}
 const replyControl = /(?:^|\n)(HANDOFF|HANDOFF_ROUTE|TASK_OUTCOME|ATTACH_FILES|CAPABILITY_GAP|OFFICE_NEED):[ \t]+([^\r\n]*)$/;
 const directRequests = [
   /(?<!\bnon )\b(?:rispondimi\s+direttamente|rispondi\s+(?:a\s+me\s+|tu\s+)?direttamente(?!\s+(?:a\s+(?!me\b)|al\b|alla\b)))\b/iu,

@@ -3,7 +3,9 @@ import { test } from 'node:test';
 import { createTelegramDelegation, draftReceipt } from '../integrations/telegram/delegation.mjs';
 import { TelegramStore } from '../integrations/telegram/policy.mjs';
 import { telegramIntent, telegramMention } from '../agents/connector/telegram-intent.mjs';
-import { acceptedMessage } from '../agents/connector/matrix-routing.mjs';
+import { acceptedMessage, dotPlanKey, telegramOfficeAssignment } from '../agents/connector/matrix-routing.mjs';
+import { mentionMessage } from '../agents/connector/matrix-format.mjs';
+import { telegramReceipt } from '../agents/connector/telegram-office.mjs';
 
 const domain = 'sample.test';
 const owner = `@operator:${domain}`;
@@ -145,6 +147,53 @@ test('a direct Office mention keeps Telegram details private and acknowledges th
     assert.doesNotMatch(message.body, /Sam Example|!sam/u);
   }
   assert.match([...f.messages.values()].at(-1).content.body, /Sam Example/u);
+});
+
+test('Task Manager can relay a Dot assignment to queue one operator-approved Telegram send', async () => {
+  const f = fixture();
+  const binding = { id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 };
+  f.setBinding(binding);
+  const planner = '@dot:sample.test';
+  const name = 'Task Manager';
+  const text = 'Telegram: invia un messaggio privato a Sam Example «ciao»';
+  const target = { id: caller.actor, name };
+  const event = { room_id: officeRoom, event_id: '$dot-send', sender: planner, type: 'm.room.message', origin_server_ts: 1,
+    content: { ...mentionMessage('Saluto privato\n\n' + text, target), [dotPlanKey]: { task_id: 'telegram-smoke' } } };
+  const context = { owner, planner, name, userId: caller.actor, roomId: officeRoom, agents: [caller.actor], activatedAt: 0 };
+  assert.equal(acceptedMessage(event, context)?.id, event.event_id);
+  assert.equal(telegramOfficeAssignment(event, { ...context, planner: undefined }), null);
+  assert.equal(telegramOfficeAssignment({ ...event, content: { ...event.content, [dotPlanKey]: undefined } }, context), null);
+  assert.equal(telegramOfficeAssignment({ ...event, content: { ...event.content,
+    body: 'Task Manager Saluto privato\n\nInvia il testo esatto «ciao» alla chat privata di Sam Example tramite l’integrazione Matrix.' } }, context), null);
+  assert.deepEqual(telegramOfficeAssignment(event, context), { sender: planner, text });
+  const request = { ...caller, ...telegramOfficeAssignment(event, context), id: event.event_id, method: 'submit' };
+  assert.equal((await f.broker().office({ ...request, sender: '@someone:sample.test' })).status, 'forbidden');
+  assert.equal((await f.broker().office(request)).status, 'pending');
+  await f.broker().tick();
+  await f.broker().office(request);
+  await f.broker().tick();
+  const drafts = f.store.all('SELECT payload,requires_dot FROM control_request');
+  assert.equal(drafts.length, 1);
+  assert.equal(drafts[0].requires_dot, 0);
+  assert.deepEqual(JSON.parse(drafts[0].payload), { action: 'compose', destination: 'sam', verifiedBinding: binding,
+    chatType: 'direct', text: 'ciao' });
+  assert.equal((await f.broker().office({ ...request, method: 'status' })).status, 'pending');
+  assert.equal(f.effects.length, 0);
+  const receipt = await f.broker().office({ ...request, method: 'status' });
+  assert.deepEqual(telegramReceipt(receipt), receipt);
+  assert.equal(telegramReceipt({ ...receipt, link: 'https://example.test/private' }), null);
+  assert.equal(telegramReceipt({ status: 'completed' }), null);
+});
+
+test('Telegram Agent accepts a direct mention with the exact text before the named private chat', async () => {
+  const f = fixture();
+  f.setBinding({ id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 });
+  const request = direct('$private-literal', 'Invia una sola volta il testo esatto «ciao!» alla chat privata già autorizzata e verificata di Sam Example.');
+  assert.equal(await f.broker().directOffice(request), true);
+  await f.broker().tick();
+  const draft = f.store.get('SELECT payload FROM control_request');
+  assert.equal(draft && JSON.parse(draft.payload).text, 'ciao!');
+  assert.equal(f.effects.length, 0);
 });
 
 test('the private mention works without Dot and disambiguates only in its own thread', async () => {
