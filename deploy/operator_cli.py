@@ -1,5 +1,5 @@
 """Run setup prompts as the operator and elevate fixed deployment operations."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
 from subprocess import SubprocessError
 from types import SimpleNamespace
@@ -17,6 +17,7 @@ from setup_guide import confirm_element, element_page, interactive_terminal
 
 HOST_ACTIONS = ('metadata', 'install', 'enroll', 'configure', 'finish', 'telegram-layout')
 GUIDE_FIELDS = ('server_name', 'owner', 'tailscale', 'telegram', 'dot')
+SUDO_PASSWORD_NOTICE = 'If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt.'
 
 
 def publish_metadata(data, settings=None, registry=None):
@@ -69,7 +70,7 @@ def install_as_operator(data, args):
         '\n🔐 Authorize workspace installation\n'
         'The installer uses sudo to start Docker services, write protected deployment files, '
         'and enable startup at boot.\n'
-        'If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt.\n'
+        f'{SUDO_PASSWORD_NOTICE}\n'
         'Use the Matrix password for Element and the Context Intelligence password for Neo4j Browser.\n',
         flush=True,
     )
@@ -121,10 +122,18 @@ def setup_as_operator(data, *, passphrase=None):
             if current['select_agents'] and selection is None:
                 selection = select_agents(starter_profiles())
             payload = {'selection': selection}
-            if selection:
-                with matrix_session(current, passphrase if passphrase is not None else password(settings)) as token:
-                    elevate(data, '_host', 'enroll', payload={**payload, 'token': token})
-            else:
+            if selection and passphrase is None:
+                passphrase = password(settings)
+            session = matrix_session(current, passphrase) if selection else nullcontext()
+            with session as token:
+                if token is not None:
+                    payload['token'] = token
+                reason = (
+                    'The installer uses sudo to save agent registrations in the protected deployment directory '
+                    'and start local Amplifier containers with Docker.' if selection else
+                    'The installer uses sudo to save your setup progress in the protected deployment directory.'
+                )
+                print(f'\n🔐 Authorize agent setup\n{reason}\n{SUDO_PASSWORD_NOTICE}\n', flush=True)
                 elevate(data, '_host', 'enroll', payload=payload)
             current = metadata(data)
         configure_as_operator(data, current=current, selection=current['selected'])

@@ -31,7 +31,7 @@ From this checkout on an Ubuntu 24.04 VPS, use standard Docker Engine with Compo
 ```
 
 1. **Deploy the workspace.** Choose your network, Matrix username, and integrations. Set your Matrix password and a dedicated Context Intelligence password. If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt. The installer then displays the homeserver and Element Desktop sign-in instructions.
-2. **Choose your team.** Confirm Element sign-in in the terminal. Use the arrow keys to review the five preselected roles, press Enter to toggle any of them, and choose **Done**. The installer registers your selection and opens Amplifier’s provider and model setup for each local agent.
+2. **Choose your team.** Confirm Element sign-in in the terminal. Use the arrow keys to review the five preselected roles, press Enter to toggle any of them, and choose **Done**. The installer uses sudo to save the agent registrations and start local Amplifier containers, then opens Amplifier’s provider and model setup for each local agent.
 3. **Open the welcome.** Once the selected agents are ready, Hiring Manager sends a private welcome if selected. Otherwise, a ready Office agent posts it in Office. The welcome points to **Workspace shortcuts**.
 
 ChatGPT via Codex is the only provider tested with a live account. Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.

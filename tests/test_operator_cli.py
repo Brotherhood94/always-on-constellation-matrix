@@ -77,7 +77,8 @@ class OperatorCLITest(unittest.TestCase):
             guide.assert_called_once_with(data, passphrase='matrix-fixture-password')
 
     def test_element_and_agent_selection_use_the_operator_session_before_elevation(self):
-        with TemporaryDirectory() as work, redirect_stdout(StringIO()), patch('operator_cli.confirm_element', return_value='next'), \
+        output = StringIO()
+        with TemporaryDirectory() as work, redirect_stdout(output), patch('operator_cli.confirm_element', return_value='next'), \
                 patch('operator_cli.select_agents', return_value=['manager']), \
                 patch('operator_cli.request') as request, patch('operator_cli.elevate') as sudo:
             data = Path(work)
@@ -88,6 +89,12 @@ class OperatorCLITest(unittest.TestCase):
 
             def mutate(_, __, action, *rest, payload=None):
                 if action == 'enroll':
+                    notice = output.getvalue()
+                    self.assertIn('Authorize agent setup', notice)
+                    self.assertIn('save agent registrations in the protected deployment directory', notice)
+                    self.assertIn('start local Amplifier containers with Docker', notice)
+                    self.assertIn('Linux password for the VPS account shown in the prompt', notice)
+                    self.assertNotIn('matrix-fixture-password', notice)
                     self.assertEqual(payload, {'selection': ['manager'], 'token': 'matrix-session-fixture'})
                     save(data / 'setup.json', {**initial, 'element_confirmed': True, 'select_agents': False,
                                               'pending': ['manager']})
@@ -101,6 +108,26 @@ class OperatorCLITest(unittest.TestCase):
             self.assertEqual(request.call_args_list[0].args[:2], ('POST', CLIENT + '/login'))
             self.assertEqual(request.call_args_list[-1],
                              call('POST', CLIENT + '/logout', {}, 'matrix-session-fixture', local_port=18500))
+
+    def test_empty_selection_explains_why_saving_setup_progress_needs_sudo(self):
+        output = StringIO()
+        with TemporaryDirectory() as work, redirect_stdout(output), \
+                patch('operator_cli.select_agents', return_value=[]), patch('operator_cli.request') as request, \
+                patch('operator_cli.elevate') as sudo, patch('operator_cli.configure_as_operator'):
+            data = Path(work)
+            publish_metadata(data, {**self.settings, 'agents': []}, {'agents': {}})
+            current = {**load(data / 'setup.json'), 'element_confirmed': True, 'select_agents': True}
+            save(data / 'setup.json', current)
+
+            def check_notice(*args, **kwargs):
+                notice = output.getvalue()
+                self.assertIn('save your setup progress in the protected deployment directory', notice)
+                self.assertNotIn('start local Amplifier containers', notice)
+
+            sudo.side_effect = check_notice
+            setup_as_operator(data)
+            sudo.assert_called_once_with(data, '_host', 'enroll', payload={'selection': []})
+            request.assert_not_called()
 
     def test_telegram_passes_the_session_token_to_a_fixed_host_operation(self):
         with TemporaryDirectory() as work, patch('operator_cli.request') as request, \
