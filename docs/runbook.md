@@ -38,7 +38,7 @@ State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before th
 
 Run `install`, `setup-guide`, and `agent configure` from a regular shell. The CLI invokes sudo for the deployment steps that use Docker, protected files, or system services. Matrix operator sign-in for roster registration and Telegram layout runs in your regular session. Amplifier provider setup runs as the container’s ordinary user.
 
-`status`, `telegram status`, and `setup-guide --print` read published information without sudo. Upgraded deployments can publish the setup information once with `sudo ./constellation_matrix status --refresh`. The same command refreshes Docker inventory. Pass your usual `--data-dir` when using a custom deployment directory.
+`status`, `telegram status`, and `setup-guide --print` read published information without sudo. After upgrading the checkout, run `sudo ./constellation_matrix status --refresh` to publish the current dashboard files and refresh Docker inventory. Pass your usual `--data-dir` when using a custom deployment directory.
 
 Use explicit sudo for administrative operations such as uninstall, backup, host timers, remote mounts, and Dot tunnel installation. This workflow keeps standard Docker and the existing Docker socket permissions.
 

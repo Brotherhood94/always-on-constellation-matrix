@@ -10,41 +10,61 @@
 </head>
 <body>
   <main>
-    <header>
-      <div><h1>Constellation Dashboard</h1><p id="freshness" aria-live="polite">Loading VPS metrics…</p></div>
-      <a id="context-link" class="action" hidden>Open Context Intelligence <span aria-hidden="true">↗</span></a>
+    <header class="workspace-header">
+      <div class="workspace-title">
+        <span class="workspace-mark" aria-hidden="true"><span></span></span>
+        <div><h1>Constellation Dashboard</h1><p id="freshness" aria-live="polite">Loading VPS metrics…</p></div>
+      </div>
+      <a id="context-link" class="action action-primary" hidden>Open Context Intelligence <span aria-hidden="true">↗</span></a>
     </header>
     <section id="persona-view" hidden aria-live="polite"></section>
     <section id="connection-details" hidden aria-live="polite"></section>
     <div id="overview">
-    <section aria-labelledby="resources-heading">
+    <nav class="workspace-nav" aria-label="Dashboard sections">
+      <a href="#resources-heading">Resources</a>
+      <a href="#connections-heading">Team connections</a>
+      <a href="#agents-heading">Agents</a>
+      <a href="#integrations-heading">Integrations</a>
+    </nav>
+    <section class="panel resources-panel" aria-labelledby="resources-heading">
       <div class="section-heading">
         <h2 id="resources-heading">VPS resources</h2>
-        <label>History <select id="range"><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
+        <label class="control">History <select id="range"><option value="1">Last 24 hours</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
       </div>
       <div class="cards" id="resources"></div>
     </section>
-    <section aria-labelledby="agents-heading">
-      <h2 id="agents-heading">Agents</h2>
-      <p id="agent-freshness"></p>
-      <div class="table-frame" tabindex="0" role="region" aria-label="Agent inventory">
-        <table><thead><tr><th scope="col">Name</th><th scope="col">Health</th><th scope="col">Host</th><th scope="col">Model</th><th scope="col">Profile</th></tr></thead><tbody id="agents"></tbody></table>
-      </div>
-    </section>
-    <section aria-labelledby="connections-heading">
+    <section class="panel" aria-labelledby="connections-heading">
       <div class="section-heading">
         <h2 id="connections-heading">Team connections</h2>
-        <a href="#/connections">View connection changes</a>
+        <a class="action" href="#/connections">View connection changes <span aria-hidden="true">↗</span></a>
       </div>
       <p id="connection-state">Loading team connections…</p>
-      <div class="connection-graph" id="connection-graph" hidden></div>
+      <div class="connection-board" id="connection-board" hidden>
+        <div class="connection-toolbar">
+          <p id="connection-count"></p>
+          <label class="control">Focus on <select id="connection-focus"></select></label>
+        </div>
+        <div class="connection-graph" id="connection-graph"></div>
+      </div>
       <details id="connection-list" hidden>
         <summary>Connection list</summary>
         <div id="connection-list-rows"></div>
       </details>
     </section>
-    <section aria-labelledby="integrations-heading">
-      <h2 id="integrations-heading">Integrations</h2>
+    <section class="panel" aria-labelledby="agents-heading">
+      <div class="section-heading">
+        <h2 id="agents-heading">Agents</h2>
+        <p id="agent-freshness" class="timestamp"></p>
+      </div>
+      <div class="table-frame" tabindex="0" role="region" aria-label="Agent inventory">
+        <table><thead><tr><th scope="col">Name</th><th scope="col">Health</th><th scope="col">Host</th><th scope="col">Model</th><th scope="col">Profile</th></tr></thead><tbody id="agents"></tbody></table>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="integrations-heading">
+      <div class="section-heading">
+        <h2 id="integrations-heading">Integrations</h2>
+        <p id="integration-freshness" class="timestamp"></p>
+      </div>
       <dl id="integrations"></dl>
     </section>
     </div>

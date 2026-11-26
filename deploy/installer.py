@@ -517,18 +517,22 @@ def compose_config(settings, data, registry):
     return environment
 
 
+def publish_dashboard(settings, data):
+    directory(data / 'dashboard', 0o755)
+    for name in ('dashboard.css', 'connections.mjs', 'dashboard.mjs', 'index.html'):
+        save(data / 'dashboard' / name, (SOURCE / 'dashboard' / name).read_text(), mode=0o644)
+    save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url']},
+         mode=0o644)
+
+
 def prepare_storage(settings, data):
     directory(data, 0o711)
-    for name in ('postgres', 'monitor', 'monitor/outbox', 'dashboard', 'state', 'backups', 'staging'):
-        directory(data / name, 0o755 if name == 'dashboard' else 0o750)
+    for name in ('postgres', 'monitor', 'monitor/outbox', 'state', 'backups', 'staging'):
+        directory(data / name, 0o750)
     os.chown(data / 'monitor/outbox', 0, RUNTIME_UID)
     for name in ('synapse', 'bot', 'monitor/acks', 'desktop'):
         directory(data / name, uid=RUNTIME_UID)
-    for path in (SOURCE / 'dashboard').iterdir():
-        if path.name in {'index.html', 'dashboard.mjs', 'dashboard.css', 'connections.mjs'}:
-            save(data / 'dashboard' / path.name, path.read_text(), mode=0o644)
-    save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url']},
-         mode=0o644)
+    publish_dashboard(settings, data)
 
 
 def publish_inventory(settings, data, registry):
@@ -1132,7 +1136,7 @@ def main():
     confirm.add_argument('key')
     confirm.add_argument('--receipt', type=Path, required=True)
     status = commands.add_parser('status', help='Read the dashboard snapshots')
-    status.add_argument('--refresh', action='store_true', help='Refresh inventory from Docker and show live services')
+    status.add_argument('--refresh', action='store_true', help='Publish dashboard files and refresh Docker inventory')
     setup = commands.add_parser('setup-guide', help='Resume workspace onboarding')
     setup.add_argument('--print', dest='print_only', action='store_true', help='Print Element sign-in and guide locations')
     removal = commands.add_parser('uninstall', help='Remove workspace services, with optional data deletion')
@@ -1275,6 +1279,7 @@ def main():
             settings, registry = open_existing(data)
             if 'connection_history' not in registry:
                 commit_registry(data / 'agents.json', registry)
+            publish_dashboard(settings, data)
         publish_inventory(settings, data, registry)
         refresh_connections(data)
         compose(data, '--profile', 'agents', 'ps')

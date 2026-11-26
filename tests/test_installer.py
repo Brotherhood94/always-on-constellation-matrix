@@ -987,6 +987,19 @@ class InstallerTest(unittest.TestCase):
             for name in ('index.html', 'dashboard.mjs', 'dashboard.css', 'links.json'):
                 self.assertEqual((data / 'dashboard' / name).stat().st_mode & 0o777, 0o644)
 
+    def test_status_refresh_republishes_dashboard_assets_from_the_checkout(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            (data / 'dashboard').mkdir()
+            save(data / 'dashboard/index.html', 'older dashboard')
+            command = ['constellation_matrix', '--data-dir', work, 'status', '--refresh']
+            with patch('sys.argv', command), patch('installer.os.geteuid', return_value=0), \
+                 patch('installer.open_existing', return_value=(self.settings, {'connection_history': {}})), \
+                 patch('installer.publish_inventory'), patch('installer.refresh_connections'), patch('installer.compose'):
+                main()
+            self.assertIn('connection-focus', (data / 'dashboard/index.html').read_text())
+            self.assertEqual(load(data / 'dashboard/links.json')['context'], self.settings['context_url'])
+
 
 if __name__ == '__main__':
     unittest.main()

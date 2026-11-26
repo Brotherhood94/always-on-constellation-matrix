@@ -1,4 +1,4 @@
-import { connectionRoute, renderConnectionDetails, renderConnections } from './connections.mjs';
+import { connectionRoute, renderConnectionDetails, renderConnections, statusTone } from './connections.mjs';
 
 const resources = { cpu: 'CPU', memory: 'Memory', disk: 'Disk' };
 
@@ -36,35 +36,65 @@ export function historyWithin(history, resource, days, now = Date.now()) {
 }
 
 function draw(canvas, samples, days, now) {
-  const context = canvas.getContext('2d');
   const style = getComputedStyle(canvas);
-  const { width, height } = canvas;
-  const left = 36;
+  const width = canvas.clientWidth || 380;
+  const height = canvas.clientHeight || 120;
+  const scale = Math.min(2, window.devicePixelRatio || 1);
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const context = canvas.getContext('2d');
+  context.scale(scale, scale);
+  const color = style.getPropertyValue('--chart').trim();
+  const left = 35;
+  const right = width - 6;
+  const top = 10;
+  const bottom = height - 24;
   const span = days * 86400;
   const start = now / 1000 - span;
   const range = Math.max(100, ...samples.map(row => row[1]));
-  context.font = '12px system-ui';
+  const yFor = value => bottom - Math.max(0, value) / range * (bottom - top);
+  context.font = '11px system-ui';
   for (const value of [0, range / 2, range]) {
-    const y = 10 + (1 - value / range) * (height - 24);
+    const y = yFor(value);
     context.fillStyle = style.getPropertyValue('--muted');
     context.fillText(`${Math.round(value)}%`, 0, y + 4);
     context.strokeStyle = style.getPropertyValue('--border');
     context.beginPath();
     context.moveTo(left, y);
-    context.lineTo(width, y);
+    context.lineTo(right, y);
     context.stroke();
   }
-  context.strokeStyle = style.getPropertyValue('--accent');
+  const points = samples.map(([time, value]) => [
+    left + Math.min(1, (time - start) / span) * (right - left), yFor(value),
+  ]);
+  const [firstX] = points[0];
+  const [lastX, lastY] = points.at(-1);
+  const trace = path => points.slice(1).forEach(([x, y]) => path.lineTo(x, y));
+  const fill = context.createLinearGradient(0, top, 0, bottom);
+  fill.addColorStop(0, color + '45');
+  fill.addColorStop(1, color + '05');
+  const area = new Path2D();
+  area.moveTo(...points[0]);
+  trace(area);
+  area.lineTo(lastX, bottom);
+  area.lineTo(firstX, bottom);
+  area.closePath();
+  context.fillStyle = fill;
+  context.fill(area);
+  context.strokeStyle = color;
   context.lineWidth = 2;
   context.beginPath();
-  samples.forEach(([time, value], index) => {
-    const x = left + Math.min(1, (time - start) / span) * (width - left - 2);
-    const y = 10 + (1 - Math.max(0, value) / range) * (height - 24);
-    if (index === 0) context.moveTo(x, y);
-    else context.lineTo(x, y);
-    if (samples.length === 1) context.arc(x, y, 2, 0, 2 * Math.PI);
-  });
+  context.moveTo(...points[0]);
+  trace(context);
   context.stroke();
+  context.beginPath();
+  context.arc(lastX, lastY, 3, 0, 2 * Math.PI);
+  context.fillStyle = color;
+  context.fill();
+  context.fillStyle = style.getPropertyValue('--muted');
+  context.fillText(days === 1 ? '24h ago' : `${days} days ago`, left, height - 4);
+  context.textAlign = 'right';
+  context.fillText('Now', right, height - 4);
 }
 
 function profileLink(agent, title) {
@@ -132,6 +162,11 @@ function render(metrics, catalog, links, integrationStates, connections) {
   const now = Date.now();
   const el = id => document.getElementById(id);
   const make = (tag, text, className) => Object.assign(document.createElement(tag), { textContent: text, className });
+  const statusLabel = text => {
+    const badge = make('span', text, 'status');
+    badge.dataset.tone = statusTone(text);
+    return badge;
+  };
   el('freshness').textContent = freshness(metrics?.time, now);
   el('agent-freshness').textContent = freshness(catalog?.time ?? metrics?.time, now);
   try {
@@ -143,34 +178,36 @@ function render(metrics, catalog, links, integrationStates, connections) {
   }
   el('resources').replaceChildren();
   const days = Number(el('range').value);
+  const charts = [];
   for (const [id, label] of Object.entries(resources)) {
     const card = make('article', '', 'card');
+    card.dataset.resource = id;
     const samples = historyWithin(metrics?.history, id, days, now);
     const latest = samples.at(-1);
     card.append(make('h3', label, ''), make('p', latest ? `${latest[1].toFixed(1)}%` : '—', 'value'));
     if (latest) {
       const chart = document.createElement('canvas');
-      chart.width = 440;
-      chart.height = 114;
       chart.setAttribute('role', 'img');
       const values = samples.map(row => row[1]);
       chart.setAttribute('aria-label',
         `${label} usage over ${days} days. Minimum ${Math.min(...values).toFixed(1)}%, maximum ${Math.max(...values).toFixed(1)}%.`);
       card.append(chart);
       el('resources').append(card);
-      draw(chart, samples, days, now);
+      charts.push([chart, samples]);
     } else {
       card.append(make('p', 'No samples in this period', ''));
       el('resources').append(card);
     }
   }
+  for (const [chart, samples] of charts) draw(chart, samples, days, now);
   el('agents').replaceChildren();
   const agents = catalog?.agents ?? metrics?.agents ?? [];
   for (const agent of agents) {
     const row = document.createElement('tr');
-    for (const value of [agent.name, agent.status, agent.server, [agent.model, agent.effort].filter(Boolean).join(' · ')]) {
-      row.append(make('td', value || '—', ''));
-    }
+    const status = make('td', '', '');
+    status.append(statusLabel(agent.status || 'Unavailable'));
+    row.append(make('td', agent.name || '—', 'agent-name'), status, make('td', agent.server || '—', 'agent-detail'),
+      make('td', [agent.model, agent.effort].filter(Boolean).join(' · ') || '—', 'agent-detail'));
     const profile = make('td', '', '');
     if (agent.key) profile.append(profileLink(agent, 'Persona and duties'));
     row.append(profile);
@@ -186,17 +223,18 @@ function render(metrics, catalog, links, integrationStates, connections) {
   renderConnections(catalog);
   showView(metrics, catalog, connections);
   const entries = Object.entries(integrationStates?.services ?? {});
+  el('integration-freshness').textContent = freshness(integrationStates?.time, now);
   el('integrations').replaceChildren();
-  for (const [name, state] of [...entries, ['Last successful backup', metrics?.lastBackup ?? 'Unavailable']]) {
+  for (const [name, state] of entries) {
     const row = document.createElement('div');
-    row.append(make('dt', name, ''), make('dd', state, ''));
+    const value = make('dd', '', '');
+    value.append(statusLabel(state));
+    row.append(make('dt', name, ''), value);
     el('integrations').append(row);
   }
-  if (entries.length) {
-    const row = document.createElement('div');
-    row.append(make('dt', 'Integration data', ''), make('dd', freshness(integrationStates.time, now), ''));
-    el('integrations').append(row);
-  }
+  const backup = document.createElement('div');
+  backup.append(make('dt', 'Last successful backup', ''), make('dd', metrics?.lastBackup ?? 'Unavailable', ''));
+  el('integrations').append(backup);
 }
 
 async function fetchJson(path) {
@@ -214,6 +252,7 @@ if (typeof document !== 'undefined') {
   }
 
   document.getElementById('range').addEventListener('change', () => render(...state));
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render(...state));
   window.addEventListener('hashchange', () => {
     showView(state[0], state[1], state[4]);
     const heading = document.querySelector('#connection-details:not([hidden]) h2, #persona-view:not([hidden]) h2');

@@ -29,7 +29,8 @@ rows = {key: [[now - 90, 12], [now - 20, 23.4]] for key in ('CPU', 'RAM', 'Disk'
 agents = [{'key':'analyst', 'role':'coordinator', 'persona':{'purpose':'Study the evidence','duties':['Review sources'],
            'working_style':'Cite what can be verified.'}, 'contacts':['qa'],'tools':['Reader'], 'name':'Fixture Analyst',
            'status':'Available', 'server':'fixture.test', 'model':'fixture-model'},
-          {'key':'qa','role':'worker','contacts':[],'name':'Fixture QA','status':'Sign-in required','server':'fixture.test'}]
+          {'key':'qa','role':'worker','contacts':['analyst','reviewer'],'name':'Fixture QA','status':'Sign-in required','server':'fixture.test'},
+          {'key':'reviewer','role':'worker','contacts':[],'name':'Fixture Reviewer','status':'Unavailable','server':'fixture.test'}]
 change = {'id':'a'*32, 'sequence':1,'kind':'change','at':'2026-11-24T16:00:00Z','actor':'coach','reason':'coaching',
           'names':{'analyst':'Fixture Analyst', 'qa':'Fixture QA'},'added':[['analyst','qa']],'removed':[],
           'joined':[],'left':[],'renamed':{},'enforced':True,'previous_enforced':True,'evidence':'$evidence'}

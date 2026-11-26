@@ -1,7 +1,18 @@
 const keyPattern = /^[a-z0-9][a-z0-9_-]{0,63}$/u;
 const ns = 'http://www.w3.org/2000/svg';
-const halfWidth = 83;
-const halfHeight = 26;
+const halfWidth = 90;
+const halfHeight = 29;
+
+const healthTones = {
+  available: 'good', running: 'good', healthy: 'good', ready: 'good', active: 'good',
+  'sign-in required': 'warn', starting: 'warn', registered: 'warn', pending: 'warn',
+  unavailable: 'down', exited: 'down', stopped: 'down', unhealthy: 'down', failed: 'down',
+};
+
+export function statusTone(status) {
+  const key = String(status).toLowerCase();
+  return Object.hasOwn(healthTones, key) ? healthTones[key] : 'neutral';
+}
 
 export function connectionRoute(hash) {
   if (hash === '#/connections') return {};
@@ -35,7 +46,7 @@ export function connectionDetails(report, route) {
 }
 
 const detailsHref = (source, target) => '#/connections/' + source + '/' + target;
-const label = value => value.length > 22 ? value.slice(0, 21) + '…' : value;
+const label = value => value.length > 19 ? value.slice(0, 18) + '…' : value;
 
 function html(tag, value) {
   const element = document.createElement(tag);
@@ -59,14 +70,14 @@ function svg(tag, attributes, content) {
 function layout(nodes) {
   const center = nodes.find(agent => agent.role === 'coordinator') ?? nodes[0];
   const perimeter = nodes.filter(agent => agent !== center);
-  const width = Math.max(770, perimeter.length * 90);
-  const height = Math.max(400, perimeter.length * 49);
+  const width = Math.max(860, perimeter.length * 92);
+  const height = Math.max(perimeter.length > 2 ? 420 : 296, perimeter.length * 64);
   const middle = [width / 2, height / 2];
   const points = new Map([[center.key, middle]]);
   for (const [index, node] of perimeter.entries()) {
     const angle = 2 * Math.PI * index / perimeter.length - Math.PI / 4;
-    points.set(node.key, [middle[0] + Math.cos(angle) * (middle[0] - 106),
-      middle[1] + Math.sin(angle) * (middle[1] - 43)]);
+    points.set(node.key, [middle[0] + Math.cos(angle) * (middle[0] - 111),
+      middle[1] + Math.sin(angle) * (middle[1] - 53)]);
   }
   return { points, width, height };
 }
@@ -74,12 +85,12 @@ function layout(nodes) {
 function edgeGeometry(start, end, paired) {
   const dx = end[0] - start[0], dy = end[1] - start[1];
   const distance = Math.hypot(dx, dy);
-  const bend = paired ? Math.min(54, distance / 5) : 0;
+  const bend = paired ? Math.min(66, distance / 4) : 0;
   const control = [(start[0] + end[0]) / 2 - dy / distance * bend,
     (start[1] + end[1]) / 2 + dx / distance * bend];
   const bound = (point, towards) => {
     const x = towards[0] - point[0], y = towards[1] - point[1];
-    const ratio = 1 / Math.max(Math.abs(x) / (halfWidth + 4), Math.abs(y) / (halfHeight + 4));
+    const ratio = 1 / Math.max(Math.abs(x) / (halfWidth + 5), Math.abs(y) / (halfHeight + 5));
     return [point[0] + x * ratio, point[1] + y * ratio];
   };
   return 'M ' + bound(start, control).join(' ') + ' Q ' + control.join(' ') + ' ' + bound(end, control).join(' ');
@@ -90,15 +101,17 @@ function graphDiagram(nodes, edges) {
   const names = new Map(nodes.map(agent => [agent.key, agent.name]));
   const edgeKeys = new Set(edges.map(edge => edge.join('/')));
   const diagram = svg('svg', { viewBox: `0 0 ${width} ${height}`, role: 'group', 'aria-label': 'Directed Office handoffs' });
-  diagram.style.minWidth = Math.max(590, width * 0.8) + 'px';
-  const arrow = svg('marker', { id: 'office-arrow', markerWidth: 8, markerHeight: 8, refX: 7, refY: 4, orient: 'auto' });
-  arrow.append(svg('path', { d: 'M 1 1 L 7 4 L 1 7', class: 'graph-arrow' }));
+  diagram.style.minWidth = Math.max(660, width * 0.8) + 'px';
+  const arrow = svg('marker', { id: 'office-arrow', markerWidth: 10, markerHeight: 10, refX: 9, refY: 5,
+    orient: 'auto', markerUnits: 'userSpaceOnUse' });
+  arrow.append(svg('path', { d: 'M 0 0 L 10 5 L 0 10 L 2.5 5 Z', class: 'graph-arrow' }));
   const definitions = svg('defs', {});
   definitions.append(arrow);
   diagram.append(definitions);
   for (const [source, target] of edges) {
     const name = `${names.get(source)} can assign to ${names.get(target)}`;
-    const a = svg('a', { href: detailsHref(source, target), 'aria-label': name, class: 'graph-edge' });
+    const a = svg('a', { href: detailsHref(source, target), 'aria-label': name, class: 'graph-edge',
+      'data-source': source, 'data-target': target });
     const d = edgeGeometry(points.get(source), points.get(target), edgeKeys.has(target + '/' + source));
     a.append(svg('title', {}, name), svg('path', { d, class: 'graph-edge-hit' }),
       svg('path', { d, class: 'graph-edge-line', 'marker-end': 'url(#office-arrow)' }));
@@ -107,12 +120,18 @@ function graphDiagram(nodes, edges) {
   for (const node of nodes) {
     const [x, y] = points.get(node.key);
     const status = node.status || 'Unavailable';
+    const initials = node.name.trim().split(/\s+/u).slice(0, 2).map(word => [...word][0]).join('').toUpperCase();
+    const start = x - halfWidth;
     const a = svg('a', { href: '#/agents/' + node.key, class: 'graph-node',
-      'aria-label': `${node.name} persona and duties, ${status}` });
+      'aria-label': `${node.name} persona and duties, ${status}`, 'data-agent': node.key, 'data-tone': statusTone(status) });
+    a.toggleAttribute('data-coordinator', node.role === 'coordinator');
     a.append(svg('title', {}, node.name + ' · ' + status),
-      svg('rect', { x: x - halfWidth, y: y - halfHeight, width: halfWidth * 2, height: halfHeight * 2, rx: 10 }),
-      svg('text', { x, y: y - 2, 'text-anchor': 'middle' }, label(node.name)),
-      svg('text', { x, y: y + 15, 'text-anchor': 'middle', class: 'graph-node-status' }, label(status)));
+      svg('rect', { x: start, y: y - halfHeight, width: halfWidth * 2, height: halfHeight * 2, rx: 12, class: 'node-frame' }),
+      svg('rect', { x: start + 11, y: y - 16, width: 33, height: 33, rx: 9, class: 'node-icon' }),
+      svg('text', { x: start + 27.5, y: y + 5, 'text-anchor': 'middle', class: 'node-letter' }, initials),
+      svg('text', { x: start + 53, y: y - 3 }, label(node.name)),
+      svg('circle', { cx: start + 56, cy: y + 13, r: 3.2, class: 'node-indicator' }),
+      svg('text', { x: start + 64, y: y + 17, class: 'node-status' }, label(status)));
     diagram.append(a);
   }
   return diagram;
@@ -125,17 +144,43 @@ export function renderConnections(catalog) {
   if (signature === graphSignature) return;
   graphSignature = signature;
   const frame = document.getElementById('connection-graph');
+  const board = document.getElementById('connection-board');
   const list = document.getElementById('connection-list');
   const message = document.getElementById('connection-state');
-  frame.hidden = !available || !nodes.length;
-  list.hidden = !available || !nodes.length;
+  board.hidden = !available || !nodes.length;
+  list.hidden = board.hidden;
   message.textContent = !catalog ? 'Agent catalog unavailable.' : !available ?
     'Directed contacts are unavailable for this roster.' : nodes.length ?
-      'Arrows show permitted handoff directions. Dispatch also depends on capability, resource scope, readiness, and Office membership.' :
+      'Arrows show permitted handoff directions. Open an arrow to see its history.' :
       'No Office agents registered.';
   frame.replaceChildren();
-  if (frame.hidden) return;
-  frame.append(graphDiagram(nodes, edges));
+  if (board.hidden) return;
+  const diagram = graphDiagram(nodes, edges);
+  frame.append(diagram);
+  const picker = document.getElementById('connection-focus');
+  const previous = picker.value;
+  picker.replaceChildren(new Option('All agents', ''), ...nodes.map(node => new Option(node.name, node.key)));
+  picker.value = nodes.some(node => node.key === previous) ? previous : '';
+  const applyFocus = () => {
+    const selected = picker.value;
+    let outgoing = 0;
+    let incoming = 0;
+    for (const line of diagram.querySelectorAll('.graph-edge')) {
+      if (!selected) delete line.dataset.focus;
+      else if (line.dataset.source === selected) { line.dataset.focus = 'outgoing'; outgoing++; }
+      else if (line.dataset.target === selected) { line.dataset.focus = 'incoming'; incoming++; }
+      else line.dataset.focus = 'muted';
+    }
+    for (const node of diagram.querySelectorAll('.graph-node')) node.toggleAttribute('data-active', node.dataset.agent === selected);
+    document.getElementById('connection-count').textContent = selected ?
+      `${outgoing} outgoing · ${incoming} incoming (dashed)` :
+      `${nodes.length} ${nodes.length === 1 ? 'agent' : 'agents'} · ${edges.length} ${edges.length === 1 ? 'route' : 'routes'}`;
+  };
+  picker.onchange = () => {
+    applyFocus();
+    diagram.querySelector('.graph-node[data-active]')?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  };
+  applyFocus();
   const rows = html('ul');
   for (const node of nodes) {
     const row = html('li');
