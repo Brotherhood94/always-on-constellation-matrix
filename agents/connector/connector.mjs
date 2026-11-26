@@ -394,12 +394,20 @@ async function deliverBetweenBackups(client, event) {
 
 let client;
 let toolCheck;
+let deskWork;
 let retry = 3000;
 while (true) {
   try {
     await catalog.refresh();
     client ??= await connect();
-    desk?.tick();
+    const drain = await readOptional(join(AGENT_STATE, 'relocation-drain'));
+    if (drain) {
+      await Promise.all([deskWork, toolCheck]);
+      await writeFile(join(AGENT_STATE, 'relocation-drained'), drain, { mode: 0o600 });
+      await delay(1000);
+      continue;
+    }
+    deskWork = desk?.tick();
     if (!helper) toolCheck ??= checkTargetTools(catalog.current()?.agents.find(agent => agent.id === userId), store.db, writeExecutionEvidence)
       .catch(() => console.warn('Target tool verification will retry.')).finally(() => { toolCheck = undefined; });
     const event = store.next();

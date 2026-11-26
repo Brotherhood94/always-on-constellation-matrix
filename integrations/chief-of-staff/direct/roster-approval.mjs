@@ -94,6 +94,10 @@ export async function draftWorker(key, brief) {
 }
 
 export async function submit(payload) {
+  if (process.env.AGENT_MOBILITY_ENDPOINT) {
+    const { relocationCall } = await import('/app/telegram-office.mjs');
+    return relocationCall('roster', payload, 240_000);
+  }
   const key = (await readFile('/roster-key', 'utf8')).trim();
   return new Promise((resolve, reject) => {
     const socket = createConnection('/run/office-roster.sock');

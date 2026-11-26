@@ -10,6 +10,7 @@
     "vps-manager"
   ],
   "dot": false,
+  "helper_hints_timezone": "UTC",
   "telegram": false,
   "tailscale": true
 }

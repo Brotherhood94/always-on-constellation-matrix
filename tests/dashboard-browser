@@ -28,7 +28,9 @@ now = int(time.time())
 rows = {key: [[now - 90, 12], [now - 20, 23.4]] for key in ('CPU', 'RAM', 'Disk')}
 agents = [{'key':'analyst', 'role':'worker', 'persona':{'purpose':'Study the evidence','duties':['Review sources'],
            'working_style':'Cite what can be verified.'}, 'contacts':['qa'],'tools':['Reader'], 'name':'Fixture Analyst',
-           'status':'Available', 'server':'fixture.test', 'model':'fixture-model'},
+           'status':'Moving', 'server':'worker.fixture.test', 'model':'fixture-model', 'healthCheckedAt':now - 10,
+           'move':{'phase':'restoring','from':'worker.fixture.test','to':'backup.fixture.test'},
+           'moveHistory':[{'from':'vps.fixture.test','to':'worker.fixture.test','at':now - 86400,'outcome':'complete'}]},
           {'key':'qa','role':'worker','contacts':['analyst','reviewer'],'name':'Fixture QA','status':'Sign-in required','server':'fixture.test'},
           {'key':'reviewer','role':'worker','contacts':[],'name':'Fixture Reviewer','status':'Unavailable','server':'fixture.test'},
           {'key':'task-manager','role':'coordinator','contacts':[],'name':'Task Manager','status':'Running','server':'fixture.test'}]
@@ -75,6 +77,10 @@ for width in 375 1280; do
   grep -q 'Study the evidence' "$page"
   grep -q 'Review sources' "$page"
   grep -q 'Cite what can be verified.' "$page"
+  grep -q 'Last health check' "$page"
+  grep -q 'Destination backup.fixture.test' "$page"
+  grep -q 'Move history' "$page"
+  grep -q 'vps.fixture.test → worker.fixture.test · complete' "$page"
   grep -q 'href="#/agents/analyst"' "$page"
   grep -q 'healthy' "$page"
 done

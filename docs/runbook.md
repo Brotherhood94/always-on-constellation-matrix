@@ -141,7 +141,75 @@ sudo ./constellation_matrix agent migrate-root
 
 Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. VPS Manager joins the existing encrypted **Root Operations** chat with a new Matrix identity. Update saved install configurations to use `vps-manager` where they previously listed `root`. [VPS Manager guide](../integrations/root/README.md)
 
+## Move agents between hosts
+
+Use the same repository revision on the coordinator VPS and each worker. Workers can be Linux servers, PCs, or Linux VMs on Mac or Windows. Install standard Docker Engine with Compose V2, Python 3.9 or newer, SSHFS, and Tailscale on each worker. Join the same tailnet. [Docker Engine](https://docs.docker.com/engine/install/) · [Tailscale installation](https://tailscale.com/docs/install)
+
+### Enroll a worker
+
+1. On the worker, generate a dedicated Ed25519 key and copy its public key to the VPS as shown in [Prepare the host and desktop key](#1-worker--prepare-the-host-and-desktop-key).
+2. On the VPS, authorize the key with `sudo ./constellation_matrix remote desktop --public-key /path/to/worker-desktop.pub`. Use the printed host public key to [pin and mount the shared desktop](#pin-and-mount-the-shared-desktop). Use `/mnt/constellation-desktop` and the same VPS DNS name in the mount source.
+3. On the VPS, generate a short-lived invitation and transfer it to the worker over your normal SSH connection.
+
+```sh
+./constellation_matrix host invite worker.example.ts.net --output "$HOME/worker-invite.json"
+scp "$HOME/worker-invite.json" operator@worker.example.ts.net:~/
+```
+
+4. On the worker, keep the invitation private and enroll.
+
+```sh
+chmod 0600 "$HOME/worker-invite.json"
+./constellation_matrix --data-dir /srv/constellation-worker host enroll \
+  --invite "$HOME/worker-invite.json" --desktop-mount /mnt/constellation-desktop
+```
+
+Delete the invitation copies after enrollment. Repeat for each worker. Enrollment installs a systemd service. The worker must reach the VPS on TCP 18486 for relocations, TCP 2222 for desktop SFTP, TCP 443 for Matrix, and the configured Context Intelligence HTTPS port. Allow the VPS to reach the worker’s agent endpoints on TCP 19445–20444. Limit access to the appropriate devices in your tailnet policy. [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
+
+### Move an agent or start one on a worker
+
+Run these commands from the VPS checkout. Omitting `--to` opens a host picker. The confirmation shows the source, destination, and provider credential transfer.
+
+```sh
+./constellation_matrix agent move helper --to worker.example.ts.net
+./constellation_matrix agent move helper --to second-worker.example.ts.net
+./constellation_matrix agent move helper --to vps
+./constellation_matrix agent add --profile /path/to/agent.json --host worker.example.ts.net
+```
+
+The old agent remains available during destination preflight. It then drains its current work while routing pauses. The destination gets the workspace, Matrix device and encryption state, Amplifier sessions, and any supported credentials over an authenticated, encrypted connection. Matrix and the shared desktop stay on the VPS. The dashboard shows **Draining** or **Moving** during the interruption. Check **Persona and duties** afterwards for the health time and move outcome.
+
+Task Manager, Hiring Manager, Coach, Scouter, Helper, and general Office workers can move. For Telegram Agent, the Amplifier Instance moves while the VPS retains the Matrix connector, approvals, pending drafts, delivery receipts, and mautrix bridge. VPS Manager stays on the host it administers. Context Intelligence, Persona Workshop, and Dot’s tunnel also stay on the VPS.
+
+### Resume or roll back
+
+Copy the move ID printed by the VPS command. Use the worker data directory printed at enrollment when a provider requires sign-in. Amplifier opens its native provider setup on the worker.
+
+```sh
+# Worker
+./constellation_matrix --data-dir /srv/constellation-worker host configure helper
+
+# VPS
+./constellation_matrix agent move resume MOVE_ID
+./constellation_matrix agent move rollback MOVE_ID
+```
+
+If a host is offline, bring its enrolled Tailscale device and worker service back online before resuming. If Telegram has an uncertain delivery, verify the existing draft and bridge receipt before resuming. A rollback waits for the destination to stop and carries back its latest provider state. A successful move leaves the previous copy stopped. Move an agent back to the VPS before retiring it or removing its worker host.
+
+The VPS backup contains the registry, move history, and services on the VPS. Back up the live data directory on each enrolled worker for the latest workspace, session, and credential state of the agents it runs.
+
+Existing workers installed by `remote attach` can enter the relocation workflow with `host adopt`. Enroll the same host using a separate data directory. Wait for the old worker’s current turn to finish, then stop its legacy Compose services and run:
+
+```sh
+./constellation_matrix --data-dir /srv/constellation-worker host adopt remote-worker \
+  --legacy-data-dir /srv/constellation-legacy-worker
+```
+
+Then move that agent from the VPS using `agent move`.
+
 ## Add a remote worker
+
+The following instructions describe the legacy standalone worker and its desktop setup. For new workers, enroll the host and use [agent add --host](#move-an-agent-or-start-one-on-a-worker).
 
 The VPS runs the workspace and holds the shared desktop. The worker runs its own Amplifier Instance and Matrix connector. Use the same repository revision on both Linux hosts. The commands below assume the default VPS data directory and Ubuntu 24.04 on the worker. Replace the example tailnet DNS names with those of your machines. If the VPS uses a custom data directory, pass `--data-dir` before each VPS subcommand.
 
@@ -189,11 +257,18 @@ sudo chown "$(id -u):$(id -g)" "$handoff/enrollment.json"
 
 ### 3. Worker · Pin the VPS key, mount the desktop, and attach
 
-Fetch the private enrollment over SSH. Substitute the actual VPS tailnet DNS name and the full `ssh-ed25519 …` public host key from the VPS terminal. This pins the dedicated SFTP endpoint before the worker connects.
+Fetch the legacy enrollment over SSH if you are setting up a standalone worker.
 
 ```sh
 scp "$vps_login:.constellation-remote-worker/enrollment.json" "$handoff/enrollment.json"
 chmod 0600 "$handoff/enrollment.json"
+```
+
+#### Pin and mount the shared desktop
+
+Substitute the VPS tailnet DNS name and the full `ssh-ed25519 …` public host key printed by the VPS. This pins the dedicated SFTP endpoint before the worker connects.
+
+```sh
 vps_host='vps.example.ts.net'
 desktop_host_key='ssh-ed25519 REPLACE_WITH_THE_VPS_DESKTOP_HOST_PUBLIC_KEY'
 printf '[%s]:2222 %s\n' "$vps_host" "$desktop_host_key" \
@@ -208,19 +283,26 @@ On a dedicated worker, add this line to `/etc/fstab` with `sudoedit /etc/fstab`,
 desktop-share@vps.example.ts.net:/desktop /mnt/constellation-desktop fuse.sshfs noauto,_netdev,x-systemd.requires=tailscaled.service,port=2222,IdentityFile=/etc/constellation-desktop/id_ed25519,IdentitiesOnly=yes,UserKnownHostsFile=/etc/constellation-desktop/known_hosts,StrictHostKeyChecking=yes,BatchMode=yes,allow_other,default_permissions,uid=991,gid=991,reconnect,ServerAliveInterval=15,ServerAliveCountMax=3 0 0
 ```
 
-Open `sudo systemctl edit docker.service` and add this drop-in. On boot, Docker waits for the desktop mount before it starts the worker containers. [systemd mount dependencies](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#RequiresMountsFor=)
+For a legacy standalone worker, open `sudo systemctl edit docker.service` and add this drop-in. On boot, Docker waits for the desktop mount before it starts the worker containers. On an enrolled worker, the enrollment service already depends on the mount. [systemd mount dependencies](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#RequiresMountsFor=)
 
 ```ini
 [Unit]
 RequiresMountsFor=/mnt/constellation-desktop
 ```
 
-Mount the desktop, then run `remote attach` from the worker checkout. Complete the Amplifier provider and model prompts on the worker. Use that worker’s actual Tailscale DNS name for `--workshop-host`.
+Mount the desktop and confirm that Linux can see it.
 
 ```sh
 sudo systemctl daemon-reload
 sudo mount /mnt/constellation-desktop
 findmnt --mountpoint /mnt/constellation-desktop
+```
+
+#### Attach the legacy worker
+
+For a standalone worker, run `remote attach` from the worker checkout. Complete Amplifier’s provider and model prompts. Use the worker’s Tailscale DNS name for `--workshop-host`.
+
+```sh
 worker_host='worker.example.ts.net'
 sudo ./constellation_matrix --data-dir /srv/constellation-worker remote attach \
   --enrollment "$handoff/enrollment.json" --desktop-mount /mnt/constellation-desktop \

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer } from 'ws';
@@ -77,8 +77,8 @@ async function until(check, label) {
   throw new Error('Timed out waiting for ' + label);
 }
 const byBody = body => observed.find(event => event.content?.body?.includes(body));
-const helper = spawn(process.execPath, ['/app/helper-dm.mjs'], { env: environment, stdio: 'inherit' });
-const helperExit = once(helper, 'exit');
+let helper = spawn(process.execPath, ['/app/helper-dm.mjs'], { env: environment, stdio: 'inherit' });
+let helperExit = once(helper, 'exit');
 try {
   await until(() => access('/tmp/matrix-agent-ready').then(() => true, () => false), 'Helper readiness');
   const welcome = await until(() => byBody('Ask me how to set up Element'), 'the decrypted welcome');
@@ -97,7 +97,29 @@ try {
   assert.match(turns[0], /isolated-revision/u);
   assert.match(turns[1], /Stale.*Context Intelligence.*healthy/u);
   assert.equal(turns.length, 2);
-  console.log('Helper posted one decryptable welcome pin and answered setup and stale-health questions in separate encrypted threads.');
+  await ask('fixture-helper-stop', 'Smetti di mandarmi i suggerimenti');
+  await until(() => byBody('I’ll stop sending daily hints.'), 'Helper’s opt-out confirmation');
+  await writeFile('/state/relocation-drain', 'fixture-move');
+  await until(async () => (await readFile('/state/relocation-drained', 'utf8').catch(() => '')) === 'fixture-move',
+    'Helper draining its private chat');
+  const queued = await ask('fixture-helper-resume', 'resume daily hints');
+  helper.kill();
+  await helperExit;
+  await cp('/state', '/moved-helper', { recursive: true });
+  for (const filename of ['relocation-drain', 'relocation-drained']) await rm('/moved-helper/' + filename);
+  const probe = spawn(process.execPath, ['/app/move-probe.mjs'], {
+    env: { ...environment, AGENT_STATE: '/moved-helper', AGENT_USERNAME: 'helper',
+      MOVE_MATRIX_ONLY: 'true', MOVE_MATRIX_DEVICE: 'MATRIXHELPERDM' }, stdio: 'inherit',
+  });
+  assert.deepEqual(await once(probe, 'exit'), [0, null]);
+  helper = spawn(process.execPath, ['/app/helper-dm.mjs'], {
+    env: { ...environment, AGENT_STATE: '/moved-helper' }, stdio: 'inherit',
+  });
+  helperExit = once(helper, 'exit');
+  const resumed = await until(() => byBody('Daily hints are on.'), 'the queued encrypted request after relocation');
+  assert.equal(resumed.content['m.relates_to'].event_id, queued);
+  assert.equal(observed.filter(event => event.content?.body?.startsWith('Ask me how to set up Element')).length, 1);
+  console.log('Helper preserved its Matrix device, welcome and queued encrypted request after draining and restarting from relocated state.');
 
   if (office) {
     const peers = [{ key: 'manager', name: 'Task Manager', token: fixture.managerToken, device: 'MATRIXMANAGER' },

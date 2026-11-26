@@ -555,6 +555,15 @@ async function run() {
   while (!stopping) {
     try {
       await handleSync();
+      const drain = await readFile(join(directory, 'relocation-drain'), 'utf8').catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+      if (drain) {
+        if (!worker && !store.get("SELECT 1 FROM draft WHERE state IN ('publishing','matrix_accepted','unknown')")) {
+          await writeFile(join(directory, 'relocation-drained'), drain, { mode: 0o600 });
+        }
+        continue;
+      }
       await migrateReviews();
       if (settings.bridgeControl && store.setting('review_room') !== settings.controlRoom) continue;
       const now = Date.now();

@@ -37,6 +37,8 @@ def enable_services(settings):
 
 def remove_units(project):
     descriptions = {
+        '-mobility.service': 'Constellation Tailnet placement coordinator',
+        '-mobility-worker.service': 'Constellation Tailnet worker',
         '-telegram-backup.timer': 'Schedule Constellation Telegram backup',
         '-telegram-metrics.timer': 'Schedule Constellation Telegram metrics',
         '-backup.timer': 'Nightly encrypted Constellation backup',

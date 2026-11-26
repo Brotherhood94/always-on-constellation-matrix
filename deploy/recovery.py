@@ -20,6 +20,12 @@ def services(data):
 
 
 def backup(data, mode):
+    registry_file = data / 'agents.json'
+    if mode != 'restore-check' and registry_file.is_file():
+        registry = json.loads(registry_file.read_text())
+        if any(move['phase'] not in {'complete', 'rolled-back', 'cancelled'}
+               for move in registry.get('relocations', {}).values()):
+            raise ValueError('Finish or roll back the active relocation before starting a workspace backup')
     repository = data / 'backups'
     key = data / 'secrets/restic-password'
     restic = ('restic', '--repo', str(repository), '--password-file', str(key))
@@ -61,7 +67,7 @@ def backup(data, mode):
             run(*compose, 'stop', *running)
         attempt = run(*restic, 'backup', '--tag', 'constellation-pending', '--json',
                       '--exclude', str(repository), '--exclude', str(key),
-                      '--exclude', str(data / 'staging'), str(data), stdout=subprocess.PIPE, text=True)
+                      '--exclude', str(data / 'staging'), '--exclude', str(data / 'mobility/archives'), str(data), stdout=subprocess.PIPE, text=True)
         snapshot = next(json.loads(line)['snapshot_id'] for line in reversed(attempt.stdout.splitlines())
                         if json.loads(line).get('message_type') == 'summary')
         run(*restic, 'tag', '--add', 'constellation', '--remove', 'constellation-pending', snapshot)

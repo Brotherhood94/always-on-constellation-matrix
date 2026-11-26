@@ -193,16 +193,19 @@ For unattended provisioning, edit the example configuration, check it with `./co
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
 
-### Remote worker setup
+### Move agents between hosts
 
-Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
+Enroll a Linux server, PC, or VM on the same Tailscale network. You can create an agent there with `agent add --host`, or move an existing agent from the VPS with `agent move`. The agent keeps its Matrix identity, workspace, and Amplifier sessions. The dashboard shows its current host and readiness. Open **Persona and duties** for its move history.
 
-1. **Worker.** Install Docker Engine with Compose V2, Tailscale, and SSHFS. Generate a dedicated Ed25519 key for the shared desktop.
-2. **VPS.** Register the optional [remote worker profile](agents/examples/remote-worker.json), authorize the worker’s public key with `remote desktop`, and create its private enrollment with `remote export`.
-3. **Worker.** Verify the VPS desktop host key, mount the shared desktop, and run `remote attach`. Complete Amplifier sign-in and send the resulting files back to the VPS.
-4. **VPS.** Run `persona-connect` and `remote confirm`. Check that the worker is registered, then verify an Office handoff and a shared-file round trip.
+```sh
+./constellation_matrix agent move helper --to worker.example.ts.net
+```
 
-[Copyable commands for both machines](docs/runbook.md#add-a-remote-worker)
+For enrollment, recovery, and migrating an older remote worker, follow the [host relocation runbook](docs/runbook.md#move-agents-between-hosts).
+
+### Daily Helper hints
+
+Helper shares one tip per day in **Agents → People → Helper**, starting after its welcome. Hints become eligible at 10:00 in the deployment timezone and include features such as installing a remote worker or moving an always-on agent. Say **“stop sending hints”** or **“resume daily hints”** in the private chat. [Timing and Italian commands](docs/team.md#daily-helper-hints)
 
 ## Planned features
 

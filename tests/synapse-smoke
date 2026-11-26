@@ -63,6 +63,7 @@ if [[ ${MATRIX_HELPER_SMOKE:-0} == 1 ]]; then
   docker run --rm --network "$name" --user 0:0 --entrypoint node \
     -v "$name:/fixture:ro" -v "$desk_tls:/helper-tls:ro" -v "$src/tests/helper-fixture.mjs:/app/helper-fixture.mjs:ro" \
     -v "$src/agents/connector/helper-dm.mjs:/app/helper-dm.mjs:ro" \
+    -v "$src/agents/connector/move-probe.mjs:/app/move-probe.mjs:ro" \
     -v "$src/agents/connector/helper-support.mjs:/app/helper-support.mjs:ro" \
     -v "$src/agents/connector/connector.mjs:/app/connector.mjs:ro" \
     -v "$src/agents/connector/agent-catalog.mjs:/app/agent-catalog.mjs:ro" \

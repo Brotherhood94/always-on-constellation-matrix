@@ -31,13 +31,14 @@ export function officeCatalog(catalog, integrations) {
   if (!catalog?.agents || catalog.agents.some(agent => agent.key === 'telegram-agent') ||
       !['Telegram', 'Telegram guide', 'Telegram Agent'].some(name => Object.hasOwn(services, name))) return catalog;
   const manager = ['task-manager', 'manager'].find(key =>
-    catalog.agents.some(agent => agent.key === key && agent.placement !== 'remote'));
+    catalog.agents.some(agent => agent.key === key));
   const agents = catalog.agents.map(agent => agent.key === manager ? {
     ...agent, contacts: [...new Set([...(agent.contacts ?? []), 'telegram-agent'])],
   } : agent);
   const status = services['Telegram Agent'];
   agents.push({ key: 'telegram-agent', name: 'Telegram Agent', role: 'worker', contacts: [], placement: 'local',
     server: 'VPS', status: status ? status[0].toUpperCase() + status.slice(1) : 'Setup required',
+    ...(status && Number.isSafeInteger(integrations.time) ? { healthCheckedAt: integrations.time } : {}),
     limits: 'Operates on linked Telegram chats and uses verified bindings for drafts and updates.',
     persona: {
       purpose: 'Manage the Telegram Space and take Telegram assignments in Office.',
@@ -46,6 +47,7 @@ export function officeCatalog(catalog, integrations) {
       working_style: 'Ask the operator to resolve ambiguous recipients and approve outbound messages in Telegram Agent.',
     },
     tools: ['Scoped Telegram MCP'],
+    ...(catalog.telegramPlacement ?? {}),
   });
   return { ...catalog, agents };
 }
@@ -160,6 +162,20 @@ function showPersona(agents) {
     ['Enabled tools', agent.tools?.join(', ') || 'None registered'],
     ['Applied persona revision', agent.revision ?? 'Starter description'],
   ]) { write('h3', label); write('p', value ?? 'Unavailable'); }
+  write('h3', 'Host and readiness');
+  write('p', [agent.server, agent.status].filter(Boolean).join(' · '));
+  if (agent.healthCheckedAt) write('p', 'Last health check ' + new Date(agent.healthCheckedAt * 1000).toLocaleString());
+  if (agent.move) write('p', agent.move.phase.replaceAll('-', ' ') + ' · ' + agent.move.from + ' → ' + agent.move.to);
+  if (agent.moveHistory?.length) {
+    write('h3', 'Move history');
+    const moves = write('ul', '');
+    for (const item of agent.moveHistory) {
+      const li = document.createElement('li');
+      li.textContent = new Date(item.at * 1000).toLocaleString() + ' · ' + item.from + ' → ' + item.to +
+        ' · ' + item.outcome.replaceAll('-', ' ');
+      moves.append(li);
+    }
+  }
   write('h3', 'Can contact');
   const contacts = (agent.contacts ?? []).map(id => agents.find(item => item.key === id)).filter(Boolean);
   if (!contacts.length) write('p', 'No registered contacts');
@@ -231,6 +247,8 @@ function render(metrics, roster, links, integrationStates, connections) {
     const row = document.createElement('tr');
     const status = make('td', '', '');
     status.append(statusLabel(agent.status || 'Unavailable'));
+    if (agent.healthCheckedAt) status.append(make('div', `Checked \${new Date(agent.healthCheckedAt * 1000).toLocaleTimeString()}`, 'agent-detail'));
+    if (agent.move) status.append(make('div', 'Destination ' + agent.move.to, 'agent-detail'));
     row.append(make('td', agent.name || '—', 'agent-name'), status, make('td', agent.server || '—', 'agent-detail'),
       make('td', [agent.model, agent.effort].filter(Boolean).join(' · ') || '—', 'agent-detail'));
     const profile = make('td', '', '');

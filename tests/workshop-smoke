@@ -10,11 +10,11 @@ cleanup() {
 }
 trap cleanup EXIT
 docker network create --internal "$name" >/dev/null
-docker run -d --name "$engine" --network "$name" --network-alias engine \
+docker run -d --name "$engine" --network "$name" --network-alias engine --network-alias relocated \
   --tmpfs /instance:rw,uid=991,gid=991,mode=0700 --tmpfs /exchange:rw,uid=991,gid=991,mode=0700 \
   --tmpfs /workspace:rw,uid=991,gid=991,mode=0700 \
   -e AGENT_NAME=Fixture -e AGENT_USERNAME=fixture -e AGENT_MODEL=gpt-6.2-sol -e AGENT_REASONING=low \
-  -e 'AGENT_INSTANCE_CERTIFICATE_NAMES=["engine"]' \
+  -e 'AGENT_INSTANCE_CERTIFICATE_NAMES=["engine","relocated"]' \
   "${OFFICE_ENGINE_TEST_IMAGE:-constellation-office-engine:0.22.17}" >/dev/null
 docker run -d --name "$workshop" --network "$name" --tmpfs /data:rw,uid=991,gid=991,mode=0700 \
   "${WORKSHOP_TEST_IMAGE:-constellation-persona-workshop:0.7.4}" >/dev/null
@@ -63,6 +63,10 @@ restored = request('POST', TARGETS + '/' + target + '/restore', {'id':baseline, 
 assert restored['installation']['revision'] > installed['revision']
 assert (restored['installation'].get('active') or {}).get('files', {}) == installed['previous'][0]['files']
 assert installed['active']['source']['revision'] == revision.split('/')[-1], installed['active']['source']
+relocated = enroll(request, 'fixture', 'https://relocated:19443', credential, first['target']['agent_id'], reconnect=True)
+assert relocated['target']['agent_id'] == first['target']['agent_id']
+assert relocated['installation']['revision'] == restored['installation']['revision']
+assert relocated['installation']['active'] == restored['installation']['active']
 print('Verified an actual working-style revision on the connected Instance.')
-print('The real Workshop enrolled a live Instance once and read its unchanged profile status.')
+print('The real Workshop recovered the same Instance identity and profile after its endpoint changed.')
 PY

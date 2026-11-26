@@ -98,7 +98,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
             services['dot']['volumes'].append(volume(data / 'telegram/dot-requests', '/telegram-dot', True))
     telegram_coordinator = telegram_office_agent(registry) if settings['telegram'] else None
     for key, entry in sorted(registry['agents'].items()):
-        if entry.get('placement') != 'local':
+        if entry.get('placement') != 'local' or entry.get('mobility_fenced'):
             continue
         instance = f'engine-{key}'
         private = f'acp-{key}'
@@ -194,6 +194,10 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
             dm_volumes = [volume(directory / 'dm', '/state') if item['target'] == '/state' else item
                           for item in worker['volumes'] if item['target'] != '/context-token']
             services['helper-dm'] = {**worker, 'command': ['node', '/app/helper-dm.mjs'],
+                                     'environment': {**worker['environment'],
+                                         'HELPER_HINTS_TIMEZONE': settings.get('helper_hints_timezone', 'UTC'),
+                                         'HELPER_HINTS_FEATURES': ','.join(key for key in ('tailscale', 'dot', 'telegram')
+                                             if settings[key]).replace('tailscale', 'tailnet')},
                                      'volumes': dm_volumes, 'networks': ['clients', private]}
         if registry.get('team_version') == 2 and key != 'helper':
             grant_mount = volume(directory / 'tool-credentials', '/tool-credentials', True)
@@ -204,7 +208,8 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
     if registry['agents'] or settings['telegram']:
         network['workshop-targets'] = {'internal': workshop_internal}
         workshop_networks = ['workshop-targets', *(name for name in network if name.startswith('acp-'))]
-        if workshop_internal and any(entry['placement'] == 'remote' for entry in registry['agents'].values()):
+        if workshop_internal and (any(entry['placement'] == 'remote' for entry in registry['agents'].values()) or
+                                  registry.get('telegram_placement', {}).get('placement') == 'remote'):
             # Telegram may already be attached to workshop-targets when a remote worker is selected.
             network['workshop-egress'] = {}
             workshop_networks.append('workshop-egress')

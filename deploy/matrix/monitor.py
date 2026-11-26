@@ -194,7 +194,7 @@ def export(db, outbox, acknowledgements, dashboard, timestamp, data):
     replace_json(dashboard / "metrics.json", page, 0o644)
     try:
         catalog = agent_catalog_document(read_agent_registry(), page["agents"], os.environ["MATRIX_SERVER_NAME"],
-                                         timestamp, workshop_profiles(REGISTRY.parent))
+                                         timestamp, workshop_profiles(REGISTRY.parent), data=data)
         replace_json(dashboard / "agents.json", catalog, 0o644)
         replace_json(dashboard / "integrations.json", {"time": timestamp, "services": integration_status()}, 0o644)
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as error:

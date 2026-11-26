@@ -75,7 +75,8 @@ case ${1:-} in
     fi
     "${compose[@]}" up -d --no-deps --build --force-recreate telegram-guide
     if [[ -f "$TELEGRAM_DATA/restart-connector" || -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
-      if [[ ${2:-} == --refresh-bridge ]]; then
+      if [[ ${2:-} == --refresh-bridge && ! -e "$TELEGRAM_DATA/engine-moved" &&
+            ! -e "$TELEGRAM_DATA/connector/relocation-drain" ]]; then
         "${compose[@]}" --profile agent up -d --no-deps --build --wait --wait-timeout 120 telegram-engine
       fi
       "${compose[@]}" --profile agent up -d --no-deps --build --force-recreate connector
@@ -134,6 +135,8 @@ case ${1:-} in
     fi
     ;;
   prepare-agent)
+    [[ ! -e "$TELEGRAM_DATA/connector/relocation-drain" ]] || { echo 'Finish the pending Telegram Agent move first.' >&2; exit 1; }
+    [[ ! -e "$TELEGRAM_DATA/engine-moved" ]] || { echo 'Move Telegram Agent back to the VPS before preparing a local engine.' >&2; exit 1; }
     [[ $# == 1 ]] || { echo 'Use telegram prepare-agent.' >&2; exit 2; }
     resolve_matrix_owner
     export TELEGRAM_MODEL=${TELEGRAM_MODEL:-gpt-6.2-sol}
@@ -147,6 +150,8 @@ case ${1:-} in
     echo 'Dedicated Constellation Instance is ready. Run telegram sign-in.'
     ;;
   sign-in)
+    [[ ! -e "$TELEGRAM_DATA/connector/relocation-drain" ]] || { echo 'Finish the pending Telegram Agent move first.' >&2; exit 1; }
+    [[ ! -e "$TELEGRAM_DATA/engine-moved" ]] || { echo 'Use host configure telegram-agent on the active worker.' >&2; exit 1; }
     [[ $# == 1 && -t 0 && -t 1 ]] || { echo 'Run telegram sign-in from an interactive terminal.' >&2; exit 2; }
     "${compose[@]}" --profile agent exec telegram-engine /opt/amplifier-acp/.venv/bin/python -B /opt/telegram/sign_in.py
     ;;
@@ -156,6 +161,9 @@ case ${1:-} in
   start-agent)
     [[ -s "$TELEGRAM_DATA/connector/backend-verified" ]] || { echo 'Run telegram probe first.' >&2; exit 1; }
     "${compose[@]}" --profile agent up -d --no-deps --build connector
+    ;;
+  restart-connector)
+    "${compose[@]}" --profile agent up -d --no-deps --build --force-recreate connector
     ;;
   upgrade-connector)
     [[ $# == 1 && -s "$TELEGRAM_DATA/connector/backend-verified" ]]

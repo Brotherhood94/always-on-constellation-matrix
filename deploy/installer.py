@@ -18,6 +18,7 @@ import sys
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agent_picker import choose_option, placement as agent_placement, prompt_text, select_integrations
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition, telegram_office_agent
@@ -70,6 +71,11 @@ def save(path, value, mode=0o600, uid=None):
             if uid is not None:
                 os.fchown(stream.fileno(), uid, uid)
             temporary.replace(path)
+            descriptor = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
         finally:
             temporary.unlink(missing_ok=True)
 
@@ -139,6 +145,10 @@ def normalized(raw, presets):
     chosen = settings.get('agents')
     if not isinstance(chosen, list) or len(chosen) != len(set(chosen)) or any(key not in presets for key in chosen):
         raise ValueError('Specify a list of distinct available agents')
+    try:
+        ZoneInfo(settings.get('helper_hints_timezone', 'UTC'))
+    except (TypeError, ValueError, ZoneInfoNotFoundError) as error:
+        raise ValueError('Use an IANA timezone for helper_hints_timezone, such as Europe/Rome') from error
     weekly = settings.get('scout_weekly_utc', 'Mon 09:00')
     if weekly != 'off' and (not isinstance(weekly, str) or not re.fullmatch(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([01][0-9]|2[0-3]):[0-5][0-9]', weekly)):
         raise ValueError('Use an English weekday and UTC time for scout_weekly_utc, or off')
@@ -604,7 +614,7 @@ def publish_inventory(settings, data, registry):
             status = 'Unavailable'
         observed.append({'name': entry['name'], 'server': entry['server'], 'status': status})
     now = int(time.time())
-    save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now, workshop_profiles(data)), mode=0o644)
+    save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now, workshop_profiles(data), data=data), mode=0o644)
     save(data / 'dashboard/integrations.json', {'time': now, 'services': integrations}, mode=0o644)
     publish_metadata(data, settings, registry)
 
@@ -769,6 +779,9 @@ def install(data, args, *, entered=None):
     with operator_lock(data):
         current = load(previous) if previous.exists() else None
         if current:
+            from mobility import TERMINAL
+            if any(move['phase'] not in TERMINAL for move in load(registry_path).get('relocations', {}).values()):
+                raise ValueError('Resume or roll back the pending agent move before reinstalling the workspace.')
             for key in ('server_name', 'owner', 'project', 'matrix_port'):
                 if current[key] != settings[key]:
                     raise ValueError(f'{key} belongs to the existing deployment identity')
@@ -895,7 +908,7 @@ def provision_selected_agents(data, settings, registry, selection, passphrase, *
     close_office_setup_notice(data)
 
 
-def provision_agent(data, settings, registry, candidate, inviter, *, actor=None, approval=None):
+def provision_agent(data, settings, registry, candidate, inviter, *, actor=None, approval=None, prepare_engine=True):
     key = candidate['key']
     if any(entry.get('retirement') in {'stopped', 'revoked'} for entry in registry['agents'].values()):
         raise ValueError('Resume the pending agent removal before adding another worker')
@@ -906,12 +919,13 @@ def provision_agent(data, settings, registry, candidate, inviter, *, actor=None,
     if key in PRIVATE_ROLES | {'chief-of-staff'}:
         from roster import prepare_management
         prepare_management(data, settings, registry, inviter)
-    if registry['agents'][key]['placement'] == 'local':
+    if prepare_engine and registry['agents'][key]['placement'] == 'local':
         prepare_images(settings, registry)
         up(data, 'engine-' + key)
     commit_registry(data / 'agents.json', registry, actor=actor or settings.get('owner', 'operator'),
                     reason='registration', approval=approval)
-    sync_workshop(settings, data, registry)
+    if prepare_engine:
+        sync_workshop(settings, data, registry)
     publish_inventory(settings, data, registry)
     return key
 
@@ -920,7 +934,14 @@ def agent_add(data, args, *, operator_token=None):
     starter = getattr(args, 'starter', None)
     candidate = {'key': starter, **starter_profiles()[starter]} if starter else load(args.profile)
     configure = getattr(args, 'configure', False)
-    if configure:
+    host = getattr(args, 'host', None)
+    if host:
+        from mobility import BLOCKED, select_host
+        if candidate['key'] in BLOCKED or agent_placement(candidate['key'], candidate) != 'local':
+            raise ValueError('Use a portable local profile when creating an agent on an enrolled host')
+        settings, _ = open_existing(data)
+        host = select_host(data, settings, source=settings['server_name'], target=host)
+    if configure and not host:
         from roster import local_worker
         local_worker(candidate['key'], {'profile': candidate['profile'], 'placement': agent_placement(candidate['key'], candidate)})
         if not sys.stdin.isatty():
@@ -931,11 +952,19 @@ def agent_add(data, args, *, operator_token=None):
         try:
             if operator_token is not None:
                 verify_operator(load(data / 'rooms.json'), own)
-            key = provision_agent(data, settings, registry, candidate, own)
+            if host:
+                key = provision_agent(data, settings, registry, candidate, own, prepare_engine=False)
+            else:
+                key = provision_agent(data, settings, registry, candidate, own)
         finally:
             if operator_token is None:
                 request('POST', CLIENT + '/logout', {}, own)
-    if configure:
+    if host:
+        from mobility import create_move, execute_id
+        move = create_move(data, key, host, True, initial=True)
+        print(f'Move ID {move}', flush=True)
+        execute_id(data, move)
+    elif configure:
         agent_activate(data, key, pending_only=True)
     else:
         print('Provisioned ' + key + '. Complete its provider sign-in to activate routing.')
@@ -979,6 +1008,8 @@ def agent_activate(data, key, *, pending_only=False):
         entry = registry['agents'][key]
         if entry.get('retirement'):
             raise ValueError(f'Agent {key} is retiring. Resume its removal first.')
+        if entry.get('mobility_move'):
+            raise ValueError('Resume the agent’s move before configuring it here')
         if pending_only and entry['active']:
             return
         if entry['placement'] != 'local':
@@ -1218,6 +1249,7 @@ def main():
     add_source = add.add_mutually_exclusive_group(required=True)
     add_source.add_argument('--profile', type=Path)
     add_source.add_argument('--starter', choices=['helper'])
+    add.add_argument('--host', help='Create a portable agent on an enrolled worker')
     add.add_argument('--owner-password-file', type=Path)
     add.add_argument('--configure', action='store_true', help='Open Amplifier setup after registering a local Office worker')
     remove = agent.add_parser('remove', help='Drain, deregister and archive a local Office worker')
@@ -1235,6 +1267,8 @@ def main():
     migrate.add_argument('--yes', action='store_true', help='Confirm retirement of the legacy Root account')
     agent.add_parser('configure', aliases=['sign-in'], help='Open native Amplifier provider setup').add_argument(
         'key', nargs='?', help='Agent ID. Omit to configure all pending local agents in order.')
+    from mobility import register_parsers
+    register_parsers(commands, agent)
     remote = commands.add_parser('remote').add_subparsers(dest='action', required=True)
     remote.add_parser('desktop').add_argument('--public-key', type=Path, required=True)
     export = remote.add_parser('export')
@@ -1292,6 +1326,11 @@ def main():
         print_guide(data, root=os.geteuid() == 0)
         return
     if os.geteuid():
+        if args.command == 'host' or args.command == 'agent' and (args.action == 'move' or
+                args.action == 'add' and args.host):
+            print('This command uses sudo to manage protected agent state and Docker services.', flush=True)
+            run('sudo', '--', str(SOURCE / 'constellation_matrix'), *sys.argv[1:])
+            return
         if args.command == 'install':
             install_as_operator(data, args)
             return
@@ -1326,8 +1365,14 @@ def main():
     elif args.command == 'uninstall':
         from uninstall import uninstall
         uninstall(data, purge=args.purge)
+    elif args.command == 'host':
+        from mobility import host_command
+        host_command(data, args)
     elif args.command == 'agent':
-        if args.action == 'add':
+        if args.action == 'move':
+            from mobility import execute_move
+            execute_move(data, args)
+        elif args.action == 'add':
             agent_add(data, args)
         elif args.action == 'remove':
             from roster import remove_command

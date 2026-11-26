@@ -10,6 +10,15 @@ In Element, open **Agents → People → Helper** and ask a plain-language quest
 
 For a question that belongs in an Office task, ask **@Task Manager** to consult Helper. Task Manager is the only agent that can initiate this handoff. The answer returns to the original Office thread. Helper’s private chat uses a separate session and accepts questions from the operator.
 
+### Daily Helper hints
+
+After its welcome, Helper shares one randomly selected tip per day in its private chat. Tips are sent at or after 10:00 in the deployment timezone. To set the timezone in an unattended install, use `"helper_hints_timezone": "Europe/Rome"` or another IANA timezone. The default is UTC. Helper skips missed days and cycles through the features enabled in the deployment.
+
+- Turn hints off with **“stop sending hints”** or **“smetti di mandarmi i suggerimenti”**.
+- Turn them back on with **“resume daily hints”** or **“riattiva i suggerimenti giornalieri”**.
+
+Helper confirms the change in the same chat. The preference follows Helper across restarts and [host moves](runbook.md#move-agents-between-hosts).
+
 On an existing deployment, run this from the VPS checkout and complete Amplifier’s provider setup.
 
 ```sh

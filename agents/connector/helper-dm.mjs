@@ -5,9 +5,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
 import { helperIdentity, helperQuestion, privateHelperRoom, supportEvidence } from './helper-support.mjs';
+import { dailyHints, hintPreference } from './helper-hints.mjs';
 import { mentionMessage } from './matrix-format.mjs';
 import { threadRelation } from './matrix-routing.mjs';
-import { openRoomClient, readEncryptedRoomMessage, sendEncrypted } from './matrix-session.mjs';
+import { openRoomClient, readEncryptedRoomMessage, readOptional, sendEncrypted } from './matrix-session.mjs';
 import { Store } from './store.mjs';
 
 const { MATRIX_URL: url, MATRIX_OWNER: owner, MATRIX_SERVER_NAME: server, AGENT_STATE: state } = process.env;
@@ -15,6 +16,8 @@ const userId = '@helper:' + server;
 const roomId = (await readFile(join(state, 'room-id'), 'utf8')).trim();
 const client = await openRoomClient({ url, state, roomId, userId, deviceId: 'MATRIXHELPERDM', name: 'Helper' });
 const store = new Store(join(state, 'connector.sqlite3'));
+const hints = dailyHints(store.db, { timezone: process.env.HELPER_HINTS_TIMEZONE,
+  features: (process.env.HELPER_HINTS_FEATURES ?? '').split(',') });
 const activated = store.activatedAt();
 const route = '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId);
 const privateRoom = async () => privateHelperRoom(await client.getRoomState(roomId), owner, userId);
@@ -62,6 +65,12 @@ async function welcomePin() {
 let nextPin = 0;
 while (true) {
   try {
+    const drain = await readOptional(join(state, 'relocation-drain'));
+    if (drain) {
+      await writeFile(join(state, 'relocation-drained'), drain, { mode: 0o600 });
+      await delay(1000);
+      continue;
+    }
     if (await privateRoom()) {
       await writeFile('/tmp/matrix-agent-ready', 'helper', { mode: 0o644 });
       if (Date.now() >= nextPin) {
@@ -76,7 +85,11 @@ while (true) {
         } else {
           let reply = event.reply;
           if (reply === null) {
-            try {
+            const preference = hintPreference(event.body);
+            if (preference !== undefined) {
+              hints.setEnabled(preference);
+              reply = preference ? 'Daily hints are on.' : 'I’ll stop sending daily hints. Say “resume daily hints” to turn them back on.';
+            } else try {
               reply = await runTurn({ workspace: '/workspace', event, store, identity: helperIdentity,
                 guidance: await supportEvidence(event.body) });
             } catch (error) {
@@ -90,6 +103,9 @@ while (true) {
             store.sent(event.id, sent);
           }
         }
+      } else {
+        await hints.tick(new Date(), (transaction, content) => sendEncrypted(client, roomId, transaction, content),
+          () => Boolean(setting.get()) && privateRoom());
       }
     } else await rm('/tmp/matrix-agent-ready', { force: true });
   } catch (error) {

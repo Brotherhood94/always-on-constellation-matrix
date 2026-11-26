@@ -1,4 +1,5 @@
 import { request } from 'node:http';
+import { readFile } from 'node:fs/promises';
 
 const escape = value => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
@@ -50,7 +51,22 @@ export function requestTelegramOffice(socketPath, id, operation) {
   return requestTelegramService(socketPath, { id, ...operation });
 }
 
+export async function relocationCall(operation, payload, timeout = 55_000) {
+  const { AGENT_MOBILITY_ENDPOINT: endpoint, AGENT_MOBILITY_KEY: agent,
+    AGENT_MOBILITY_GENERATION: generation } = process.env;
+  if (!endpoint || !agent || !generation) throw new Error('The private role connection is not configured.');
+  const token = (await readFile('/mobility/rpc-token', 'utf8')).trim();
+  const response = await fetch(endpoint + '/rpc', {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(timeout),
+    headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+    body: JSON.stringify({ agent, generation, operation, payload }),
+  });
+  if (!response.ok) throw new Error('The coordinator refused the role call.');
+  return response.json();
+}
+
 export async function requestTelegramService(socketPath, input, timeout = 55_000) {
+  if (socketPath.startsWith('role:')) return relocationCall(socketPath.slice(5), input, timeout);
   return new Promise((resolve, reject) => {
     const req = request({ socketPath, method: 'POST', path: '/', signal: AbortSignal.timeout(timeout),
       headers: { 'content-type': 'application/json' } }, res => {

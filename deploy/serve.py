@@ -45,7 +45,10 @@ def workspace_routes(settings, data, registry):
         Route(settings['neo4j_https_port'], f"http://127.0.0.1:{settings['neo4j_port']}"),
         Route(settings['bolt_https_port'], f"tcp://127.0.0.1:{settings['bolt_port']}", 'tls-terminated-tcp'),
     ])
-    if any(agent['placement'] == 'remote' for agent in registry['agents'].values()):
+    remote_pending = any(
+        move['destination'] != settings['server_name'] and move['phase'] not in {'complete', 'rolled-back', 'cancelled'}
+        for move in registry.get('relocations', {}).values())
+    if remote_pending or any(agent['placement'] == 'remote' for agent in registry['agents'].values()):
         routes.append(Route(settings['context_https_port'], f"http://127.0.0.1:{settings['context_port']}"))
     return routes
 

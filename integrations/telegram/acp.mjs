@@ -25,7 +25,8 @@ export function summarizeWithInstance(engine, question, messages) {
 
 export function runDelegatedWithInstance(engine, grant, tool) {
   const servers = [{ name: 'telegram', command: '/usr/local/bin/node', args: ['/opt/telegram-tools/telegram-mcp.mjs'],
-    env: [{ name: 'CONSTELLATION_TELEGRAM_GRANT', value: grant }] }];
+    env: [{ name: 'CONSTELLATION_TELEGRAM_GRANT', value: grant },
+      ...(engine.relocation ? Object.entries(engine.relocation).map(([name, value]) => ({ name, value })) : [])] }];
   return runTurn(engine, null, `Handle the approved Telegram task by calling telegram_${tool}. ` +
     'The tool has no arguments. It has the verified request. Call it once, then stop.', () => {}, servers);
 }

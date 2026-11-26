@@ -16,7 +16,7 @@ const operations = {
 };
 for (const [tool, description] of Object.entries(operations)) {
   server.registerTool('telegram_' + tool, { description, inputSchema: z.strictObject({}) }, async () => {
-    const result = await requestTelegramService('/telegram-mcp/tools.sock', { grant, tool }).catch(() => ({ status: 'unavailable' }));
+    const result = await requestTelegramService(process.env.AGENT_MOBILITY_ENDPOINT ? 'role:telegram-mcp' : '/telegram-mcp/tools.sock', { grant, tool }).catch(() => ({ status: 'unavailable' }));
     return { content: [{ type: 'text', text: JSON.stringify(result) }],
       ...(['blocked', 'forbidden', 'unavailable'].includes(result.status) && { isError: true }) };
   });

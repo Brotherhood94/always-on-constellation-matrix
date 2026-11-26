@@ -124,7 +124,38 @@ def workshop_profiles(data):
     return {key: value.get('public', {}) for key, value in json.loads(path.read_text()).items()}
 
 
-def document(registry, inventory, server_name, now, workshop=None):
+def placement_details(registry, entry, key, now, data):
+    move = registry.get('relocations', {}).get(entry.get('mobility_move'), {})
+    history = []
+    for item in sorted(registry.get('relocations', {}).values(), key=lambda value: value['created'], reverse=True):
+        if item['agent'] == key and item.get('finished'):
+            history.append({'from': item['source'], 'to': item['destination'], 'at': item['finished'],
+                            'outcome': item['phase']})
+            if len(history) == 20:
+                break
+    result = {}
+    if history:
+        result['moveHistory'] = history
+    if move:
+        result['move'] = {'id': move['id'], 'phase': move['phase'], 'from': move['source'],
+                          'to': move['destination'], 'started': move['created']}
+        if move['phase'] != 'preparing':
+            result['status'] = {'draining': 'Draining', 'provider-required': 'Provider sign-in required',
+                                'rollback-provider': 'Provider sign-in required'}.get(move['phase'], 'Moving')
+    if data and entry.get('mobility_generation') and entry.get('placement') == 'remote':
+        worker = data / 'mobility' / 'hosts' / (entry['server'] + '.json')
+        snapshot = json.loads(worker.read_text()) if worker.is_file() else {}
+        checked = snapshot.get('seen')
+        observation = snapshot.get('agents', {}).get(key, {})
+        if checked:
+            result['healthCheckedAt'] = checked
+        fresh = (checked and 0 <= now - checked <= 60 and
+                 observation.get('generation') == entry['mobility_generation'])
+        result.setdefault('status', 'Available' if fresh and observation.get('ready') else 'Unavailable')
+    return result
+
+
+def document(registry, inventory, server_name, now, workshop=None, *, data=None):
     if inventory is None:
         raise ValueError('The resource inventory is unavailable')
     observed = {(row['name'], row.get('server', registry['local_server'])): row for row in inventory}
@@ -150,6 +181,9 @@ def document(registry, inventory, server_name, now, workshop=None):
                            effort=amplifier.get('effort', current.get('effort', entry.get('effort'))),
                            **profile(entry['profile'])))
         row = result[-1]
+        if active and entry.get('placement') == 'local':
+            row['healthCheckedAt'] = now if current else None
+        row.update(placement_details(registry, entry, key, now, data))
         row.update(persona=persona_for(entry), roleId=role_id(key, entry),
                    revision=entry.get('persona_revision'), tools=list(entry.get('enabled_tools', {})))
         if governed:
@@ -167,7 +201,10 @@ def document(registry, inventory, server_name, now, workshop=None):
     if any(sum(row['role'] == role for row in result) > 1 for role in ('coordinator', 'observer')):
         raise ValueError('There must be a single active coordinator and observer')
     revision = registry.get('connection_history', {}).get('revision')
-    return dict(version=1, contactPolicy=governed, time=now, dynamicHandoffs=registry.get('dynamic_handoffs') is True,
+    telegram = registry.get('telegram_placement')
+    integration = ({'server': telegram['server'], 'placement': telegram['placement'],
+                    **placement_details(registry, telegram, 'telegram-agent', now, data)} if telegram else None)
+    return dict(version=1, contactPolicy=governed, time=now, telegramPlacement=integration, dynamicHandoffs=registry.get('dynamic_handoffs') is True,
                 agents=result, **({'policyRevision': revision} if revision else {}))
 
 

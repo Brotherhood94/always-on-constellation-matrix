@@ -159,6 +159,10 @@ def retire_locked(data, settings, registry, key, *, actor=None, approval=None):
         return 'retired'
     entries = registry['agents']
     entry = entries.get(key)
+    if entry and entry.get('mobility_move'):
+        raise ValueError('Finish or roll back the agent’s move before retiring it')
+    if entry and entry.get('mobility_generation') and entry['placement'] == 'remote':
+        raise ValueError('Move this agent back to the VPS before retiring it')
     starter = bool(entry and registry.get('team_version') == 2 and entry.get('starter_role'))
     if not starter:
         local_worker(key, entry)

@@ -62,9 +62,13 @@ def synchronize(data, registry, *, telegram=False, reconnect=None):
 
     entries = dict(registry['agents'])
     if telegram and (data / 'telegram/connector/config.json').exists():
-        entries['telegram-agent'] = {'name': 'Telegram', 'placement': 'local'}
+        entries['telegram-agent'] = {'name': 'Telegram', 'placement': 'local', **registry.get('telegram_placement', {})}
     roster = []
     for key, entry in sorted(entries.items()):
+        if entry.get('mobility_fenced') and key != reconnect:
+            if key in saved:
+                roster.append({**saved[key]['public'], 'available': False})
+            continue
         if entry['placement'] == 'remote':
             binding = home / f'{key}.json'
             if not binding.exists():
