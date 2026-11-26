@@ -149,6 +149,7 @@ docker stop --timeout 3 "$bridge" >/dev/null
 docker run --rm --network "$network" --user 0:0 -v "$state:/fixture:ro" \
   -v "$src/../../deploy/matrix/bot/telegram-space.mjs:/app/telegram-space.mjs:ro" \
   -v "$src/../../deploy/matrix/bot/telegram-office.mjs:/app/telegram-office.mjs:ro" \
+  -v "$src/../../agents/connector/telegram-office.mjs:/app/office-command.mjs:ro" \
   -v "$src/tests/space-fixture.mjs:/app/space-fixture.mjs:ro" \
   --entrypoint node "$connector_image" /app/space-fixture.mjs
 docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gid=991,mode=0700 \

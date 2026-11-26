@@ -2,10 +2,28 @@ import { request } from 'node:http';
 
 const escape = value => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 
+const contactWording = [
+  [
+    /^(?:aggiungi (?:il contatto )?|apri (?:la|una) chat con )(@[a-z0-9_]{4,32}) (.+)$/iu,
+    /^(?:alle (?:room|stanze) (?:di|del|dello|nel|nello)|su|in|nel|nello|allo) (?:(?:spazio|space) )?(?:telegram|teelgram)(?: space)?$/iu,
+  ],
+  [
+    /^(?:please )?(?:add (?:the contact )?|open (?:a|the) chat with )(@[a-z0-9_]{4,32}) (.+)$/iu,
+    /^(?:to|in|on) (?:the )?telegram(?: (?:rooms(?: list)?|space))?$/iu,
+  ],
+];
+
 export function telegramOfficeCommand(body, name, id) {
   const mention = new RegExp(`^(?:${escape(id)}|@?${escape(name)})[,:]?\\s+`, 'iu');
   const input = body.replace(mention, '').trimStart();
-  if (!/^telegram\s+(?:add|remove|draft)\b/iu.test(input)) return null;
+  if (!/^telegram\s+(?:add|remove|draft)\b/iu.test(input)) {
+    const sentence = input.trimEnd().replace(/[.!]$/u, '').replace(/[ \t]+/gu, ' ');
+    for (const [command, destination] of contactWording) {
+      const match = command.exec(sentence);
+      if (match && destination.test(match[2])) return { action: 'add', target: match[1] };
+    }
+    return null;
+  }
   const draft = /^telegram\s+draft\s+(direct|group)\s+"([^"\n]+)"[ \t]*:[ \t]?([\s\S]+)$/iu.exec(input);
   if (draft) return { action: 'draft', type: draft[1].toLowerCase(), target: draft[2], text: draft[3] };
   const add = /^telegram\s+add\s+(\S+)$/iu.exec(input.trimEnd());

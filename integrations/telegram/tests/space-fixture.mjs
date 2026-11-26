@@ -4,6 +4,7 @@ import matrix from '@vector-im/matrix-bot-sdk';
 import pg from 'pg';
 import { reconcileTelegramRooms } from './telegram-space.mjs';
 import { telegramOfficeAction } from './telegram-office.mjs';
+import { telegramOfficeCommand } from './office-command.mjs';
 
 const domain = 'telegram.test';
 const matrixUrl = 'http://synapse:8008';
@@ -92,7 +93,10 @@ try {
   await reconcile();
   assert.deepEqual((await children()).find(event => event.state_key === dm).content, {});
   assert.deepEqual((await children()).find(event => event.state_key === supergroup).content, {});
-  assert.match((await add('$reopen-dm', '@sample')).message, new RegExp(encodeURIComponent(dm)));
+  const openContact = telegramOfficeCommand('Task Manager: aggiungi @sample alle room nel teelgram space',
+    'Task Manager', '@task-manager:' + domain);
+  const opened = await telegramOfficeAction({ id: '$reopen-dm', ...openContact }, office);
+  assert.match(opened.message, new RegExp(encodeURIComponent(dm)));
   assert.match((await add('$reopen-group', 'https://t.me/c/456/789')).message, new RegExp(encodeURIComponent(supergroup)));
   assert.equal((await children()).filter(event => event.content.via?.length).length, 3);
   console.log('Office opened and removed the verified contact and group in Synapse. Reconciliation preserved the removals.');

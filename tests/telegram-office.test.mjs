@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { requestTelegramOffice, telegramOfficeCommand } from '../agents/connector/telegram-office.mjs';
+import { acceptedMessage } from '../agents/connector/matrix-routing.mjs';
 import { listenTelegramOffice, telegramOfficeAction } from '../deploy/matrix/bot/telegram-office.mjs';
 import { addressedRequest, telegramRequest } from '../integrations/telegram/control.mjs';
 
@@ -22,6 +23,41 @@ test('Office understands contact and group operations and preserves draft text',
   });
   assert.deepEqual(parse('telegram draft bad request'), { action: 'help' });
   assert.equal(parse('Please summarize telegram operations.'), null);
+});
+
+test('a real Office mention opens a Telegram contact from the Italian request', () => {
+  const room = '!office:sample.test';
+  const request = acceptedMessage({
+    room_id: room, sender: owner, event_id: '$request', origin_server_ts: 10, type: 'm.room.message',
+    content: {
+      msgtype: 'm.text', body: 'Task Manager: aggiungi @sample_contact alle room nel teelgram space',
+      formatted_body: '<a href="https://matrix.to/#/' + encodeURIComponent(id) +
+        '">Task Manager</a>: aggiungi @sample_contact alle room nel teelgram space',
+      'm.mentions': { user_ids: [id] },
+    },
+  }, { roomId: room, owner, userId: id, agents: [id], activatedAt: 0,
+    displayNames: { [id]: 'Task Manager' }, routingPolicy: { coordinator: id, dynamic: true } });
+  assert.deepEqual(telegramOfficeCommand(request.body, 'Task Manager', id), { action: 'add', target: '@sample_contact' });
+});
+
+test('contact requests require one Telegram username and a standalone Telegram action', () => {
+  const parse = message => telegramOfficeCommand(message, 'Task Manager', id);
+  for (const message of [
+    'Aggiungi @sample_contact alle stanze di Telegram.',
+    'apri la chat con @sample_contact su Telegram',
+    'Add @sample_contact to Telegram Rooms',
+    'Open a chat with @sample_contact on Telegram.',
+  ]) assert.deepEqual(parse(message), { action: 'add', target: '@sample_contact' });
+  for (const message of [
+    'Aggiungi @sample_contact a tutte le room del Telegram Space',
+    'Add @sample_contact to the Telegram room',
+    'Invite @sample_contact into all Telegram rooms',
+    'Non aggiungere @sample_contact alle room di Telegram',
+    'Aggiungi @sample_contact:example.org alle room di Telegram',
+    'Aggiungi @sample_contact e @another alle room di Telegram',
+    'Aggiungi @sample_contact alle room di Telegram e mandagli un messaggio',
+    '`Add @sample_contact to Telegram Rooms`',
+  ]) assert.equal(parse(message), null);
 });
 
 test('the operator and the Telegram Guide can request exact drafts without Dot', () => {

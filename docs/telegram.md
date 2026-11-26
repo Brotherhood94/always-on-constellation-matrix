@@ -18,6 +18,8 @@ In **Agents → Office**, choose **@Task Manager** from Element’s mention pick
 | Draft a private message | `telegram draft direct "Sample Contact": See you tomorrow!` |
 | Draft a group message | `telegram draft group "Project Room": The meeting starts at 10.` |
 
+For a private chat, you can also write “Add @username to Telegram Rooms” or “Aggiungi @username alle stanze di Telegram”. Task Manager opens one bridged room for that contact under **Telegram → Rooms**.
+
 The bridge uses the operator's linked Telegram account. Open a new room from Task Manager’s reply or **Telegram → Rooms**. For an undiscovered group, send `!tg sync-chats` in Telegram Bridge and retry. A basic group can be opened with `telegram add chat:<id>`. If several rooms share a name, remove one by its Matrix room ID. Removal unlinks the room, retains its history and membership, and blocks drafts for the room while it is unlinked. An explicit add can link it again.
 
 Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office command opens a private Telegram Control thread. Only the operator can approve and send the exact text there. For text you want to keep within Control, open **Telegram → Telegram Control** and send the draft command directly without a mention. Dot is optional for both paths.
