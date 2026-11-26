@@ -109,7 +109,9 @@ class OperatorCLITest(unittest.TestCase):
             self.assertEqual([item.args[2:] for item in sudo.call_args_list],
                              [('enroll',), ('configure', 'manager', '--pending-only'),
                               ('configure', 'helper', '--pending-only'), ('finish',)])
-            self.assertIn('Opening Amplifier provider and model setup', output.getvalue())
+            self.assertIn('Amplifier will open provider and model setup', output.getvalue())
+            self.assertIn('Local agent 1 of 2', output.getvalue())
+            self.assertIn('Local agent 2 of 2', output.getvalue())
             self.assertEqual(request.call_args_list[0].args[:2], ('POST', CLIENT + '/login'))
             self.assertEqual(request.call_args_list[-1],
                              call('POST', CLIENT + '/logout', {}, 'matrix-session-fixture', local_port=18500))

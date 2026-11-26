@@ -681,13 +681,14 @@ def configure_network(settings, data, previous=None):
 
 
 @contextmanager
-def operator_lock(data):
+def operator_lock(
+    data, *, waiting_message='Another Constellation command is updating this workspace. Waiting for it to finish…',
+):
     with (data / '.operator.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
-            print('Another Constellation command is updating this workspace. Waiting for it to finish…',
-                  file=sys.stderr, flush=True)
+            print(waiting_message, file=sys.stderr, flush=True)
             fcntl.flock(lock, fcntl.LOCK_EX)
             print('Workspace lock acquired. Continuing.', file=sys.stderr, flush=True)
         yield
@@ -991,7 +992,7 @@ def agent_sign_in(data, key=None, *, selection=None):
     if not pending:
         print('All local agents are already connected.')
     for number, key in enumerate(pending, start=1):
-        print(f'Configuring local agent {number} of {len(pending)}', flush=True)
+        print(f'Local agent {number} of {len(pending)}', flush=True)
         agent_activate(data, key, pending_only=True)
 
 
@@ -1009,7 +1010,9 @@ def configure_amplifier(data, engine, entry):
 
 
 def agent_activate(data, key, *, pending_only=False):
-    with operator_lock(data):
+    waiting_message = (f'Provider setup for {key} is waiting for another workspace command. '
+                       'Setup will continue automatically.')
+    with operator_lock(data, waiting_message=waiting_message):
         settings, registry = open_existing(data)
         entry = registry['agents'][key]
         if entry.get('retirement'):

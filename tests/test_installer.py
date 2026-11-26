@@ -1027,6 +1027,17 @@ class InstallerTest(unittest.TestCase):
                 self.assertIn('Workspace lock acquired', output.getvalue())
             self.assertEqual([item.args[1] for item in flock.call_args_list], [LOCK_EX | LOCK_NB, LOCK_EX])
 
+    def test_agent_setup_explains_that_it_resumes_after_the_workspace_lock(self):
+        with TemporaryDirectory() as work, redirect_stderr(StringIO()) as output, \
+             patch('installer.fcntl.flock', side_effect=[BlockingIOError(), None]), \
+             patch('installer.open_existing', return_value=(self.settings, {'agents': {'coder': {'active': True}}})), \
+             patch('installer.configure_amplifier') as configure:
+            agent_activate(Path(work), 'coder', pending_only=True)
+
+        self.assertIn('Provider setup for coder is waiting for another workspace command.', output.getvalue())
+        self.assertIn('Setup will continue automatically.', output.getvalue())
+        configure.assert_not_called()
+
     def test_status_refresh_republishes_dashboard_assets_from_the_checkout(self):
         with TemporaryDirectory() as work:
             data = Path(work)
