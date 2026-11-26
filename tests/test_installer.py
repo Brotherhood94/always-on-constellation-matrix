@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
-    PRESETS, agent_activate, agent_sign_in, context_config, install, interactive, load, main,
+    PRESETS, agent_activate, agent_sign_in, close_office_setup_notice, context_config, install, interactive, load, main,
     normalized, password, prepare_graph_password, prepare_storage, provision_layout, register_entry, save,
     show_element_setup, tailscale_dns, telegram,
 )
@@ -529,6 +529,25 @@ class InstallerTest(unittest.TestCase):
             provision_layout(settings, data, self.registry, 'synthetic-password')
             prepare.assert_called_once_with(data, settings, self.registry, 'operator-session')
             self.assertEqual(matrix.call_args.args[-1], 'operator-session')
+            self.assertFalse((data / 'bot/office-setup.json').exists())
+
+    def test_office_setup_notice_is_provisioned_once_for_a_pending_interactive_roster(self):
+        settings = {**self.settings, 'dot': False, 'telegram': False}
+        rooms = {'owner': '@operator:fixture.test', 'office': '!office', 'alerts': '!alerts'}
+        with TemporaryDirectory() as work, patch('installer.login', return_value={
+                'user_id': rooms['owner'], 'access_token': 'operator-session'}), patch('installer.private_secret'), \
+                patch('installer.create_layout', return_value=rooms), patch('installer.invite') as invite, \
+                patch('installer.os.fchown'), patch('installer.request'), patch('roster.prepare_management'):
+            data = Path(work) / 'workspace path'
+            (data / 'bot').mkdir(parents=True)
+            path = data / 'bot/office-setup.json'
+            for _ in range(2):
+                provision_layout(settings, data, {'agents': {}}, 'synthetic-password', office_setup=True)
+            invite.assert_called_once_with('!office', '@monitor:fixture.test', 'operator-session')
+            self.assertEqual(load(path), {'room': '!office', 'pending': True,
+                                          'command': f"./constellation_matrix --data-dir '{data}' setup-guide"})
+            close_office_setup_notice(data)
+            self.assertFalse(load(path)['pending'])
 
     def test_setup_resumes_management_before_the_welcome_without_repeating_provider_setup(self):
         settings = {**self.settings, 'agents': ['chief-of-staff'], 'dot': False, 'telegram': False}
@@ -742,6 +761,7 @@ class InstallerTest(unittest.TestCase):
             registry = load(data / 'agents.json')
             self.assertEqual(registry['agents'], {})
             self.assertTrue(load(data / 'onboarding.json')['select_agents'])
+            self.assertTrue(steps['provision_layout'].call_args.kwargs['office_setup'])
             steps['run_telegram'].assert_called_once_with(data, 'start-guide')
             self.assertIn('Workspace deployed.', output.getvalue())
 
@@ -766,6 +786,7 @@ class InstallerTest(unittest.TestCase):
             steps['finalize_setup'].assert_not_called()
             self.assertEqual(list(load(data / 'agents.json')['agents']), ['manager'])
             self.assertTrue(steps['provision_layout'].call_args.kwargs['unattended'])
+            self.assertFalse(steps['provision_layout'].call_args.kwargs['office_setup'])
             steps['run_telegram'].assert_called_once_with(data, 'start-guide')
 
     def test_telegram_activation_and_layout_repair_share_the_linking_flow(self):

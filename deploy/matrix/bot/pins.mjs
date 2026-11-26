@@ -36,6 +36,17 @@ function message(title, sections) {
   };
 }
 
+export function officeSetupNotice(command) {
+  return { ...message('Finish setting up Office', [
+    ['VPS terminal', [
+      'Return to the installer and confirm that you have signed in to Element.',
+      'Choose the agents to install, select Done, and complete Amplifier setup for each selected local agent.',
+      'If you closed the installer, run this from the Constellation checkout on the VPS.',
+      { code: command },
+    ]],
+  ]), msgtype: 'm.notice' };
+}
+
 function dotGuide({ command, systemd }) {
   return message('Connect Dot', [
     ['1. Browser · Create the tunnel', [

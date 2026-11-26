@@ -390,6 +390,11 @@ try {
   await writeFile(join(monitor, 'password'), password);
   await writeFile(join(monitor, 'room-id'), alerts);
   const monitorId = '@monitor:' + domain;
+  const officeRoute = '/_matrix/client/v3/rooms/' + encodeURIComponent(office);
+  await api(officeRoute + '/invite', { method: 'POST', token, body: { user_id: monitorId } });
+  const officeCommand = "./constellation_matrix --data-dir '/srv/fixture workspace' setup-guide";
+  const officeReceipt = join(monitor, 'office-setup-receipt.json');
+  await writeFile(join(monitor, 'office-setup.json'), JSON.stringify({ room: office, pending: true, command: officeCommand }));
   const monitorToken = await login('monitor', 'VPSMONITOR');
   await writeFile(join(monitor, 'token'), monitorToken);
   await writeFile(join(monitor, 'matrix-token'), monitorToken);
@@ -409,6 +414,8 @@ try {
   const freshMonitor = launch('/app/ops/monitor.mjs', monitorEnv);
   await eventually(async () => (await readState(join(monitor, 'sync.json'))).syncToken);
   assert.deepEqual((await api(pinState, { token })).pinned, [preexisting.event_id]);
+  assert.equal((await readState(officeReceipt)).event, undefined);
+  assert.ok(!(await api(officeRoute + '/joined_members', { token })).joined[monitorId]);
   const telegramGuide = join(base, 'telegram-guide');
   await mkdir(telegramGuide);
   // The layout fixture created the rooms and device with no Telegram credentials or Amplifier session.
@@ -476,6 +483,16 @@ try {
   assert.match(telegramInstructions.formatted_body, /<pre><code>!tg pm @username<\/code><\/pre>/u);
   assert.match(telegramInstructions.body, /Click the room link.*Once Telegram accepts it, the room appears in the Telegram Space/u);
   console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');
+  const officeSetup = await eventually(async () => {
+    const receipt = await readState(officeReceipt);
+    return receipt.closed && receipt.event;
+  });
+  const notice = await eventually(() => readShortcut(officeSetup, office));
+  assert.equal(notice.msgtype, 'm.notice');
+  assert.match(notice.body, /Choose the agents to install, select Done, and complete Amplifier setup/u);
+  assert.ok(notice.formatted_body.includes(`<pre><code>${officeCommand}</code></pre>`));
+  assert.equal(notice['m.mentions'], undefined);
+  assert.ok(!(await api(officeRoute + '/joined_members', { token })).joined[monitorId]);
 
   assert.equal(await readShortcut(oldPins[1]), null, 'A new device cannot decrypt the original shortcut');
   const stopped = once(freshMonitor, 'exit');
@@ -487,6 +504,10 @@ try {
   launch('/app/ops/monitor.mjs', monitorEnv);
   const first = await managedShortcut([...oldPins, fresh]);
   await verifyShortcut(first, links);
+  const recentOffice = await api(officeRoute + '/messages?dir=b&limit=50', { token });
+  assert.deepEqual(recentOffice.chunk.filter(event => event.sender === monitorId && event.type === 'm.room.encrypted')
+    .map(event => event.event_id), [officeSetup]);
+  console.log('Office received one encrypted setup notice after Element keys were available. The monitor left and did not resend on restart.');
   const updated = { ...links, dashboard: 'https://fixture.test:9443/' };
   await writeFile(join(base, 'links.json'), JSON.stringify(updated));
   const changed = await managedShortcut([first]);

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import matrix from '@vector-im/matrix-bot-sdk';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
-import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from './pins.mjs';
+import { officeSetupNotice, reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from './pins.mjs';
 import { reconcileTelegramRooms } from './telegram-space.mjs';
 
 const {
@@ -135,12 +135,7 @@ async function shortcuts({ client, roomId }) {
             find('m.room.tombstone') || state.some(event => event.type === 'm.room.member' &&
               ['join', 'invite'].includes(event.content?.membership) && !allowed.has(event.state_key))) return null;
       }
-      const machine = client.crypto.engine.machine;
-      const query = machine.queryKeysForUsers([new crypto.UserId(MATRIX_OWNER)]);
-      const result = await client.doRequest('POST', '/_matrix/client/v3/keys/query', null, JSON.parse(query.body), 15000);
-      // The device may have uploaded its keys before the monitor's next sync.
-      await machine.markRequestAsSent(query.id, query.type, JSON.stringify(result));
-      return shortcutRecipientKey(MATRIX_OWNER, result.device_keys?.[MATRIX_OWNER]);
+      return operatorDeviceKey(client);
     },
     getPinned: async () => {
       const current = await client.getRoomStateEventContent(roomId, 'm.room.pinned_events', '').catch(error => {
@@ -165,6 +160,41 @@ async function shortcuts({ client, roomId }) {
     await reconcilePins(pinRoom, links, state, { command: GUIDE_COMMAND, graphPassword: GRAPH_PASSWORD_COMMAND,
       dot: DOT_ENABLED === 'true', systemd: SYSTEMD_ENABLED === 'true' });
   }
+}
+
+async function operatorDeviceKey(client) {
+  const machine = client.crypto.engine.machine;
+  const query = machine.queryKeysForUsers([new crypto.UserId(MATRIX_OWNER)]);
+  const result = await client.doRequest('POST', '/_matrix/client/v3/keys/query', null, JSON.parse(query.body), 15000);
+  // The device may have uploaded its keys before the monitor's next sync.
+  await machine.markRequestAsSent(query.id, query.type, JSON.stringify(result));
+  return shortcutRecipientKey(MATRIX_OWNER, result.device_keys?.[MATRIX_OWNER]);
+}
+
+async function remindOffice({ client }) {
+  const noticeFile = join(STATE_DIR, 'office-setup.json');
+  const notice = JSON.parse(await readOptional(noticeFile) ?? 'null');
+  if (!notice) return;
+  const receipt = join(STATE_DIR, 'office-setup-receipt.json');
+  const result = JSON.parse(await readOptional(receipt) ?? '{}');
+  if (result.closed) return;
+  const { room, pending, command } = notice;
+  const route = '/_matrix/client/v3/rooms/' + encodeURIComponent(room);
+  if (pending && !result.event) {
+    if (!await operatorDeviceKey(client)) return;
+    if (!(await client.getJoinedRooms()).includes(room)) await client.joinRoom(room);
+    const encryption = await client.getRoomStateEventContent(room, 'm.room.encryption', '');
+    if (encryption.algorithm !== 'm.megolm.v1.aes-sha2') throw new Error('Office setup requires an encrypted room');
+    if (JSON.parse(await readOptional(noticeFile) ?? '{}').pending) {
+      const encrypted = await client.crypto.encryptRoomEvent(room, 'm.room.message', officeSetupNotice(command));
+      const { event_id } = await client.doRequest('PUT', route + '/send/m.room.encrypted/office-setup-v1', null, encrypted, 15000);
+      if (!event_id) throw new Error('Matrix did not confirm the Office setup notice');
+      result.event = event_id;
+      await writeAtomic(receipt, JSON.stringify(result));
+    }
+  }
+  await client.doRequest('POST', route + '/leave', null, {}, 15000);
+  await writeAtomic(receipt, JSON.stringify({ ...result, closed: true }));
 }
 
 let spaceDatabase;
@@ -197,6 +227,7 @@ while (true) {
     if (!telegram) await deliver(sender);
     await shortcuts(sender);
     if (telegram) await telegramRooms(sender);
+    else await remindOffice(sender);
     wait = 5000;
   } catch (error) {
     console.error('Matrix alert delivery retry:', error.body?.errcode || error.code || error.message);

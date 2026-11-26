@@ -469,7 +469,14 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
         directory(layout / 'execution')
 
 
-def provision_layout(settings, data, registry, passphrase, *, unattended=False):
+def close_office_setup_notice(data):
+    path = data / 'bot/office-setup.json'
+    if path.is_file():
+        office = load(data / 'rooms.json')['office']
+        save(path, {'room': office, 'pending': False}, uid=RUNTIME_UID)
+
+
+def provision_layout(settings, data, registry, passphrase, *, unattended=False, office_setup=False):
     from roster import prepare_management
 
     own = login(settings['owner'], passphrase)
@@ -479,6 +486,12 @@ def provision_layout(settings, data, registry, passphrase, *, unattended=False):
         request('POST', CLIENT + '/logout', {}, monitor['access_token'])
         rooms = create_layout(settings['server_name'], own['user_id'], token)
         save(data / 'bot/room-id', rooms['alerts'] + '\n', uid=RUNTIME_UID)
+        if office_setup:
+            notice = data / 'bot/office-setup.json'
+            if not notice.exists():
+                invite(rooms['office'], f"@monitor:{settings['server_name']}", token)
+                save(notice, {'room': rooms['office'], 'pending': True,
+                              'command': workspace_command(data, elevated=False) + ' setup-guide'}, uid=RUNTIME_UID)
         for key, entry in registry['agents'].items():
             prepare_agent_state(data, key, entry, rooms, token, settings)
         if settings['dot']:
@@ -755,7 +768,9 @@ def install(data, args, *, entered=None):
             refresh_context(data)
         else:
             up(data, 'postgres', 'synapse', 'context')
-        provision_layout(settings, data, registry, passphrase, unattended=bool(args.config) or entered is not None)
+        office_setup = not args.config and onboarding_path.exists() and load(onboarding_path).get('select_agents') is True
+        provision_layout(settings, data, registry, passphrase, unattended=bool(args.config) or entered is not None,
+                         office_setup=office_setup)
         compose(data, 'build', 'monitor')
         prepare_images(settings, registry)
         local_agents = [key for key, entry in registry['agents'].items() if entry['placement'] == 'local']
@@ -778,6 +793,7 @@ def install(data, args, *, entered=None):
             if state.pop('select_agents', False):
                 state.pop('selection', None)
                 save(onboarding_path, state)
+                close_office_setup_notice(data)
     refresh_connections(data)
     if any(registry['agents'].get(k, {}).get('active') for k in PRIVATE_ROLES | {'chief-of-staff'}):
         from roster import enable_management
@@ -824,6 +840,7 @@ def provision_selected_agents(data, settings, registry, selection, passphrase, *
         publish_inventory(roster, data, registry)
         configure_network(roster, data, settings)
     save(data / 'settings.json', roster)
+    close_office_setup_notice(data)
 
 
 def provision_agent(data, settings, registry, candidate, inviter, *, actor=None, approval=None):
