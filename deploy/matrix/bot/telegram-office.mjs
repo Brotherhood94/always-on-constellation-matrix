@@ -6,6 +6,7 @@ import { telegramSpaceState } from './telegram-space.mjs';
 const matrixRoom = /^![^\s/\x00-\x1f]{1,254}$/u;
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
 const username = /^@[a-z0-9_]{4,32}$/iu;
+const userPeer = /^user:([1-9][0-9]{0,18})$/u;
 const groupId = /^(chat|channel):[1-9][0-9]{0,18}$/u;
 const groupLink = /^https:\/\/t\.me\/c\/([1-9][0-9]{0,18})(?:\/[1-9][0-9]*)?\/?$/u;
 const roomRoute = room => '/_matrix/client/v3/rooms/' + encodeURIComponent(room);
@@ -14,7 +15,7 @@ const matrixLink = (room, event) => 'https://matrix.to/#/' + encodeURIComponent(
 const bounded = (text, size) => typeof text === 'string' && text.trim() && Buffer.byteLength(text) <= size;
 const fail = message => ({ ok: false, message });
 
-async function bridgeOpenFailure(response, direct) {
+async function bridgeOpenFailure(response, direct, userId) {
   const { errcode, error } = (await response.json().catch(() => null)) ?? {};
   if (errcode === 'FI.MAU.NOT_LOGGED_IN') {
     return fail('Your Matrix account has no Telegram login. Open Telegram → Telegram Bridge and use !tg login qr to connect.');
@@ -30,6 +31,7 @@ async function bridgeOpenFailure(response, direct) {
     return fail('Telegram Bridge is rate-limited. Wait before retrying the request.');
   }
   if (errcode === 'M_NOT_FOUND') {
+    if (userId) return fail('The bridge could not resolve that Telegram user ID. Use !tg search <name> in Telegram Bridge and check the contact ID.');
     return fail(direct
       ? 'Telegram could not resolve that exact username. Check it with !tg resolve-identifier @username in Telegram → Telegram Bridge.'
       : 'Telegram Bridge could not find that group. Run !tg sync-chats in Telegram Bridge and check the group ID.');
@@ -37,8 +39,9 @@ async function bridgeOpenFailure(response, direct) {
   if (response.status === 404 || response.status === 405 || errcode === 'M_UNRECOGNIZED') {
     return fail('The running bridge is missing the Office chat-opening route. Run ./constellation_matrix telegram layout on the VPS.');
   }
-  const check = direct ? 'Check the username with !tg resolve-identifier @username in Telegram Bridge.'
-    : 'Check the group ID in Telegram Bridge.';
+  const check = userId ? 'Use !tg search <name> in Telegram Bridge and check the contact ID.'
+    : direct ? 'Check the username with !tg resolve-identifier @username in Telegram Bridge.'
+      : 'Check the group ID in Telegram Bridge.';
   return fail(`Telegram Bridge could not open the chat (HTTP ${response.status}). ${check}`);
 }
 
@@ -97,20 +100,24 @@ export async function telegramOfficeAction(input, options) {
   }
   const group = groupLink.exec(target);
   const peer = group ? 'channel:' + group[1] : target;
-  const direct = username.test(peer);
-  if (!direct && !groupId.test(peer)) return fail('Use @username, a Telegram group message link, or a chat: or channel: peer ID.');
+  const userId = userPeer.exec(peer)?.[1];
+  const direct = userId !== undefined || username.test(peer);
+  if ((!direct && !groupId.test(peer)) || (userId && BigInt(userId) > 9223372036854775807n)) {
+    return fail('Use @username, a user: peer ID, a Telegram group message link, or a chat: or channel: peer ID.');
+  }
   if (!key) return fail('Activate Telegram Bridge before opening a chat from Office.');
   const endpoint = '/_matrix/provision/v3/' + (direct ? 'create_dm/' : 'constellation_group/') +
-    encodeURIComponent(peer) + '?' + new URLSearchParams({ user_id: owner });
+    encodeURIComponent(userId ?? peer) + '?' + new URLSearchParams({ user_id: owner });
   const response = await bridgeFetch('http://telegram-bridge:29317' + endpoint, {
     method: 'POST', redirect: 'error', headers: { authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(23_000),
   });
-  if (!response.ok) return bridgeOpenFailure(response, direct);
+  if (!response.ok) return bridgeOpenFailure(response, direct, userId);
   const result = await response.json();
   const room = direct ? result.dm_room_mxid : result.room;
   if (!matrixRoom.test(room ?? '') || room === space || room === control) return fail('The bridge did not return a Telegram room.');
-  const verified = await database.query('SELECT room FROM telegram_space_sent_portal WHERE owner = $1 AND room = $2', [owner, room]);
+  const verified = await database.query('SELECT peer FROM telegram_space_sent_portal WHERE owner = $1 AND room = $2', [owner, room]);
   if (!verified.rows.length) return fail('The bridge did not verify the chat as an eligible Telegram room.');
+  if (userId && !verified.rows.some(row => row.peer === peer)) return fail('The room did not match the requested Telegram user ID.');
   if (!linked.has(room)) await client.doRequest('PUT', route + encodeURIComponent(room),
     null, { via: [domain], suggested: false }, 15_000);
   return { ok: true, message: 'Room opened under Telegram → Rooms. Join if Element prompts you.\n' + matrixLink(room) };

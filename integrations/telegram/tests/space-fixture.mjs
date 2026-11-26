@@ -83,7 +83,7 @@ try {
     assert.equal(new URL(url).searchParams.get('user_id'), owner);
     assert.equal(request.method, 'POST');
     const contact = url.includes('/create_dm/');
-    assert.match(url, contact ? /create_dm\/%40sample/ : /constellation_group\/channel%3A456/);
+    assert.match(url, contact ? /create_dm\/(?:%40sample|1001|1002)\?/ : /constellation_group\/channel%3A456/);
     return Response.json(contact ? { dm_room_mxid: dm } : { room: supergroup });
   } };
   const remove = async (id, target) => telegramOfficeAction({ id, action: 'remove', target }, office);
@@ -97,9 +97,18 @@ try {
     'Task Manager', '@task-manager:' + domain);
   const opened = await telegramOfficeAction({ id: '$reopen-dm', ...openContact }, office);
   assert.match(opened.message, new RegExp(encodeURIComponent(dm)));
+  assert.equal((await remove('$remove-dm-again', 'user:1001')).ok, true);
+  const mismatched = await add('$mismatched-peer', 'user:1002');
+  assert.equal(mismatched.ok, false);
+  assert.match(mismatched.message, /did not match the requested Telegram user ID/);
+  assert.deepEqual((await children()).find(event => event.state_key === dm).content, {});
+  const numeric = telegramOfficeCommand('Task Manager: telegram add user:1001',
+    'Task Manager', '@task-manager:' + domain);
+  assert.match((await telegramOfficeAction({ id: '$reopen-dm-by-peer', ...numeric }, office)).message,
+    new RegExp(encodeURIComponent(dm)));
   assert.match((await add('$reopen-group', 'https://t.me/c/456/789')).message, new RegExp(encodeURIComponent(supergroup)));
   assert.equal((await children()).filter(event => event.content.via?.length).length, 3);
-  console.log('Office opened and removed the verified contact and group in Synapse. Reconciliation preserved the removals.');
+  console.log('Office opened a verified contact by username and numeric user ID, and opened and removed a group in Synapse.');
 } finally {
   await reader.end();
   await bridge.end();

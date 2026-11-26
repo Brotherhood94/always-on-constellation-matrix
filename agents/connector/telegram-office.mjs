@@ -33,7 +33,7 @@ export function telegramOfficeCommand(body, name, id) {
   return { action: 'help' };
 }
 
-export const telegramOfficeHelp = 'Use `telegram add @username`, `telegram add channel:1234567890`, ' +
+export const telegramOfficeHelp = 'Use `telegram add @username`, `telegram add user:1001`, `telegram add channel:1234567890`, ' +
   '`telegram remove "Name"`, or `telegram draft direct "Name": your message`. Use `group` for a group draft.';
 
 export async function requestTelegramOffice(socketPath, id, operation) {

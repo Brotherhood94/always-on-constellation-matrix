@@ -13,6 +13,7 @@ In **Agents → Office**, choose **@Task Manager** from Element’s mention pick
 | Action | Text after the mention |
 | --- | --- |
 | Open a private chat | `telegram add @username` |
+| Open a private chat by numeric peer ID | `telegram add user:1001` |
 | Open an existing group | `telegram add https://t.me/c/1234567890/42` or `telegram add channel:1234567890` |
 | Remove a person or group from the Space | `telegram remove "Sample Contact"` |
 | Draft a private message | `telegram draft direct "Sample Contact": See you tomorrow!` |
@@ -22,7 +23,7 @@ For a private chat, you can also write “Add @username to Telegram Rooms” or 
 
 The bridge uses the operator's linked Telegram account. Open a new room from Task Manager’s reply or **Telegram → Rooms**. For an undiscovered group, send `!tg sync-chats` in Telegram Bridge and retry. A basic group can be opened with `telegram add chat:<id>`. If several rooms share a name, remove one by its Matrix room ID. Removal unlinks the room, retains its history and membership, and blocks drafts for the room while it is unlinked. An explicit add can link it again.
 
-If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. This lookup leaves the Telegram conversation unchanged. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
+If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. If you only know the name, send `!tg search <name>` and check the matching profile for its numeric Telegram user ID. The bridge can open a numeric ID when it knows the contact through your linked Telegram account. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
 
 Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office command opens a private Telegram Control thread. Only the operator can approve and send the exact text there. For text you want to keep within Control, open **Telegram → Telegram Control** and send the draft command directly without a mention. Dot is optional for both paths.
 
@@ -70,7 +71,7 @@ Enter your existing Matrix operator password to link the bridge DM. The command 
 
 1. **Element.** Open **Telegram → Telegram Bridge** and send the command for the conversation you want to open. [Bridge room commands](https://github.com/mautrix/go/blob/v0.33.0/bridgev2/commands/startchat.go)
 
-   - **Private chat.** Send `!tg pm @username` with the person's Telegram username. If you only know their name, send `!tg search <name>`, check the profile, and use `!tg pm <number>` with the matching result's Telegram ID.
+   - **Private chat.** Send `!tg pm @username` or `!tg pm 1001`, replacing `1001` with the person's numeric Telegram user ID. If you only know their name, send `!tg search <name>` and check the matching profile first.
    - **Group without topics.** In Telegram, copy a link to a message in the group. For `https://t.me/c/1234567890/42`, send `!tg create-portal channel:1234567890` in Telegram Bridge. Use the first number from the link. [Telegram message links](https://core.telegram.org/api/links#message-links)
    - **Basic group or group with a public link.** In Telegram Desktop, open the group and choose **⋯ → Export chat history → JSON**. Check the chat name in `result.json` and use the top-level `id`. Send `!tg create-portal chat:<id>` for a basic group or `!tg create-portal channel:<id>` for a supergroup without topics. [Telegram Desktop export](https://telegram.org/blog/export-and-more) · [Export fields](https://core.telegram.org/import-export#chat)
 

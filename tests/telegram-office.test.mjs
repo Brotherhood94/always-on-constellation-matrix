@@ -16,6 +16,7 @@ const text = 'See you tomorrow!\nBring your notes.  ';
 test('Office understands contact and group operations and preserves draft text', () => {
   const parse = message => telegramOfficeCommand(message, 'Task Manager', id);
   assert.deepEqual(parse('@Task Manager telegram add @sample'), { action: 'add', target: '@sample' });
+  assert.deepEqual(parse('@Task Manager telegram add user:1001'), { action: 'add', target: 'user:1001' });
   assert.deepEqual(parse(id + ': telegram add channel:12345'), { action: 'add', target: 'channel:12345' });
   assert.deepEqual(parse('telegram remove "Sample Group"'), { action: 'remove', target: 'Sample Group' });
   assert.deepEqual(parse('telegram draft group "Sample Group": ' + text), {
@@ -132,5 +133,20 @@ test('Office reports bridge sign-in, unresolved usernames, and provisioning fail
     assert.equal(result.ok, false);
     assert.match(result.message, expected);
     assert.doesNotMatch(result.message, /never print this/u);
+  }
+  const unknownPeer = await telegramOfficeAction({ id: '$test-peer', action: 'add', target: 'user:1001' }, {
+    ...options, bridgeFetch: async url => {
+      assert.match(url, /\/create_dm\/1001\?/u);
+      return Response.json({ errcode: 'M_NOT_FOUND' }, { status: 404 });
+    },
+  });
+  assert.equal(unknownPeer.ok, false);
+  assert.match(unknownPeer.message, /could not resolve that Telegram user ID.*!tg search/u);
+  for (const target of ['1001', 'user:0', 'user:-1001', 'user:9999999999999999999']) {
+    const invalidPeer = await telegramOfficeAction({ id: '$invalid-peer', action: 'add', target }, {
+      ...options, bridgeFetch: async () => assert.fail(`Unqualified or invalid peer sent to bridge: ${target}`),
+    });
+    assert.equal(invalidPeer.ok, false);
+    assert.match(invalidPeer.message, /user:/u);
   }
 });

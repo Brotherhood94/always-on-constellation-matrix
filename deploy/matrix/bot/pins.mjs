@@ -97,6 +97,8 @@ function telegramGuide(command) {
     ['4. Element · Open a chat from Telegram Bridge', [
       'For a person, replace the example with their Telegram username and send the command in Telegram Bridge.',
       { code: '!tg pm @username' },
+      'If you have the person’s numeric Telegram user ID, replace 1001 with that ID. To find it by name, send !tg search <name> in Telegram Bridge and check the matching profile.',
+      { code: '!tg pm 1001' },
       'For a group, copy a message link in Telegram. For https://t.me/c/1234567890/42, use the first number in the command below.',
       { code: '!tg create-portal channel:1234567890' },
       'If the bridge has not found the group yet, send !tg sync-chats and try again.',
@@ -111,7 +113,7 @@ function telegramGuide(command) {
     ]],
     ['6. Element · Ask Task Manager in Office', [
       'Choose @Task Manager from Element’s mention picker, then add one of these commands.',
-      { code: 'telegram add @username\ntelegram add channel:1234567890\ntelegram remove "Sample Contact"\ntelegram draft direct "Sample Contact": See you tomorrow!' },
+      { code: 'telegram add @username\ntelegram add user:1001\ntelegram add channel:1234567890\ntelegram remove "Sample Contact"\ntelegram draft direct "Sample Contact": See you tomorrow!' },
       'For a group draft, use group in place of direct. Open the Control thread to approve a draft for a verified, bound chat.',
       { label: 'Use Telegram from Office or Control',
         url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#use-telegram-from-office' },
