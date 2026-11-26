@@ -74,7 +74,7 @@ function observe(incomingRoom, event) {
   const next = Array.isArray(mentions) ? [...new Set(mentions.filter(id => id !== event.sender && knownName(id)))] : [];
   const nextAgent = !content[directReplyKey] && next.length === 1 && turn.number < replyLimit ? knownName(next[0]) : null;
   const assigned = registered(job.first_agent) ?? agents[job.first_agent];
-  const canClose = !(assigned?.role === 'coordinator' || job.first_agent === 'manager') || event.sender === assigned?.id;
+  const canClose = !(assigned?.role === 'coordinator' || (!catalog.configured && job.first_agent === 'manager')) || event.sender === assigned?.id;
   const outcome = content[directReplyKey] || nextAgent || !canClose ? null : validatedOutcome(content[taskOutcomeKey]);
   const kind = outcome ? 'outcome' : content[directReplyKey] ? 'direct' : nextAgent ? 'handoff' : 'progress';
   saveReply.run(job.task_id, turn.number, event.event_id, agent, content.body.slice(0, 8000), nextAgent, kind, outcome && JSON.stringify(outcome));

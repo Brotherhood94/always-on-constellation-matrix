@@ -14,6 +14,8 @@
       <div><h1>Constellation Dashboard</h1><p id="freshness" aria-live="polite">Loading VPS metrics…</p></div>
       <a id="context-link" class="action" hidden>Open Context Intelligence <span aria-hidden="true">↗</span></a>
     </header>
+    <section id="persona-view" hidden aria-live="polite"></section>
+    <div id="overview">
     <section aria-labelledby="resources-heading">
       <div class="section-heading">
         <h2 id="resources-heading">VPS resources</h2>
@@ -25,13 +27,14 @@
       <h2 id="agents-heading">Agents</h2>
       <p id="agent-freshness"></p>
       <div class="table-frame" tabindex="0" role="region" aria-label="Agent inventory">
-        <table><thead><tr><th scope="col">Name</th><th scope="col">Health</th><th scope="col">Host</th><th scope="col">Model</th></tr></thead><tbody id="agents"></tbody></table>
+        <table><thead><tr><th scope="col">Name</th><th scope="col">Health</th><th scope="col">Host</th><th scope="col">Model</th><th scope="col">Profile</th></tr></thead><tbody id="agents"></tbody></table>
       </div>
     </section>
     <section aria-labelledby="integrations-heading">
       <h2 id="integrations-heading">Integrations</h2>
       <dl id="integrations"></dl>
     </section>
+    </div>
   </main>
 </body>
 </html>

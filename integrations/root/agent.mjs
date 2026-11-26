@@ -10,6 +10,7 @@ import { acceptedMessage, taskOutcomeKey } from '../../agents/connector/matrix-r
 import { createCatalog } from '../../agents/connector/agent-catalog.mjs';
 import { routingFor } from '../../agents/connector/capability-dispatch.mjs';
 import { assignedHandoff, managedContext } from '../../agents/connector/managed-task.mjs';
+import { checkTargetTools } from '../../agents/connector/team-tools.mjs';
 import { readEncryptedRoomMessage } from '../../agents/connector/matrix-session.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from '../../agents/connector/context.mjs';
 import { agentTurnKey, auditRecord, digest, eventId, executionCause, resultHandoff,
@@ -201,6 +202,7 @@ async function dispatch(room, raw) {
   db.prepare('INSERT OR IGNORE INTO tasks (id,event,sender,room,time,body,source_thread,source_turn) VALUES (?,?,?,?,?,?,?,?)')
     .run(id, raw.event_id, raw.sender, room, raw.origin_server_ts, text, sourceThread, turn ? JSON.stringify(turn) : null);
   const task = db.prepare('SELECT activity_id, source_notified FROM tasks WHERE id=?').get(id);
+  if (!task) return;
   if (!task.activity_id && !task.source_notified) {
     const reaction = await sendReaction(client, agents, digest('root-activity:' + id), raw.event_id, activityReaction);
     db.prepare('UPDATE tasks SET activity_id=? WHERE id=?').run(reaction, id);
@@ -425,7 +427,7 @@ async function deliverSourceOutcome(task) {
       cause && `<strong>Cause</strong> · ${html(cause)}`, html(recovery), html(reference), task.proposal_event &&
         `<a href="${matrixLink(audit, task.proposal_event)}">Root Operations review</a>`].filter(Boolean).join('<br>'),
     'm.mentions': { user_ids: recipients },
-    ...(handoff?.turn && { [agentTurnKey]: handoff.turn }),
+    ...(handoff?.turn && { [agentTurnKey]: { ...handoff.turn, returning: true } }),
     ...(terminal && { [taskOutcomeKey]: terminal, [agentTurnKey]: { request: task.event, number: 1 } }),
     'm.relates_to': {
       rel_type: 'm.thread', event_id: task.source_thread, is_falling_back: true,
@@ -496,7 +498,7 @@ async function archive() {
   }
 }
 
-let planner, running;
+let planner, running, toolCheck;
 let nextArchive = 0;
 for (;;) {
   try {
@@ -561,6 +563,9 @@ for (;;) {
     }
     if (now >= nextArchive) {
       nextArchive = now + 5000;
+      toolCheck ??= catalog.refresh().then(() => checkTargetTools(catalog.current()?.agents.find(a => a.id === root),
+        db, payload => writeExecutionEvidence(payload, '/office-token')))
+        .catch(() => console.warn('Target tool verification will retry.')).finally(() => { toolCheck = undefined; });
       await archive().catch(() => console.warn('Root is retrying delivery to Context Intelligence.'));
       if (existsSync('/office-token')) await archiveOffice().catch(() => console.warn('VPS Manager will retry Office evidence delivery.'));
     }

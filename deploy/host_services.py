@@ -80,6 +80,20 @@ def remove_units(project):
         run('systemctl', 'daemon-reload')
 
 
+def remove_host_broker(settings):
+    name = settings['project'] + '-root'
+    for suffix, description in [('.socket', 'Private socket for approved Root operations'),
+                                ('.service', 'Execute operator-approved Root operations')]:
+        file = UNITS / (name + suffix)
+        if file.is_file() and not file.is_symlink() and 'Description=' + description in file.read_text().splitlines():
+            if suffix == '.socket':
+                run('systemctl', 'disable', '--now', name + suffix)
+            else:
+                run('systemctl', 'stop', name + suffix)
+            file.unlink()
+    run('systemctl', 'daemon-reload')
+
+
 def stage_roster_runtime(data):
     # Socket activation grants root. Use the version installed by the operator
     # even if the original checkout is later edited by an unprivileged user.

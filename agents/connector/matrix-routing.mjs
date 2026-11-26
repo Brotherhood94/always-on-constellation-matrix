@@ -1,6 +1,7 @@
 import { parseDocument } from 'htmlparser2';
 import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
 import { acceptedManaged, managedReply, replyLimit } from './managed-task.mjs';
+import { acceptsContact } from './agent-catalog.mjs';
 import { applyDispatch } from './capability-dispatch.mjs';
 
 export { mentionMessage, replyLimit };
@@ -11,7 +12,7 @@ export const directReplyKey = 'net.matrix_agents.direct_reply';
 export const taskOutcomeKey = 'net.matrix_agents.task_outcome';
 export const attachmentKey = 'net.matrix_agents.attachments';
 export const mediaTypes = new Set(['m.file', 'm.image', 'm.audio', 'm.video']);
-const replyControl = /(?:^|\n)(HANDOFF|HANDOFF_ROUTE|TASK_OUTCOME|ATTACH_FILES|CAPABILITY_GAP):[ \t]+([^\r\n]*)$/;
+const replyControl = /(?:^|\n)(HANDOFF|HANDOFF_ROUTE|TASK_OUTCOME|ATTACH_FILES|CAPABILITY_GAP|OFFICE_NEED):[ \t]+([^\r\n]*)$/;
 const directRequests = [
   /(?<!\bnon )\b(?:rispondimi\s+direttamente|rispondi\s+(?:a\s+me\s+|tu\s+)?direttamente(?!\s+(?:a\s+(?!me\b)|al\b|alla\b)))\b/iu,
   /(?<!\bdo not )(?<!\bdon['’]t )(?<!\bnever )\b(?:reply|respond|answer)\s+(?:(?:to\s+)?me\s+directly|directly(?!\s+to\s+(?!me\b)))\b/iu,
@@ -114,6 +115,7 @@ export function acceptedMessage(event, { roomId, owner, userId, agents, activate
     if (relation?.rel_type !== 'm.thread' || typeof turn?.request !== 'string' ||
         !turn.request.startsWith('$') || !Number.isInteger(turn.number) ||
         turn.number < 1 || turn.number >= replyLimit) return null;
+    if (!acceptsContact(routingPolicy, event, userId)) return null;
     request = turn.request;
     number = turn.number + 1;
   }
@@ -221,13 +223,15 @@ export function threadReply(event, reply, peers = [], requesterName, outcomeReci
     const message = outcomeReplyText(result.body, result.outcome, delivery.issues);
     return {
       ...mentionMessage(message.plain, result.outcome ? outcomeRecipients : result.target, message.rich),
-      [turnKey]: { request: event.request, number, ...(result.managed && { managed: result.managed }) },
+      [turnKey]: { request: event.request, number, ...(result.managed && { managed: result.managed }),
+        ...(result.target && (decision?.target?.id === result.target.id && decision.requirement
+          ? { handoff: decision.requirement } : result.target.id === event.managed.manager ? { returning: true } : {})) },
       ...(result.outcome && { [taskOutcomeKey]: result.outcome }),
       ...(delivery.ids?.length && { [attachmentKey]: delivery.ids }),
       'm.relates_to': threadRelation(event),
     };
   }
-  const peer = parts.target || (handoff && peers.find(candidate => candidate.name === handoff));
+  const peer = decision?.returnTo || parts.target || (handoff && peers.find(candidate => candidate.name === handoff));
   let outcome = event.replyTo || peer || handoff ? null : declared;
   if (!event.replyTo && peer && number === replyLimit) {
     outcome = {
@@ -246,7 +250,8 @@ export function threadReply(event, reply, peers = [], requesterName, outcomeReci
   const message = outcomeReplyText(body, outcome, delivery.issues);
   return {
     ...mentionMessage(message.plain, target, message.rich),
-    [turnKey]: { request: event.request ?? event.id, number },
+    [turnKey]: { request: event.request ?? event.id, number, ...(peer && decision?.requirement && { handoff: decision.requirement }),
+      ...(peer && decision?.returnTo && {returning:true}) },
     ...(event.replyTo && { [directReplyKey]: true }),
     ...(outcome && { [taskOutcomeKey]: outcome }),
     ...(delivery.ids?.length && { [attachmentKey]: delivery.ids }),

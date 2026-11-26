@@ -29,7 +29,7 @@ rows = {key: [[now - 90, 12], [now - 20, 23.4]] for key in ('CPU', 'RAM', 'Disk'
 for name, content in {
     'metrics': {'time': now, 'history': rows},
     'links': {'context': 'https://fixture.test:8444/browser/?connectURL=bolt%2Bs%3A%2F%2Ffixture.test%3A17687'},
-    'agents': {'time': now - 600, 'agents': [{'name': 'Fixture Analyst', 'status': 'Available', 'server': 'fixture.test', 'model': 'fixture-model'}]},
+    'agents': {'time': now - 600, 'agents': [{'key':'analyst', 'persona':{'purpose':'Study the evidence','duties':['Review sources'],'working_style':'Cite what can be verified.'}, 'contacts':['qa'],'tools':['Reader'], 'name': 'Fixture Analyst', 'status': 'Available', 'server': 'fixture.test', 'model': 'fixture-model'}]},
     'integrations': {'time': now, 'services': {'Context Intelligence': 'healthy'}},
 }.items():
     (root / (name + '.json')).write_text(json.dumps(content))
@@ -51,13 +51,17 @@ port=$(head -n 1 "$work/http.log")
 for width in 375 1280; do
   "$browser" --headless --no-sandbox --disable-gpu --disable-background-networking \
     --no-first-run --user-data-dir="$work/browser-$width" --window-size="$width,900" \
-    --virtual-time-budget=3500 --dump-dom "http://127.0.0.1:$port/" \
+    --virtual-time-budget=3500 --dump-dom "http://127.0.0.1:$port/#/agents/analyst" \
     >"$work/page-$width.html" 2>"$work/browser-$width.log"
   page="$work/page-$width.html"
   grep -q 'href="https://fixture.test:8444/browser/?connectURL=' "$page"
   grep -q 'CPU usage over' "$page"
   grep -q 'Fixture Analyst' "$page"
   grep -q 'Stale since' "$page"
+  grep -q 'Study the evidence' "$page"
+  grep -q 'Review sources' "$page"
+  grep -q 'Cite what can be verified.' "$page"
+  grep -q 'href="#/agents/analyst"' "$page"
   grep -q 'healthy' "$page"
 done
 printf '%s\n' 'Desktop and mobile dashboard rendered samples, roster state and the Context Intelligence link.'

@@ -4,9 +4,11 @@ Synapse owns room membership and Matrix delivery. PostgreSQL and Neo4j run on in
 
 Each Office agent has a persistent Matrix device and a dedicated Constellation Instance that runs Amplifier. Its connector opens a scoped TLS ACP channel, maps each thread to a session, and tracks accepted assignments and delivery in SQLite. Credentials and the agent’s private workspace are deployment data. General Office workers also share the desktop. VPS Manager prepares maintenance plans. A separate systemd broker executes the exact approved action with host privileges after the operator votes in Root Operations.
 
-The operator-managed registry drives provisioning and role capabilities. The dashboard’s read-only catalog is derived from registry entries and observed service state. Manager owns managed task completion. Chief of Staff observes Office and publishes findings to its operator DM.
+The operator-managed registry drives provisioning and role capabilities. The dashboard’s read-only catalog is derived from registry entries and observed service state. Task Manager owns coordinated tasks. Hiring Manager, Coach, and Scouter read Office evidence under distinct contributor identities. Each has a private operator chat. The host broker checks the actor and exact operation before changing the registry or Persona Workshop. The dashboard publishes a profile for every registered agent. [Starter team](team.md)
 
 Agents submit scoped execution metadata to one Context Intelligence service. Neo4j links each Office assignment to its handoffs, recipient acceptance, returns, and authoritative outcome. Each contributor writes under its own identity. VPS Manager writes sanitized outcome references in the Office graph and keeps the operation audit under a separate Root Operations grant. Telegram has its own grant.
+
+The three management agents can read bounded Office reports for handoffs, outcomes and target checks. Their contributor credentials are scoped to the Office workspace. Neo4j Browser remains the operator interface for exploring the wider graph.
 
 See [communication policies](../policy/README.md), [installation and recovery](runbook.md), and [acceptance checks](acceptance.md).
 

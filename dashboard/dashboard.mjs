@@ -65,6 +65,59 @@ function draw(canvas, samples, days, now) {
   context.stroke();
 }
 
+function profileLink(agent, title) {
+  const link = document.createElement('a');
+  link.href = '#/agents/' + encodeURIComponent(agent.key);
+  link.textContent = title;
+  link.setAttribute('aria-label', title === 'Persona and duties' ? title + ' for ' + agent.name : title);
+  return link;
+}
+
+function showPersona(agents) {
+  const view = document.getElementById('persona-view');
+  const key = /^#\/agents\/([a-z0-9_-]+)$/u.exec(location.hash)?.[1];
+  view.hidden = !key;
+  document.getElementById('overview').hidden = Boolean(key);
+  if (!key) return;
+  const back = document.createElement('a');
+  back.href = '#agents-heading';
+  back.textContent = '← Agent roster';
+  view.replaceChildren(back);
+  const write = (tag, value) => {
+    const node = document.createElement(tag);
+    node.textContent = value;
+    view.append(node);
+    return node;
+  };
+  const agent = agents.find(item => item.key === key);
+  if (!agent) { write('h2', 'Agent profile unavailable'); return; }
+  write('h2', agent.name);
+  write('p', agent.persona?.purpose || agent.limits || 'Profile awaiting registration.');
+  write('h3', 'Duties');
+  const duties = write('ul', '');
+  for (const value of agent.persona?.duties ?? agent.capabilities?.map(item => item.description) ?? []) {
+    const li = document.createElement('li');
+    li.textContent = value;
+    duties.append(li);
+  }
+  for (const [label, value] of [
+    ['Working style', agent.persona?.working_style], ['Limits', agent.limits],
+    ['Enabled tools', agent.tools?.join(', ') || 'None registered'],
+    ['Applied persona revision', agent.revision ?? 'Starter description'],
+  ]) { write('h3', label); write('p', value ?? 'Unavailable'); }
+  write('h3', 'Can contact');
+  const contacts = (agent.contacts ?? []).map(id => agents.find(item => item.key === id)).filter(Boolean);
+  if (!contacts.length) write('p', 'No registered contacts');
+  else {
+    const list = write('ul', '');
+    for (const contact of contacts) {
+      const li = document.createElement('li');
+      li.append(profileLink(contact, contact.name));
+      list.append(li);
+    }
+  }
+}
+
 function render(metrics, catalog, links, integrationStates) {
   const now = Date.now();
   const el = id => document.getElementById(id);
@@ -108,15 +161,19 @@ function render(metrics, catalog, links, integrationStates) {
     for (const value of [agent.name, agent.status, agent.server, [agent.model, agent.effort].filter(Boolean).join(' · ')]) {
       row.append(make('td', value || '—', ''));
     }
+    const profile = make('td', '', '');
+    if (agent.key) profile.append(profileLink(agent, 'Persona and duties'));
+    row.append(profile);
     el('agents').append(row);
   }
   if (!agents.length) {
     const row = document.createElement('tr');
     const cell = make('td', 'No agent inventory available', '');
-    cell.colSpan = 4;
+    cell.colSpan = 5;
     row.append(cell);
     el('agents').append(row);
   }
+  showPersona(agents);
   const entries = Object.entries(integrationStates?.services ?? {});
   el('integrations').replaceChildren();
   for (const [name, state] of [...entries, ['Last successful backup', metrics?.lastBackup ?? 'Unavailable']]) {
@@ -146,6 +203,7 @@ if (typeof document !== 'undefined') {
   }
 
   document.getElementById('range').addEventListener('change', () => render(...state));
+  window.addEventListener('hashchange', () => showPersona(state[1]?.agents ?? state[0]?.agents ?? []));
   void refresh();
   setInterval(refresh, 30_000);
 }

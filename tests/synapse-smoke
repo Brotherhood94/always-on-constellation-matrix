@@ -29,6 +29,7 @@ path.write_text(json.dumps(config))
 PY
 docker run -d --name "$name" --network "$name" --network-alias synapse -v "$name:/data" -v "$src/deploy:/deploy:ro" \
   -v "$src/integrations/telegram:/telegram:ro" \
+  -v "$src:/workspace:ro" \
   -v "$src/tests/layout_check.py:/test.py:ro" --entrypoint python "$image" \
   -m synapse.app.homeserver -c /data/homeserver.yaml >/dev/null
 for attempt in {1..30}; do
@@ -45,4 +46,13 @@ if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
     -v "$src/deploy/retire-worker.sql:/app/retire-worker.sql:ro" \
     -v "$src/deploy/matrix/bot:/app/ops:ro" -v "$src/tests/operations-fixture.mjs:/app/operations.mjs:ro" \
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/operations.mjs
+fi
+docker exec -u 0 -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
+  -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/workspace/deploy \
+  "$name" python -B /workspace/tests/team_migration_fixture.py
+if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 || ${MATRIX_TEAM_DESKS_SMOKE:-0} == 1 ]]; then
+  docker run --rm --network "$name" --network-alias context --user 0:0 --entrypoint node \
+    -v "$src/integrations/chief-of-staff:/app/chief-of-staff:ro" \
+    -v "$src/tests/team-desks-fixture.mjs:/app/team-desks-fixture.mjs:ro" \
+    "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/team-desks-fixture.mjs
 fi

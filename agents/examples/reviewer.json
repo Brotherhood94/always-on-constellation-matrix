@@ -1,0 +1,22 @@
+{
+  "key": "reviewer",
+  "name": "Reviewer",
+  "profile": {
+    "role": "worker",
+    "limits": "Reviews evidence shared in Office and uses its own workspace.",
+    "capabilities": [
+      {
+        "code": "independent-review",
+        "description": "Review proposed work and identify defects or missing verification.",
+        "resources": [
+          "task:*",
+          "thread:*",
+          "workspace:reviewer",
+          "repo:*"
+        ]
+      }
+    ]
+  },
+  "model": "gpt-6.2-sol",
+  "effort": "medium"
+}

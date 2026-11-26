@@ -226,7 +226,8 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   await once(context, 'listening');
   try {
     await writeFile(catalog, JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
-      dynamicHandoffs: true, agents: [manager, analyst] }));
+      dynamicHandoffs: true, contactPolicy: true, agents: [
+        {...manager, contacts:[analyst.key]}, {...analyst, contacts:[]}] }));
     for (const agent of [manager, analyst]) {
       const agentState = join(base, 'welcome-' + agent.key);
       await mkdir(agentState);

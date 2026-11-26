@@ -6,6 +6,7 @@ from shutil import rmtree
 from subprocess import SubprocessError
 from urllib.parse import parse_qsl, urlsplit
 
+from installer import available_profiles, starter_profiles
 from agent_picker import select_agents
 from installer import (CLIENT, CONNECTOR, PRESETS, RUNTIME_UID, SOURCE, agent_sign_in, directory,
                        encoded, load, open_existing, operator_lock, pending_local_agents,
@@ -82,7 +83,7 @@ def select_roster(data, path, passphrase, *, selection=CHOOSE_AGENTS, operator_t
         return
     selection = current.get('selection', selection)
     if selection is CHOOSE_AGENTS:
-        selection = select_agents(load(PRESETS))
+        selection = select_agents(starter_profiles())
     with operator_lock(data):
         current = progress(path)
         if not current.get('select_agents'):
@@ -159,8 +160,10 @@ def finish(data):
         office = [key for key in selected if office_agent(key, entries[key])]
         if 'welcome_attempt' in state:
             key = state['welcome_attempt']['agent']
-            if key not in selected or (key != 'chief-of-staff' and key not in office):
+            if key not in selected or (key not in {'chief-of-staff', 'hiring-manager'} and key not in office):
                 return {'waiting': 'Restore the selected welcome agent before retrying its delivery.'}
+        elif 'hiring-manager' in selected and entries['hiring-manager'].get('starter_role') == 'hiring-manager':
+            key = 'hiring-manager'
         elif 'chief-of-staff' in selected:
             key = 'chief-of-staff'
         elif office:
@@ -182,16 +185,17 @@ def finish(data):
             return {'waiting': 'Join Agents → Office in Element before sending the welcome.'}
 
         room = rooms['office']
-        if key == 'chief-of-staff':
-            room = (matrix_state(data, key) / 'room-id').read_text().strip()
+        if key == 'chief-of-staff' or entries[key].get('starter_role') == 'hiring-manager':
+            filename = 'control-room-id' if key == 'hiring-manager' else 'room-id'
+            room = (matrix_state(data, key) / filename).read_text().strip()
             if room == rooms['office']:
-                raise ValueError('The Chief of Staff welcome requires its private chat')
+                raise ValueError('The management welcome requires its private chat')
             audience = request('GET', room_route(room) + '/state', token=token)
             participants = {event['state_key']: event['content'].get('membership') for event in audience
                             if event['type'] == 'm.room.member' and event['content'].get('membership') in {'invite', 'join'}}
             rules = next((event['content'] for event in audience if event['type'] == 'm.room.join_rules'), {})
             if rules.get('join_rule') != 'invite' or participants != {agent: 'join', rooms['owner']: 'join'}:
-                raise ValueError('The Chief of Staff welcome requires the operator and Chief of Staff in their private chat')
+                raise ValueError(f"The management welcome requires the operator and {entries[key]['name']} in their private chat")
 
         pins = verified_pins(data, settings, rooms['alerts'])
         if not pins:

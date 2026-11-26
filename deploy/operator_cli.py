@@ -5,6 +5,7 @@ from subprocess import SubprocessError
 from types import SimpleNamespace
 import sys
 
+from installer import available_profiles, starter_profiles
 from agent_picker import select_agents
 from installer import (CLIENT, PRESETS, SOURCE, agent_activate, install, interactive, load, password,
                        pending_local_agents, prompt_graph_password, request, run, save, show_element_setup,
@@ -62,7 +63,7 @@ def install_as_operator(data, args):
         elevate(data, 'install', '--config', str(args.config.absolute()))
         return
     current = metadata(data, refresh_legacy=True) if (data / 'settings.json').is_file() else {}
-    settings, passphrase = interactive(load(PRESETS), current.get('settings', {}))
+    settings, passphrase = interactive(available_profiles(), current.get('settings', {}))
     graph = None if current.get('graph_password_configured') else prompt_graph_password()
     elevate(data, '_host', 'install', payload={'settings': settings, 'password': passphrase, 'graph_password': graph})
     if interactive_terminal():
@@ -110,7 +111,7 @@ def setup_as_operator(data, *, passphrase=None):
         if not confirmed or current['select_agents']:
             selection = current['selection']
             if current['select_agents'] and selection is None:
-                selection = select_agents(load(PRESETS))
+                selection = select_agents(starter_profiles())
             payload = {'selection': selection}
             if selection:
                 with matrix_session(current, passphrase if passphrase is not None else password(settings)) as token:
@@ -180,7 +181,7 @@ def execute_host(data, args):
             if not args.key:
                 raise ValueError('Specify the agent to configure')
             agent_activate(data, args.key, pending_only=args.pending_only)
-            if args.key == 'chief-of-staff':
+            if args.key in {'chief-of-staff', 'hiring-manager', 'coach', 'scouter'}:
                 enable_management(data, automatic=True)
         elif args.action == 'finish':
             enable_management(data, automatic=True)

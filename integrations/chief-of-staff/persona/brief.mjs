@@ -13,14 +13,7 @@ const fields = ['facts', 'proposal', 'why', 'verification'];
 
 async function collect(id) {
   const token = (await readFile('/reader-token', 'utf8')).trim();
-  const reply = await contextRequest('/cypher', token, {
-    workspace: 'agents-team',
-    query: [
-      'MATCH (e:ObservationRecordedEvent {workspace:$workspace, created_by:$author})',
-      'WHERE e.node_id STARTS WITH $prefix RETURN e.data AS data LIMIT 2',
-    ].join(' '),
-    params: { author: 'chief-of-staff', prefix: id + '__' },
-  });
+  const reply = await contextRequest('/office/review/legacy-observation', token, {prefix:id + '__'});
   if (reply.results.length !== 1) throw new Error('Select one archived Chief of Staff observation');
   const note = JSON.parse(reply.results[0].data).observation;
   if (note?.observation_id !== id || note.kind !== 'observation') throw new Error('Unexpected observation');

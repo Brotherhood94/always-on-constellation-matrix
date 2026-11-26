@@ -26,7 +26,7 @@ Each agent runs Amplifier’s own provider manager. It offers Anthropic for Clau
 
 Check the agent name at the top of each page. **Add a provider** creates an additional connection for that agent. Choose **Done** to verify that agent and move to the next one in batch setup. Each agent can use a different provider and model.
 
-After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Chief of Staff uses its private chat when selected. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the sign-in instructions and guide locations.
+After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Hiring Manager welcomes you in its private chat when selected. Legacy installations with Chief of Staff keep their existing welcome. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the sign-in instructions and guide locations.
 
 Pass an agent ID to `agent configure` to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow.
 
@@ -122,11 +122,11 @@ The registry has one active coordinator and observer when those roles are enable
 sudo ./constellation_matrix agent remove qa
 ```
 
-Confirm by typing the worker ID. Automation can pass `--yes`. The worker stops accepting assignments while it finishes accepted work. If the terminal reports that it is still draining, check the worker and run the same command to resume. Chief of Staff management also enables background retries.
+Confirm by typing the worker ID. Automation can pass `--yes`. The worker stops accepting assignments while it finishes accepted work. If the terminal reports that it is still draining, check the worker and run the same command to resume. The host management service retries pending retirements.
 
 Retirement removes the worker from Office, the dashboard, Docker Compose, and Persona Workshop. It revokes the Matrix account and Context Intelligence key. The worker’s private archive is under `archive/agents/qa` in the deployment data directory. Office history, Context Intelligence evidence, and the shared desktop remain available. Use a fresh ID when hiring a replacement, and remove the old ID from any install config that declares it.
 
-Retirement supports ordinary local Office workers. [Chief of Staff approval](chief-of-staff.md#hire-or-retire-an-office-worker)
+Hiring Manager can retire local specialists and other starter roles with operator approval. The operator can also retire Hiring Manager from the VPS. [Starter team and migration](team.md)
 
 ### Upgrade from Root to VPS Manager
 
@@ -167,19 +167,11 @@ scp "$handoff/desktop.pub" "$vps_login:.constellation-remote-worker/"
 
 ### 2. VPS · Authorize the key and export enrollment
 
-If you selected **Remote Worker** during setup, its profile is already registered. If you skipped it, run the following from the VPS checkout to register the built-in preset.
+From the VPS checkout, register the optional remote specialist. Existing deployments that already have this worker can proceed to key authorization.
 
 ```sh
 handoff="$HOME/.constellation-remote-worker"
-(umask 077; python3 - <<'PY' > "$handoff/profile.json"
-import json
-from pathlib import Path
-
-preset = json.loads(Path('deploy/matrix/agent-profiles.json').read_text())['remote-worker']
-print(json.dumps({**preset, 'key': 'remote-worker', 'placement': 'remote'}, indent=2))
-PY
-)
-sudo ./constellation_matrix agent add --profile "$handoff/profile.json"
+sudo ./constellation_matrix agent add --profile agents/examples/remote-worker.json
 ```
 
 Authorize the worker key and copy the desktop host public key printed by `remote desktop` for use in the next step. The enrollment file contains the worker’s scoped Matrix and Context Intelligence credentials. Keep it outside the checkout with mode `0600`.
@@ -258,7 +250,7 @@ sudo ./constellation_matrix remote confirm remote-worker --receipt "$handoff/rec
 sudo ./constellation_matrix status --refresh
 ```
 
-Check that **Remote Worker** appears as **Registered**. In Office, ask a local worker to write a test file under `desktop/`, then ask Manager to delegate reading and appending a line to **Remote Worker**. Have the local worker read the result back. After the next worker reboot, check the mount with `findmnt --mountpoint /mnt/constellation-desktop` and repeat the Office check. [Deployment scenarios](acceptance.md#post-deployment-scenarios)
+Check that **Remote Worker** appears as **Registered**. In Office, ask a local worker to write a test file under `desktop/`, then ask Task Manager to delegate reading and appending a line to **Remote Worker**. Have the local worker read the result back. After the next worker reboot, check the mount with `findmnt --mountpoint /mnt/constellation-desktop` and repeat the Office check. [Deployment scenarios](acceptance.md#post-deployment-scenarios)
 
 After confirmation, remove the transfer copies of `enrollment.json` and `workshop-token` from both handoff directories. Each service uses the credentials stored in its own data directory.
 

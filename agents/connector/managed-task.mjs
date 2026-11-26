@@ -114,6 +114,7 @@ export async function managedContext(task, names, readEvent) {
 
 export async function assignedHandoff(event, request, thread, recipient, names, activators, readEvent) {
   let { sender, content } = event;
+  const returning = content?.['net.matrix_agents.turn']?.returning === true && !content['net.matrix_agents.turn'].managed;
   const mentions = user => {
     const ids = content?.['m.mentions']?.user_ids;
     return Array.isArray(ids) && ids.length === 1 && ids[0] === user;
@@ -129,6 +130,8 @@ export async function assignedHandoff(event, request, thread, recipient, names, 
     next = sender;
     const parent = await readEvent(previous);
     if (!parent) return false;
+    if (returning && next === event.sender && number === event.content['net.matrix_agents.turn'].number &&
+        (parent.sender !== recipient || !parent.content?.['net.matrix_agents.turn']?.handoff)) return false;
     ({ sender, content } = parent);
     if (number === 1) {
       const initialThread = content?.['m.relates_to']?.event_id ?? previous;

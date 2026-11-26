@@ -65,6 +65,13 @@ from onboarding import select_roster
 
 data, work = map(Path, sys.argv[1:])
 assert load(data / 'agents.json')['agents'] == {}
+# Recreate the on-disk layout of a pre-starter installation before enrolling its first agents.
+registry = load(data / 'agents.json')
+registry.pop('team_version', None)
+save(data / 'agents.json', registry)
+old_workshop = data / 'state/chief-of-staff/persona'
+old_workshop.parent.mkdir(exist_ok=True)
+(data / 'persona-workshop').rename(old_workshop)
 path = data / 'onboarding.json'
 selection = ['manager', 'coder']
 confirmed = ['element']
@@ -215,6 +222,26 @@ assert 'fixture-worker' not in json.loads((data / 'context/config/server.json').
 assert (data / 'archive/agents/fixture-worker/workspace/fixture.md').read_text() == 'Worker workspace artifact\n'
 assert (data / 'desktop/shared.md').read_text() == 'Shared desktop artifact\n'
 print('Worker removed from Compose, Context Intelligence, Persona Workshop and the dashboard. The private archive and shared desktop survived.')
+PYTHON
+"$src/constellation_matrix" --data-dir "$data" agent migrate-team
+"$src/constellation_matrix" --data-dir "$data" agent migrate-team --apply --owner-password-file "$work/password"
+"$src/constellation_matrix" --data-dir "$data" agent migrate-team --apply --owner-password-file "$work/password"
+python3 - "$data" "$work" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
+data, work = map(Path, sys.argv[1:])
+load = lambda path: json.loads(path.read_text())
+roster = load(data / 'agents.json')
+targets = load(data / 'workshop-management/targets.json')
+assert roster['agents']['manager']['starter_role'] == 'task-manager'
+assert set(targets) == {'manager','vps-manager','coach','scouter','hiring-manager','coder'}
+assert targets['manager']['target'] == load(work / 'initial-targets.json')['manager']['target']
+private = {(data / 'state' / key / 'matrix/control-room-id').read_text() for key in ('hiring-manager','coach','scouter')}
+assert len(private) == 3
+assert load(data / 'team-migration.json')['phase'] == 'complete'
+assert load(data / 'rooms.json') == load(work / 'initial-rooms.json')
+print('Whole-stack starter-team migration reused the original coordinator and registered all replacement Workshop targets.')
 PYTHON
 if [[ ${VERIFY_RESTIC:-0} == 1 ]]; then
   "$src/constellation_matrix" --data-dir "$data" backup

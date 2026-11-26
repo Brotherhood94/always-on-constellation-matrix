@@ -2,7 +2,13 @@
   "server_name": "matrix.example",
   "owner": "operator",
   "owner_password_file": "/path/to/private/matrix-owner-password",
-  "agents": ["manager", "analyst", "coder", "reviewer"],
+  "agents": [
+    "task-manager",
+    "hiring-manager",
+    "coach",
+    "scouter",
+    "vps-manager"
+  ],
   "dot": false,
   "telegram": false,
   "tailscale": true

@@ -3399,6 +3399,43 @@ async def get_mapped_blob(
         raise HTTPException(status_code=404, detail=f"Blob not found: {uri}")
 
 
+_OFFICE_REVIEWS = {
+    "recent": ({"room"},
+        "MATCH (t:ExecutionTask {workspace:$workspace})-[:HAS_STEP]->(e:Event {workspace:$workspace}) "
+        "WHERE e.office_room=$room AND e.office_kind='reply' "
+        "RETURN e.data AS data,t.office_status AS status,e.occurred_at AS at ORDER BY e.occurred_at DESC LIMIT 300"),
+    "open": ({"room", "actor"},
+        "MATCH (t:ExecutionTask {workspace:$workspace,office_status:'in_progress'})-[:HAS_STEP]->(e:Event {workspace:$workspace}) "
+        "WHERE e.office_room=$room AND (e.office_actor=$actor OR e.office_to=$actor) RETURN DISTINCT t.office_request AS request LIMIT 20"),
+    "participation": ({"room", "event", "user"},
+        "MATCH (e:Event {workspace:$workspace,office_reply:$event,office_room:$room}) "
+        "WHERE e.office_actor=$user OR e.office_to=$user RETURN e.office_request AS request LIMIT 1"),
+    "tool-check": ({"actor", "prefix"},
+        "MATCH (e:OfficeToolCheckEvent {workspace:$workspace,created_by:$actor}) "
+        "WHERE e.node_id STARTS WITH $prefix RETURN e.data AS data LIMIT 1"),
+    "legacy-interactions": ({"since"},
+        "MATCH (e:AgentsInteractionEvent {workspace:$workspace,created_by:'chief-of-staff'}) "
+        "WHERE e.occurred_at>=datetime($since) RETURN e.data AS data ORDER BY e.occurred_at DESC,e.node_id DESC LIMIT 600"),
+    "legacy-observation": ({"prefix"},
+        "MATCH (e:ObservationRecordedEvent {workspace:$workspace,created_by:'chief-of-staff'}) "
+        "WHERE e.node_id STARTS WITH $prefix RETURN e.data AS data LIMIT 2"),
+}
+
+
+@app.post("/office/review/{report}", dependencies=[Depends(require_read)])
+async def office_review(report: str, body: dict[str, str], request: Request) -> Response:
+    """Return a bounded Office report to a contributor holding read access to that workspace."""
+    require_workspace_access(request, "agents-team", "data:read")
+    query = _OFFICE_REVIEWS.get(report)
+    if query is None or set(body) != query[0] or not all(0 < len(value) <= 512 for value in body.values()):
+        raise HTTPException(status_code=422, detail="Invalid Office report or parameters")
+    driver = request.app.state.neo4j_query_driver
+    async with driver.session(default_access_mode=READ_ACCESS) as session:
+        result = await session.run(query[1], {**body, "workspace":"agents-team"})
+        rows = [dict(row) async for row in result]
+    return Response(content=json.dumps({"results": rows}, default=str), media_type="application/json")
+
+
 @app.post("/cypher", dependencies=[Depends(require_read)])
 async def post_cypher(body: CypherRequest, request: Request) -> Response:
     """Proxy a Cypher query to Neo4j and return the results as JSON."""

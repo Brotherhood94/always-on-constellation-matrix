@@ -109,9 +109,18 @@ def synchronize(data, registry, *, telegram=False, reconnect=None):
         install = target['installation']
         public = {'key': key, 'name': entry['name'], 'target': target['target']['id'],
                   'revision': install['revision'], 'profile_active': bool(install.get('active')), 'available': True}
+        if install.get('active', {}) and install['active'].get('source'):
+            from team_workshop import active_claims
+            claims = active_claims(request, install)
+            style = ' '.join(c['statement'] for c in claims if c['collection'] == 'working')
+            if style:
+                public['working_style'] = ' '.join(style.split())[:1200]
         saved[key] = {'instance': target['target']['agent_id'], 'target': target['target']['id'], 'public': public}
         save(mappings, saved)
         roster.append(public)
+    for key in ('hiring-manager', 'coach', 'scouter'):
+        if key in entries:
+            save(data / 'state' / key / 'matrix/workshop.json', roster, uid=RUNTIME_UID)
     if 'chief-of-staff' in entries:
         save(data / 'state/chief-of-staff/observer/workshop.json', roster, uid=RUNTIME_UID)
     return {entry['key']: entry for entry in roster}

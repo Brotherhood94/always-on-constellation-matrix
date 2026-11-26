@@ -1,5 +1,8 @@
 # Chief of Staff
 
+This guide applies to installations that still use Chief of Staff. Fresh installations use Hiring Manager, Coach, and Scouter. [Starter team and opt-in migration](team.md)
+
+
 Persona Workshop manages agent profiles. Context Intelligence adds Office evidence such as who took a handoff, where tasks blocked, and whether a result was verified. The Chief of Staff uses both to propose improvements with links to the supporting threads.
 
 Select **Chief of Staff** during installation and activate it with `./constellation_matrix agent configure chief-of-staff`. Send `review team` in your encrypted one-to-one chat with Chief of Staff. A review can suggest a coordination change or propose a communication or working-style edit for a managed agent that took part in the cited work. Repeated capability gaps can lead to a hiring proposal. The operator decides which proposals to pursue.

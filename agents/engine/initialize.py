@@ -52,12 +52,15 @@ def configure():
     settings.mkdir(mode=0o700, exist_ok=True)
     initialize_settings(settings)
     tools = []
-    if os.environ.get('AGENT_WORKSPACE_TOOLS') == 'true':
+    workspace_tools = os.environ.get('AGENT_WORKSPACE_TOOLS') == 'true'
+    if workspace_tools or os.environ.get('MATRIX_CATALOG_PATH'):
+        name, script = ('workspace_files', 'workspace-mcp') if workspace_tools else ('approved_tools', 'scoped-mcp')
         tools.append({
             'module': 'tool-mcp', 'source': MODULES + '/amplifier_module_tool_mcp',
-            'config': {'servers': {'workspace_files': {
-                'command': 'node', 'args': ['/opt/workspace-tools/workspace-mcp.mjs'],
-                'env': {'MATRIX_WORKSPACE': '/workspace', 'AGENT_USERNAME': os.environ['AGENT_USERNAME']},
+            'config': {'servers': {name: {
+                'command': 'node', 'args': [f'/opt/workspace-tools/{script}.mjs'],
+                'env': {'MATRIX_WORKSPACE': '/workspace', 'AGENT_USERNAME': os.environ['AGENT_USERNAME'],
+                        **{key: os.environ[key] for key in ('MATRIX_CATALOG_PATH', 'MATRIX_SERVER_NAME', 'TEAM_ROLE') if key in os.environ}},
             }}},
         })
     bundle = BACKEND / 'office.yaml'

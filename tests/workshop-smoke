@@ -46,5 +46,22 @@ second = enroll(request, 'fixture', 'https://engine:19443', unexpected, first['t
 assert first == second
 assert len(request('GET', TARGETS)['items']) == 1
 assert second['installation']['active'] is None
+from team_workshop import active_claims, save_style, apply_style
+revision = save_style(request, 'Fixture Coach revision', 'Coordinate Office work.',
+                      'State the deliverable.', 'Return the evidence in the original thread.')
+target = first['target']['id']
+installed = apply_style(request, target, revision, second['installation']['revision'])
+assert installed['active'] and installed['revision'] > second['installation']['revision']
+assert installed['previous']
+baseline = installed['previous'][0]['id']
+claims = active_claims(request, installed)
+next_revision = save_style(request, 'Second coaching revision', 'Coordinate Office work.',
+    'Unused default.', 'Ask for one reproducible example.', claims)
+second_style = apply_style(request, target, next_revision, installed['revision'])
+assert [c['statement'] for c in active_claims(request, second_style) if c['collection'] == 'communication'] == ['State the deliverable.']
+restored = request('POST', TARGETS + '/' + target + '/restore', {'id':baseline, 'expected_revision':second_style['revision']})
+assert restored['installation']['revision'] > installed['revision']
+assert installed['active']['source']['revision'] == revision.split('/')[-1], installed['active']['source']
+print('Verified an actual working-style revision on the connected Instance.')
 print('The real Workshop enrolled a live Instance once and read its unchanged profile status.')
 PY

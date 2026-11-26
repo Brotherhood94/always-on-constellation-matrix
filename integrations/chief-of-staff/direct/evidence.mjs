@@ -79,14 +79,8 @@ export function writeInteraction(token, entry) {
 
 export async function readInteractions(token, room) {
   validateRoomId(room);
-  const result = await contextRequest('/cypher', token, {
-    workspace,
-    query: [
-      'MATCH (e:AgentsInteractionEvent {workspace: $workspace, created_by: $author})',
-      'WHERE e.occurred_at >= datetime($since)',
-      'RETURN e.data AS data ORDER BY e.occurred_at DESC, e.node_id DESC LIMIT 600',
-    ].join(' '),
-    params: { author: 'chief-of-staff', since: new Date(Date.now() - 7 * 86400_000).toISOString() },
+  const result = await contextRequest('/office/review/legacy-interactions', token, {
+    since: new Date(Date.now() - 7 * 86400_000).toISOString(),
   });
   return result.results.map(row => JSON.parse(row.data).evidence).filter(entry => validEntry(entry, room));
 }

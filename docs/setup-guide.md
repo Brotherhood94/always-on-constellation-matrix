@@ -25,17 +25,17 @@ The pins are published after you join the room and Element has registered your d
 
 ## 🤖 Select agents
 
-After confirming Element sign-in, use the arrow keys and Enter to select your roster. Choose **Done** to register the agents. Complete Amplifier sign-in for each selected local agent. If provider setup is interrupted, use `./constellation_matrix agent configure` to resume. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
+After confirming Element sign-in, use the arrow keys and Enter to review the five preselected starter agents and adjust your roster. Choose **Done** to register the agents. Complete Amplifier sign-in for each selected local agent. If provider setup is interrupted, use `./constellation_matrix agent configure` to resume. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
 
 ## 👋 Receive the welcome and send a task
 
-When all selected agents are ready, Chief of Staff sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery. The welcome links to the **Workspace shortcuts** pin in **VPS Alerts**.
+When all selected agents are ready, Hiring Manager sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery. The welcome links to the **Workspace shortcuts** pin in **VPS Alerts**.
 
-On a systemd VPS, Chief of Staff can propose hires and retirements as soon as setup finishes. Review each exact operation in its private chat. [Manage Office workers](chief-of-staff.md#hire-or-retire-an-office-worker)
+On a systemd VPS, Hiring Manager can propose hires and retirements as soon as setup finishes. Review each exact operation in its private chat. [Manage Office workers](team.md#first-interactions)
 
-When Manager is installed, start with Manager for coordinated Office tasks.
+When Task Manager is installed, start with Task Manager for coordinated Office tasks.
 
-- **Element.** In **Agents → Office**, select `@Manager` with the mention picker and send “@Manager, coordinate a three-step checklist for getting started in Office and post the result in this thread.”
-- **Dot.** If enabled, open a ChatGPT conversation with **Constellation Office** and ask “Dot, send this task to Office starting with Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.”
+- **Element.** In **Agents → Office**, select `@Task Manager` with the mention picker and send “@Task Manager, coordinate a three-step checklist for getting started in Office and post the result in this thread.”
+- **Dot.** If enabled, open a ChatGPT conversation with **Constellation Office** and ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.”
 
-Use the Office agent named in your welcome if you skipped Manager. If your roster has no Office agents, add one before submitting a task. [Add a worker](runbook.md#add-a-worker)
+Use the Office agent named in your welcome if you skipped Task Manager. If your roster has no Office agents, add one before submitting a task. [Add a worker](runbook.md#add-a-worker)

@@ -7,10 +7,11 @@ import { acceptedMessage, declaredOutcome, requestedAttachments, returnDelegated
   threadRelation, threadReply, turnKey } from './matrix-routing.mjs';
 import { createCatalog } from './agent-catalog.mjs';
 import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
-import { decideDispatch, dynamicTurn, gapNotice, guidanceFor, routingFor } from './capability-dispatch.mjs';
+import { decideDispatch, dynamicTurn, gapNotice, guidanceFor, needFromReply, routingFor } from './capability-dispatch.mjs';
 import { attachmentLimit, importAttachments, uploadAttachment } from './matrix-media.mjs';
-import { managedContext, managedGuidance } from './managed-task.mjs';
+import { assignedHandoff, managedContext, managedGuidance } from './managed-task.mjs';
 import { openRoomClient, readEncryptedRoomMessage, readOptional, redactReaction, sendEncrypted, sendReaction } from './matrix-session.mjs';
+import { checkTargetTools } from './team-tools.mjs';
 import { Store } from './store.mjs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
@@ -45,12 +46,17 @@ const backupLock = new DatabaseSync(join(AGENT_STATE, 'backup-lock.sqlite3'));
 backupLock.exec('PRAGMA busy_timeout=0');
 const activatedAt = store.activatedAt();
 let media;
+let desk;
 async function connect() {
   const client = await openRoomClient({ url: MATRIX_URL, state: AGENT_STATE, roomId, userId, deviceId, name: AGENT_NAME });
   const configuration = await client.doRequest('GET', '/_matrix/client/v1/media/config');
   const limit = attachmentLimit(configuration['m.upload.size']);
   media = { client, roomId, serverName: MATRIX_SERVER_NAME, workspace, limit };
   process.env.MATRIX_MEDIA_LIMIT = String(limit);
+  if (process.env.TEAM_ROLE) {
+    const { openDesk } = await import('./chief-of-staff/direct/team.mjs');
+    desk = await openDesk({client, db:store.db, catalog, office:roomId, owner:MATRIX_OWNER, actor:AGENT_USERNAME});
+  }
   client.on('room.message', (incomingRoom, event) => {
     const { names, policy } = routing();
     if (names[userId] !== AGENT_NAME) return;
@@ -191,7 +197,11 @@ async function deliver(client, event) {
   if (reply === null) {
     const delegatedToWorker = event.managed && event.managed.manager !== userId && !event.replyTo;
     const context = await managedContext(event, members, id => readEncryptedRoomMessage(client, roomId, id));
-    if (!context) {
+    const read = id => readEncryptedRoomMessage(client, roomId, id);
+    const raw = event.delegator && catalog.current()?.contactPolicy ? await read(event.id) : null;
+    const validChain = !event.delegator || !catalog.current()?.contactPolicy || (raw &&
+      await assignedHandoff(raw, event.request, event.thread, userId, members, routing().policy.activators, read));
+    if (!context || !validChain) {
       store.ignoreAssignment(event.id);
       console.warn('Ignored a Matrix handoff with an unverifiable Manager route.');
       return;
@@ -218,7 +228,10 @@ async function deliver(client, event) {
       const legacyHandoff = !event.replyTo && !event.managed && !dynamicTurn(catalog, event) &&
         `For a handoff use HANDOFF: followed by exactly one of these display names: ${peers.map(peer => peer.name).join(', ')}.`;
       const guidance = guidanceFor(catalog, event, userId, managed || legacyHandoff);
-      if (reply === null) reply = await runTurn({ workspace, event: { ...context, files: paths }, store, identity, guidance });
+      if (desk && !event.replyTo && reply === null && !raw?.content?.[turnKey]?.returning) desk.assignment(event);
+      const profile = catalog.current()?.agents.find(a => a.id === userId)?.persona;
+      const effectiveIdentity = profile ? [identity, profile.purpose, ...profile.duties, profile.working_style].join('\n') : identity;
+      if (reply === null) reply = await runTurn({ workspace, event: { ...context, files: paths }, store, identity:effectiveIdentity, guidance });
       if (!issues.length && AGENT_USERNAME === 'reviewer' && !event.replyTo && !event.managed && !dynamicTurn(catalog, event)) {
         const delegator = peers.find(peer => event.delegator ? peer.id === event.delegator : peer.name === 'Analyst');
         reply = returnDelegatedReview(event, reply, delegator);
@@ -252,7 +265,8 @@ async function deliver(client, event) {
     const target = !content[taskOutcomeKey] && !event.replyTo && content['m.mentions']?.user_ids
       ?.find(id => Object.hasOwn(members, id));
     const step = (delivery.issues.length || declaredOutcome(reply)?.status === 'blocked') ? 'blocked' : 'returned';
-    outgoing = { content, notice, target, step };
+    const need = needFromReply(reply, catalog.current()?.agents.find(a => a.id === userId), decision);
+    outgoing = { content, notice, target, step, need };
     store.saveOutgoing(event.id, outgoing);
   }
   const { content, notice } = outgoing;
@@ -262,7 +276,7 @@ async function deliver(client, event) {
   const sent = await sendEncrypted(client, roomId, txnId, content);
   if (notice) await sendEncrypted(client, roomId, reactionTransaction('capability-gap', event.id), notice);
   store.sent(event.id, sent, outcomeKey, process.env.CONTEXT_INTELLIGENCE_URL &&
-    executionEvidence({ roomId, actor: userId, event, sent, status, target: outgoing.target, step: outgoing.step,
+    executionEvidence({ roomId, actor: userId, event, sent, status, need:outgoing.need, target: outgoing.target, step: outgoing.step,
       evidence: content[taskOutcomeKey]?.evidence }));
   console.log('Encrypted agent reply delivered.');
 }
@@ -283,11 +297,15 @@ async function deliverBetweenBackups(client, event) {
 }
 
 let client;
+let toolCheck;
 let retry = 3000;
 while (true) {
   try {
     await catalog.refresh();
     client ??= await connect();
+    desk?.tick();
+    toolCheck ??= checkTargetTools(catalog.current()?.agents.find(agent => agent.id === userId), store.db, writeExecutionEvidence)
+      .catch(() => console.warn('Target tool verification will retry.')).finally(() => { toolCheck = undefined; });
     const event = store.next();
     if (event || store.nextReactionCleanup()) await deliverBetweenBackups(client, event);
     const pendingEvidence = store.nextEvidence();

@@ -15,6 +15,8 @@ from urllib.parse import quote
 from installer import RUNTIME_UID, directory, load, operator_lock, open_existing, provision_agent, read_password_file, request, save
 from layout import room_route
 from provision import MatrixError
+from agent_catalog import STARTER_ROLES
+from team_management import apply_tool, coach_change, tool_spec
 from roster import local_worker, reconcile_retirements, retire_locked
 
 WINDOW = 15 * 60_000
@@ -42,7 +44,10 @@ def validate(payload, key, now):
     if payload.get('choice') != digest(choice) or type(payload.get('decided')) is not int or payload['decided'] > now + 60_000:
         raise ValueError('The vote does not approve this proposal')
     operation = json.loads(proposal)
-    if not isinstance(operation, dict) or operation.get('kind') not in ('add', 'retire'):
+    actor = payload.get('actor', 'chief-of-staff')
+    allowed = {'chief-of-staff': {'add', 'retire'}, 'hiring-manager': {'add', 'retire'},
+               'scouter': {'tool'}, 'coach': {'coach', 'undo'}}
+    if not isinstance(operation, dict) or operation.get('kind') not in allowed.get(actor, set()):
         raise ValueError('Choose an add or retire operation')
     key = operation.get('agent')
     if operation['kind'] == 'add':
@@ -50,20 +55,29 @@ def validate(payload, key, now):
         if (set(operation) != {'kind', 'agent', 'profile'} or not isinstance(profile, dict) or
                 set(profile) != {'key', 'name', 'model', 'effort', 'profile'} or profile.get('key') != key or
                 not isinstance(profile.get('profile'), dict) or
-                set(profile['profile']) != {'role', 'limits', 'capabilities'} or
+                set(profile['profile']) not in ({'role', 'limits', 'capabilities'}, {'role', 'limits', 'capabilities', 'persona', 'contacts'}) or
                 not all(isinstance(profile[field], str) for field in ('name', 'model', 'effort'))):
             raise ValueError('A hire requires a standard local worker profile')
         local_worker(key, {**profile, 'placement': 'local'})
-    elif set(operation) != {'kind', 'agent'} or not isinstance(key, str):
+        if 'contacts' in profile['profile'] and profile['profile']['contacts'] != ['task-manager']:
+            raise ValueError('A new specialist starts through Task Manager')
+    elif not isinstance(key, str) or not re.fullmatch('[a-z0-9][a-z0-9_-]{0,35}', key):
+        raise ValueError('Invalid agent target')
+    elif operation['kind'] == 'tool':
+        if set(operation) != {'kind', 'agent', 'tool'}:
+            raise ValueError('Invalid tool assignment')
+        tool_spec(operation['tool'])
+    elif operation['kind'] == 'retire' and (set(operation) != {'kind', 'agent'} or key == actor):
         raise ValueError('Invalid retirement target')
     return identifier, operation
 
 
 def verify(data, settings, payload, now):
-    chief = f"@chief-of-staff:{settings['server_name']}"
+    actor = payload.get('actor', 'chief-of-staff')
+    chief = f"@{actor}:{settings['server_name']}"
     owner = f"@{settings['owner']}:{settings['server_name']}"
-    matrix = data / 'state/chief-of-staff/matrix'
-    room = (matrix / 'room-id').read_text().strip()
+    matrix = data / 'state' / actor / 'matrix'
+    room = (matrix / ('room-id' if actor == 'chief-of-staff' else 'control-room-id')).read_text().strip()
     token = read_password_file(matrix / 'matrix-token', 'Chief Matrix')
     route = room_route(room)
     state = request('GET', route + '/state', token=token)
@@ -73,7 +87,7 @@ def verify(data, settings, payload, now):
     if rules.get('join_rule') != 'invite' or members != {chief: 'join', owner: 'join'}:
         raise ValueError('Roster approval requires the private Chief of Staff DM')
     stamps = []
-    for field, sender in [('request', owner), ('proposal', chief), ('poll', chief), ('vote', owner)]:
+    for field, sender in [('request', chief if payload.get('initiated') == 'agent' and actor != 'chief-of-staff' else owner), ('proposal', chief), ('poll', chief), ('vote', owner)]:
         event = request('GET', route + '/event/' + quote(payload[field], safe=''), token=token)
         stamp = event.get('origin_server_ts')
         if (event.get('event_id') != payload[field] or event.get('room_id', room) != room or
@@ -91,13 +105,26 @@ def verify(data, settings, payload, now):
 def handle(data, payload, *, now=None):
     now = int(time.time() * 1000) if now is None else now
     root = data / 'roster'
-    secret = read_password_file(root / 'bridge-key', 'Roster bridge')
+    actor = payload.get('actor', 'chief-of-staff')
+    if actor not in {'chief-of-staff', 'hiring-manager', 'coach', 'scouter'}:
+        raise ValueError('Unknown management identity')
+    secret = read_password_file(root / ('bridge-key' if actor == 'chief-of-staff' else actor + '.key'), 'Role bridge')
+    if actor == 'coach' and payload.get('routine') is True:
+        if not isinstance(payload.get('key'), str) or not compare_digest(payload['key'].encode(), secret.encode()):
+            raise ValueError('Invalid Coach credential')
+        with operator_lock(data):
+            settings, registry = open_existing(data)
+            if not settings.get('roster_management') or not registry['agents'].get(actor, {}).get('active') or registry['agents'][actor].get('retirement'):
+                raise ValueError('Coach is unavailable')
+            operation = payload['operation']
+            status = coach_change(data, settings, registry, operation)
+            return {'status': status, 'change': registry['agents'][operation['agent']].get('last_coaching')}
     identifier, operation = validate(payload, secret, now)
     key = operation['agent']
     receipt = {field: payload[field] for field in ('request', 'proposal', 'poll', 'vote', 'decided', 'operation')}
     with operator_lock(data):
         settings, registry = open_existing(data)
-        if not settings.get('roster_management') or not registry['agents'].get('chief-of-staff', {}).get('active'):
+        if not settings.get('roster_management') or not registry['agents'].get(actor, {}).get('active') or registry['agents'][actor].get('retirement') or (actor == 'chief-of-staff' and 'hiring-manager' in registry['agents']):
             raise ValueError('Roster management is disabled')
         records = root / 'requests'
         directory(records)
@@ -111,17 +138,25 @@ def handle(data, payload, *, now=None):
         else:
             verify(data, settings, payload, now)
             if operation['kind'] == 'retire':
-                local_worker(key, registry['agents'].get(key))
-            elif key in registry['agents'] or key in registry.get('retired', {}):
+                if actor == 'hiring-manager' and registry.get('team_version') == 2 and key in (STARTER_ROLES | {'manager'}):
+                    if key == actor or key not in registry['agents']:
+                        raise ValueError('Only the operator can retire Hiring Manager')
+                else:
+                    local_worker(key, registry['agents'].get(key))
+            elif operation['kind'] == 'add' and (key in registry['agents'] or key in registry.get('retired', {})):
                 raise ValueError('Choose a new worker ID')
             save(path, {'status': 'pending', 'receipt': receipt})
         if operation['kind'] == 'add':
             token = read_password_file(root / 'inviter-token', 'Office invitation')
             provision_agent(data, settings, registry, operation['profile'], token)
             status = 'provisioned'
+        elif operation['kind'] == 'tool':
+            status = apply_tool(data, settings, registry, operation, identifier)
+        elif operation['kind'] in {'coach', 'undo'}:
+            status = coach_change(data, settings, registry, operation, approved=True)
         else:
             status = retire_locked(data, settings, registry, key)
-        save(path, {'status': 'pending' if status == 'draining' else status, 'receipt': receipt})
+        save(path, {'status': 'pending' if status in {'draining', 'checking'} else status, 'receipt': receipt})
         return {'status': status, 'agent': key}
 
 

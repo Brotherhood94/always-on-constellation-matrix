@@ -1,0 +1,21 @@
+{
+  "key": "remote-worker",
+  "name": "Remote Worker",
+  "model": "gpt-6.2-sol",
+  "effort": "medium",
+  "profile": {
+    "role": "worker",
+    "limits": "Works on an authorized remote host within its granted workspace.",
+    "capabilities": [
+      {
+        "code": "external-work",
+        "description": "Work with files or tasks assigned to the remote worker.",
+        "resources": [
+          "task:*",
+          "workspace:remote-worker"
+        ]
+      }
+    ]
+  },
+  "placement": "remote"
+}

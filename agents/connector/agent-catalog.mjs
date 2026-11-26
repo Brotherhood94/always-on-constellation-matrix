@@ -20,6 +20,22 @@ export function matchingAgents(snapshot, wanted, sender) {
       (scopePattern.test(scope) && wanted.resource.startsWith(scope.slice(0, -1))))));
 }
 
+export function canContact(snapshot, sender, target) {
+  return !snapshot.contactPolicy || Boolean(snapshot.agents.find(agent => agent.id === sender)?.contacts?.includes(target.key));
+}
+
+export function acceptsContact(policy, event, recipient) {
+  const snapshot = policy?.snapshot;
+  if (!snapshot?.contactPolicy) return true;
+  const target = snapshot.agents.find(agent => agent.id === recipient);
+  const turn = event.content?.['net.matrix_agents.turn'];
+  // The connector verifies the original assignment chain before accepting a return.
+  if (turn?.returning === true) return !turn.handoff && (!turn.managed || (turn.managed.version === 2 && turn.managed.manager === recipient));
+  const wanted = requirement(turn?.handoff);
+  return policy.fresh && target?.active !== false && dispatchable.has(target?.status) && canContact(snapshot, event.sender, target) &&
+    matchingAgents(snapshot, wanted, event.sender).some(agent => agent.id === recipient);
+}
+
 export function catalogMembers(snapshot, legacy) {
   if (!snapshot) return legacy;
   const members = Object.fromEntries(snapshot.agents.filter(agent => agent.role !== 'observer' && agent.active !== false).map(agent => [agent.id, agent.name]));
@@ -27,12 +43,14 @@ export function catalogMembers(snapshot, legacy) {
 }
 
 export function parseCatalog(text, server) {
-  if (text.length > 256000) throw new Error('Agent catalog exceeds its size limit');
+  if (text.length > 2_000_000) throw new Error('Agent catalog exceeds its size limit');
   const value = JSON.parse(text);
   const roles = new Set(['worker', 'coordinator', 'observer']);
   if (value?.version !== 1 || !Number.isSafeInteger(value.time) || typeof value.dynamicHandoffs !== 'boolean' ||
+      ('contactPolicy' in value && typeof value.contactPolicy !== 'boolean') ||
       !Array.isArray(value.agents) || value.agents.length > 128 ||
       !value.agents.every(agent => typeof agent.key === 'string' && agentKeyPattern.test(agent.key) &&
+        (!value.contactPolicy || Array.isArray(agent.contacts) && agent.contacts.every(key => typeof key === 'string' && agentKeyPattern.test(key))) &&
         agent.id === `@${agent.key}:${server}` && typeof agent.name === 'string' && roles.has(agent.role) &&
         typeof agent.limits === 'string' && typeof agent.status === 'string' && Array.isArray(agent.capabilities) &&
         agent.capabilities.every(skill => typeof skill.code === 'string' && agentKeyPattern.test(skill.code) &&
@@ -89,10 +107,11 @@ export function canDispatch(agent, joined) {
 
 export function delegationGuidance(catalog, sender) {
   if (!catalog.fresh()) return 'The agent catalog is unavailable. Do not guess a recipient or claim a capability is missing.';
-  const profiles = catalog.current().agents.filter(agent => agent.id !== sender && agent.role !== 'observer');
+  const profiles = catalog.current().agents.filter(agent => agent.id !== sender && agent.role !== 'observer' && canContact(catalog.current(), sender, agent));
   return 'Choose a colleague by the capability and resource scope below. Include the requested work, reason for the choice, and evidence needed. ' +
     'Use one final control line: HANDOFF: {"agent":"catalog-key","capability":"capability-code","resource":"type:resource"}. ' +
     'If no registered capability covers an essential next step, use CAPABILITY_GAP: {"capability":"missing-code","resource":"type:resource","reason":"what work this prevents"}. ' +
+    'If your own registered duty is blocked by missing tooling, expired credentials or a temporary outage, add OFFICE_NEED: {"kind":"tool|credentials|outage","capability":"your-code","topic":"public tool keywords"} before TASK_OUTCOME. ' +
     'Do not use CAPABILITY_GAP for a temporary outage, a request for permissions, or a missing prerequisite. Use no control line if you can answer or complete the task yourself.\n' +
     JSON.stringify(profiles.map(({ key, role, status, limits, capabilities }) => ({ key, role, status, limits, capabilities })));
 }
@@ -113,14 +132,15 @@ export function evaluateDelegation(catalog, sender, joined, controls) {
     if (typeof gap.reason !== 'string' || !gap.reason.trim() || gap.reason.length > 400) {
       return { blocker: 'A capability gap needs a concise explanation.' };
     }
-    const observer = snapshot.agents.find(agent => agent.role === 'observer');
+    const observer = snapshot.agents.find(agent => agent.roleId === 'hiring-manager' && agent.active !== false) ?? snapshot.agents.find(agent => agent.role === 'observer');
     return {
       blocker: `No registered agent covers ${wanted.capability} on ${wanted.resource}.`,
-      ...(observer && { gap: { ...wanted, reason: gap.reason.trim() }, observer }),
+      ...((observer || snapshot.contactPolicy) && { gap: { ...wanted, reason: gap.reason.trim() }, observer }),
     };
   }
   const target = matches.find(agent => agent.key === handoff.agent);
   if (!target) return { blocker: 'The selected agent does not cover the required capability and resource.' };
+  if (!canContact(snapshot, sender, target)) return { blocker: 'The selected agent is outside your permitted contacts.' };
   if (!canDispatch(target, joined)) return { blocker: 'The selected agent is unavailable or outside the Agents room.' };
-  return { target };
+  return snapshot.contactPolicy ? { target, requirement: wanted } : { target };
 }

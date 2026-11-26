@@ -9,7 +9,7 @@ import time
 import uuid
 from contextlib import closing
 from datetime import datetime, timezone
-from agent_catalog import document as agent_catalog_document, read as read_agent_registry
+from agent_catalog import REGISTRY, document as agent_catalog_document, read as read_agent_registry, workshop_profiles
 
 THRESHOLDS = {"CPU": (50, 45, 5), "RAM": (50, 45, 5), "Disk": (25, 22.5, 1)}
 RETENTION_SECONDS = 30 * 24 * 60 * 60
@@ -187,7 +187,8 @@ def export(db, outbox, acknowledgements, dashboard, timestamp, data):
     }
     replace_json(dashboard / "metrics.json", page, 0o644)
     try:
-        catalog = agent_catalog_document(read_agent_registry(), page["agents"], os.environ["MATRIX_SERVER_NAME"], timestamp)
+        catalog = agent_catalog_document(read_agent_registry(), page["agents"], os.environ["MATRIX_SERVER_NAME"],
+                                         timestamp, workshop_profiles(REGISTRY.parent))
         replace_json(dashboard / "agents.json", catalog, 0o644)
         replace_json(dashboard / "integrations.json", {"time": timestamp, "services": integration_status()}, 0o644)
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as error:

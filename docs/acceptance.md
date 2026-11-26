@@ -24,7 +24,7 @@ Use separate projects, ports, and data for VPS staging. Live acceptance requires
 
 ## Post-deployment scenarios
 
-Start with Manager, Coder, and Reviewer signed in. Use the Element mention picker for every `@Name` below. Give each run a unique ID such as `acceptance-01` and use synthetic files and test chats. Record the scenario number, result, and thread or receipt link. Mark scenarios for disabled integrations **Skipped**.
+Start with the five starter roles signed in. For the optional coding and file-review scenarios, register Coder and Reviewer from `agents/examples/`. On a fresh installation, “Manager” in those scenarios refers to Task Manager. Use the Element mention picker for every `@Name` below. Give each run a unique ID such as `acceptance-01` and use synthetic files and test chats. Record the scenario number, result, and thread or receipt link. Mark scenarios for disabled integrations **Skipped**.
 
 ### 1. Open the workspace
 
@@ -91,8 +91,20 @@ With no active task in your isolated deployment, run the checkpoint and restore 
 
 **Pass** when the encrypted checkpoint restores in isolation, the staging agent resumes with the same identity, the shared file is still readable, and each new request gets a single result.
 
+### 9. Exercise the starter team
+
+1. Open each roster entry under **Persona and duties**. Follow a contact link, return to the roster, and load the profile URL directly on a narrow screen. Include one user-defined specialist.
+2. Ask Task Manager to hand a tool-discovery assignment to Scouter. Match the handoff, returned evidence and final outcome to the same Office request in Context Intelligence.
+3. Give Hiring Manager two distinct examples of a duty nobody owns. Reject the first proposal and check the roster, then approve a new proposal and finish the new agent’s provider setup.
+4. Ask Coach about an evidenced failed handoff, inspect the revised working style and outbound contacts, and undo it in Coach’s DM. A change involving VPS Manager contacts must ask for a vote.
+5. Ask Scouter for a read-only tool for the new specialist. Check that a rejected grant never appears. Approve another proposal, verify it on the target, and check that another agent cannot use it.
+6. In an isolated legacy deployment, preview and apply the team migration. Confirm the coordinator’s original Matrix ID, retained specialist, private Chief history, and unchanged welcome receipt. Rerun and compare all room IDs.
+
+[Role workflows and examples](team.md)
+
 ## Refactor verification record
 
+- The five-role change passed an isolated Synapse migration rehearsal, including a blocked migration with open work, preservation of the original coordinator and Chief history, and rerun with the same private rooms. Separate devices sent and decrypted proposal-bound votes in all three management chats. The Workshop fixture applied two revisions to a real Instance, preserved its communication instructions, and restored the previous profile. The Neo4j fixture verified scoped Office evidence access and per-agent tool-check attribution. These checks use synthetic accounts and provider fixtures. [Matrix rehearsal](../tests/team_migration_fixture.py) · [Encrypted desk checks](../tests/team-desks-fixture.mjs) · [Workshop fixture](../tests/workshop-smoke) · [Graph fixture](../integrations/context-execution/tests/isolated)
 - Local isolated checks covered coordinator install and rerun, the graph browser proxy, encrypted Matrix pins and Dot task isolation, Constellation startup and ACP session restore, Root approvals, Telegram drafts and updates, and Context Intelligence timelines. The Restic checkpoint and restore ran on a native Linux fixture.
 - An isolated Linux fixture passed clean installation with Manager selected, rerun with the same Matrix room IDs, agent registration and retry with one stable Workshop target, dashboard and graph proxy access, live inventory, and encrypted checkpoint and restore. Provider sign-in remains an operator acceptance check.
 - The VPS staging checkout passed configuration validation and Python tests. The privileged VPS installation, operator sign-ins, private endpoint checks from Element, and live cutover are pending.

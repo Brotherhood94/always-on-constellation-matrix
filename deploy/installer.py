@@ -22,7 +22,7 @@ from agent_picker import choose_option, placement as agent_placement, prompt_tex
 from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
-from agent_catalog import KEY, profile
+from agent_catalog import KEY, PRIVATE_ROLES, profile
 from configure import write_config
 from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded
 from provision import MatrixError, request
@@ -45,6 +45,15 @@ PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474
 
 def load(path):
     return json.loads(path.read_text())
+
+
+def starter_profiles():
+    return load(SOURCE / 'deploy/matrix/starter-team.json')
+
+
+def available_profiles(registry=None):
+    # Keep saved identities and explicit legacy configurations usable on upgrade.
+    return {**load(PRESETS), **starter_profiles(), **(registry or {}).get('agents', {})}
 
 
 def save(path, value, mode=0o600, uid=None):
@@ -128,6 +137,9 @@ def normalized(raw, presets):
     chosen = settings.get('agents')
     if not isinstance(chosen, list) or len(chosen) != len(set(chosen)) or any(key not in presets for key in chosen):
         raise ValueError('Specify a list of distinct available agents')
+    weekly = settings.get('scout_weekly_utc', 'Mon 09:00')
+    if weekly != 'off' and (not isinstance(weekly, str) or not re.fullmatch(r'(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([01][0-9]|2[0-3]):[0-5][0-9]', weekly)):
+        raise ValueError('Use an English weekday and UTC time for scout_weekly_utc, or off')
     for key in ('tailscale', 'systemd', 'dot', 'telegram'):
         if type(settings[key]) is not bool:
             raise ValueError(f'{key} must be true or false')
@@ -190,14 +202,14 @@ def base_environment(settings, data):
 
 def context_config(settings, data, registry):
     if registry['agents'] or settings['telegram']:
-        directory(data / 'state/chief-of-staff/persona', uid=RUNTIME_UID)
+        directory(data / ('persona-workshop' if registry.get('team_version') == 2 else 'state/chief-of-staff/persona'), uid=RUNTIME_UID)
     directory(data / 'context')
     directory(data / 'context/data', uid=RUNTIME_UID)
     directory(data / 'context/graph', uid=7474)
     directory(data / 'context/config', mode=0o755)
     keys = {'observation-reader': ('agents-team', ['data:read'])}
     for key in registry['agents']:
-        keys[key] = ('agents-team', ['live:write'])
+        keys[key] = ('agents-team', ['live:write', 'data:read'] if key in PRIVATE_ROLES and registry['agents'][key].get('starter_role') == key else ['live:write'])
     if 'vps-manager' in registry['agents']:
         keys['vps-manager-ops'] = ('root-operations', ['live:write'])
     if settings['telegram']:
@@ -247,7 +259,7 @@ for digest, entry in config['api_keys'].items():
         store.put(digest, entry)
 """
     compose(data, 'run', '--rm', '--no-deps', '-T', '--entrypoint', '/app/.venv/bin/python',
-            'context', '-B', '-c', program, *([retire] if retire else []))
+            'context', '-B', '-c', program, *(([retire, 'vps-manager-ops'] if retire == 'vps-manager' else [retire]) if retire else []))
     up(data, 'context')
 
 
@@ -353,7 +365,7 @@ def register_entry(settings, registry, key, definition):
     if effort not in {'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}:
         raise ValueError('Invalid reasoning effort')
     placement = agent_placement(key, definition)
-    if placement not in {'local', 'remote'} or (key in {'chief-of-staff', 'vps-manager'} and placement != 'local'):
+    if placement not in {'local', 'remote'} or (key in (PRIVATE_ROLES | {'task-manager', 'chief-of-staff', 'vps-manager'}) and placement != 'local'):
         raise ValueError('Invalid agent placement')
     validated = profile(definition['profile'])
     if validated['role'] == 'observer' and key != 'chief-of-staff':
@@ -377,6 +389,8 @@ def register_entry(settings, registry, key, definition):
         raise ValueError('Agent display names must be unique and only one coordinator can be installed')
     desired = {'name': name, 'server': server, 'placement': placement, 'model': model,
                'effort': effort, 'profile': validated, 'active': False}
+    if registry.get('team_version') == 2 and key in starter_profiles():
+        desired['starter_role'] = key
     if subscription is not None:
         desired['subscription'] = subscription
     if previous:
@@ -395,12 +409,14 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     gateway_uid = ROOT_UID if key == 'vps-manager' else RUNTIME_UID
     directory(matrix_state, uid=gateway_uid)
     if key != 'dot':
-        for name in ('work', 'instance', 'exchange'):
+        for name in ('work', 'instance', 'exchange', 'tool-credentials'):
             directory(layout / name, uid=RUNTIME_UID)
     if key not in {'dot', 'vps-manager', 'chief-of-staff'}:
         directory(layout / 'work/desktop', uid=RUNTIME_UID)
     peer = f'@{key}:{server}'
     if key == 'vps-manager':
+        directory(layout / 'tool-credentials', mode=0o750, uid=RUNTIME_UID)
+        os.chown(layout / 'tool-credentials', RUNTIME_UID, ROOT_UID)
         directory(layout / 'gateway-credentials', mode=0o750)
         os.chown(layout / 'gateway-credentials', 0, ROOT_UID)
     credential = matrix_state / 'matrix-password'
@@ -424,6 +440,9 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
         label = 'Root Operations' if key == 'vps-manager' else entry['name']
         room = direct_room(server, rooms['space'], 'root' if key == 'vps-manager' else key, label, rooms['owner'], owner_token, peer, token)
     save(matrix_state / 'room-id', room + '\n', uid=gateway_uid)
+    if key in PRIVATE_ROLES and entry.get('starter_role') == key:
+        private = direct_room(server, rooms['space'], key, entry['name'], rooms['owner'], owner_token, peer, token)
+        save(matrix_state / 'control-room-id', private + '\n', uid=gateway_uid)
     if key == 'dot':
         private_secret(matrix_state / 'bridge-token', uid=RUNTIME_UID)
     if key == 'chief-of-staff':
@@ -495,7 +514,7 @@ def prepare_storage(settings, data):
 
 
 def publish_inventory(settings, data, registry):
-    from agent_catalog import document
+    from agent_catalog import document, workshop_profiles
     from operator_cli import publish_metadata
     observed = []
     result = compose(data, '--profile', 'agents', 'ps', '-a', '--format', 'json', stdout=subprocess.PIPE, text=True)
@@ -516,7 +535,7 @@ def publish_inventory(settings, data, registry):
             status = {'healthy': 'Available', 'starting': 'Starting', 'unhealthy': 'Unavailable'}.get(row.get('Health'), 'Running')
         observed.append({'name': entry['name'], 'server': entry['server'], 'status': status})
     now = int(time.time())
-    save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now), mode=0o644)
+    save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now, workshop_profiles(data)), mode=0o644)
     save(data / 'dashboard/integrations.json', {'time': now, 'services': integrations}, mode=0o644)
     publish_metadata(data, settings, registry)
 
@@ -655,7 +674,9 @@ def finalize_setup(data, *, print_only=False, passphrase=None):
 
 def install(data, args, *, entered=None):
     from setup_guide import interactive_terminal
-    presets = load(PRESETS)
+    registry_path = data / 'agents.json'
+    saved_registry = load(registry_path) if registry_path.exists() else {}
+    presets = available_profiles(saved_registry)
     previous = data / 'settings.json'
     registry_file = data / 'agents.json'
     if registry_file.exists() and 'root' in load(registry_file)['agents']:
@@ -699,7 +720,8 @@ def install(data, args, *, entered=None):
         prepare_storage(settings, data)
         registry_path = data / 'agents.json'
         registry = load(registry_path) if registry_path.exists() else {
-            'local_server': settings['server_name'], 'dynamic_handoffs': True, 'agents': {}}
+            'local_server': settings['server_name'], 'dynamic_handoffs': True, 'agents': {},
+            'team_version': 1 if set(settings['agents']).intersection({'chief-of-staff', 'manager'}) else 2}
         if any(entry.get('retirement') for entry in registry['agents'].values()):
             raise ValueError('Resume the pending agent removal before reinstalling')
         if current and current.get('roster_management'):
@@ -707,7 +729,8 @@ def install(data, args, *, entered=None):
         else:
             settings.pop('roster_management', None)
         for key in settings['agents']:
-            register_entry(settings, registry, key, presets[key])
+            if key not in registry['agents']:
+                register_entry(settings, registry, key, presets[key])
         settings.pop('owner_password_file', None)
         onboarding_path = data / 'onboarding.json'
         if not args.config and not current and not onboarding_path.exists():
@@ -750,7 +773,7 @@ def install(data, args, *, entered=None):
             if state.pop('select_agents', False):
                 state.pop('selection', None)
                 save(onboarding_path, state)
-    if registry['agents'].get('chief-of-staff', {}).get('active'):
+    if any(registry['agents'].get(k, {}).get('active') for k in PRIVATE_ROLES | {'chief-of-staff'}):
         from roster import enable_management
         enable_management(data, automatic=True)
     print('Workspace deployed.')
@@ -765,7 +788,7 @@ def install(data, args, *, entered=None):
 def provision_selected_agents(data, settings, registry, selection, passphrase, *, operator_token=None):
     from roster import prepare_management
 
-    presets = load(PRESETS)
+    presets = available_profiles(registry)
     roster = normalized({**settings, 'agents': selection}, presets)
     for key in selection:
         if key not in registry['agents']:
@@ -805,7 +828,7 @@ def provision_agent(data, settings, registry, candidate, inviter):
     compose_config(settings, data, registry)
     refresh_context(data)
     prepare_agent_state(data, key, registry['agents'][key], load(data / 'rooms.json'), inviter, settings)
-    if key == 'chief-of-staff':
+    if key in PRIVATE_ROLES | {'chief-of-staff'}:
         from roster import prepare_management
         prepare_management(data, settings, registry, inviter)
     if registry['agents'][key]['placement'] == 'local':
@@ -1062,6 +1085,10 @@ def main():
     management = agent.add_parser('management').add_subparsers(dest='management', required=True)
     enable = management.add_parser('enable', help='Enable approved roster changes in the Chief of Staff DM')
     enable.add_argument('--owner-password-file', type=Path)
+    team = agent.add_parser('migrate-team', help='Preview or apply the five-agent starter team')
+    team.add_argument('--apply', action='store_true')
+    team.add_argument('--retire', action='append', default=[], metavar='AGENT')
+    team.add_argument('--owner-password-file', type=Path)
     migrate = agent.add_parser('migrate-root', help='Replace legacy Root and preserve the Root Operations room')
     migrate.add_argument('--owner-password-file', type=Path)
     migrate.add_argument('--yes', action='store_true', help='Confirm retirement of the legacy Root account')
@@ -1109,7 +1136,7 @@ def main():
     host.add_argument('--pending-only', action='store_true')
     args = parser.parse_args()
     if args.command == 'validate':
-        normalized(load(args.config), load(PRESETS))
+        normalized(load(args.config), available_profiles())
         print('Deployment configuration is valid.')
         return
     data = args.data_dir.absolute()
@@ -1160,12 +1187,16 @@ def main():
         elif args.action == 'management':
             from roster import enable_management
             enable_management(data, args.owner_password_file)
+        elif args.action == 'migrate-team':
+            from team_migration import migrate
+            migrate(data, args)
+            return
         elif args.action == 'migrate-root':
             from vps_migration import migrate_root
             migrate_root(data, args.owner_password_file, args.yes)
         else:
             agent_sign_in(data, args.key)
-            if args.key in (None, 'chief-of-staff'):
+            if args.key in (None, 'chief-of-staff', *PRIVATE_ROLES):
                 from roster import enable_management
                 enable_management(data, automatic=True)
             selected = load(data / 'settings.json')['agents']

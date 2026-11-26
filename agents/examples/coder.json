@@ -1,0 +1,28 @@
+{
+  "key": "coder",
+  "name": "Coder",
+  "profile": {
+    "role": "worker",
+    "limits": "Writes to its own workspace. GitHub operations require the connected account and the operator's request. No repository deletion or host administration.",
+    "capabilities": [
+      {
+        "code": "implement-code",
+        "description": "Implement and test code changes.",
+        "resources": [
+          "task:*",
+          "workspace:coder",
+          "repo:*"
+        ]
+      },
+      {
+        "code": "github-operations",
+        "description": "Read and update repositories accessible to the connected GitHub account, including publishing changes and opening pull requests when requested.",
+        "resources": [
+          "repo:*"
+        ]
+      }
+    ]
+  },
+  "model": "gpt-6.2-sol",
+  "effort": "medium"
+}

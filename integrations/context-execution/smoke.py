@@ -104,8 +104,10 @@ def verify_office():
                 'RETURN t.office_request AS request,t.office_status AS status')
     wait_for(statuses, lambda rows: {(r['request'], r['status']) for r in rows} ==
              {('$first', 'verified'), ('$second', 'in_progress')})
-    office('execution', 'manager', 12, '$second', '$second', reply='$blocked', outcome='blocked')
-    assert office('execution', 'manager', 12, '$second', '$second', reply='$blocked', outcome='blocked')['status'] == 'duplicate'
+    office('execution', 'manager', 12, '$second', '$second', reply='$blocked', outcome='blocked',
+           need={'kind':'tool', 'topic':'GitHub CLI','capability':'coordination'})
+    assert office('execution', 'manager', 12, '$second', '$second', reply='$blocked', outcome='blocked',
+                  need={'kind':'tool','topic':'GitHub CLI','capability':'coordination'})['status'] == 'duplicate'
     wait_for(statuses, lambda rows: {(r['request'], r['status']) for r in rows} ==
              {('$first', 'verified'), ('$second', 'blocked')})
     handoffs = ('MATCH (:ExecutionTask {workspace:$workspace,office_request:"$first"})-[:HAS_HANDOFF]->(h:OfficeHandoff) '
@@ -122,12 +124,31 @@ def verify_office():
     wait_for('MATCH (e:Event {workspace:$workspace,event_name:"root:finished"}) RETURN e.vps_operation_id AS id',
              lambda rows: rows == office_receipt == [{'id': 'a' * 32}], 'root-operations')
     print('Office handoffs, recipient acceptance, VPS receipt and authoritative task outcomes verified.')
+    records = post('office/review/recent', {'room':'!office:fixture.test'}, 'fixture-desk-reader')['results']
+    observed = next(row for row in records if json.loads(row['data'])['evidence']['reply'] == '$blocked')
+    assert observed['status'] == 'blocked' and json.loads(observed['data'])['evidence']['need']['kind'] == 'tool'
+    change = 'b' * 64
+    session = 'tool-check-' + change
+    post('events', {'event':'office:tool_check','workspace':workspace,'idempotency_key':session,
+         'data':{'session_id':session,'timestamp':'2026-11-24T16:01:00Z','change':change,'status':'verified'}}, writers['analyst'])
+    check = ('MATCH (e:OfficeToolCheckEvent {workspace:$workspace,created_by:"analyst"}) '
+             'WHERE e.node_id STARTS WITH "' + session + '__" RETURN e.data AS data')
+    wait_for(check, lambda rows: bool(rows) and json.loads(rows[0]['data'])['status']=='verified')
+    assert post('office/review/tool-check',{'actor':'analyst','prefix':session+'__'},'fixture-desk-reader')['results']
+    for path, payload, token in [('cypher',{'workspace':workspace,'query':check},'fixture-desk-reader'),
+                                 ('office/review/recent',{'room':'!office:fixture.test'},writers['analyst'])]:
+        try:
+            post(path, payload, token)
+            raise AssertionError('Unexpected read permission')
+        except urllib.error.HTTPError as error:
+            assert error.code == 403
+    print('A scoped team desk read the reported blocker and attributed target verification to its authenticated sender.')
 
 
 if __name__ == '__main__':
     if sys.argv[1:] == ['config']:
         ids = {**{token: f'writer-{name}' if name in ('first', 'second') else name
-                  for name, token in writers.items()}, reader: 'reader'}
+                  for name, token in writers.items()}, reader: 'reader', 'fixture-desk-reader':'scouter'}
         print(json.dumps({'auth_mode': 'static', 'allow_unauthenticated': False,
                           'access_control_mode': 'scoped', 'neo4j_url': 'bolt://neo4j:7687',
                           'api_keys_store_path': '/data/identity/api-keys.json',
@@ -135,7 +156,8 @@ if __name__ == '__main__':
                                        for token, identity in ids.items()},
                           'contributor_grants': {identity: ({'all_workspaces': True, 'capabilities': ['data:read']}
                               if identity == 'reader' else {'workspaces': ['root-operations' if identity == 'vps-manager-ops'
-                                                                         else workspace], 'capabilities': ['live:write']})
+                                                                         else workspace], 'capabilities': ['data:read','live:write']
+                                                                         if identity == 'scouter' else ['live:write']})
                               for identity in ids.values()}}))
         raise SystemExit(0)
     asyncio.run(verify())

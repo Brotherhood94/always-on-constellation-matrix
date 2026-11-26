@@ -15,7 +15,8 @@ from layout import invite, join, room_route
 from provision import MatrixError
 
 INVITER = 'roster-inviter'
-PROTECTED = RESERVED | {'manager', 'chief-of-staff', 'root', 'vps-manager', 'remote-worker'}
+TEAM_MANAGERS = {'hiring-manager', 'coach', 'scouter'}
+PROTECTED = RESERVED | TEAM_MANAGERS | {'task-manager'} | {'manager', 'chief-of-staff', 'root', 'vps-manager', 'remote-worker'}
 
 
 def local_worker(key, entry):
@@ -24,7 +25,7 @@ def local_worker(key, entry):
         raise ValueError('Choose an ordinary local Office worker')
 
 
-def drain_queue(path):
+def drain_queue(path, *, team=False):
     if not path.is_file():
         return None
     # Install the fence in the same database transaction as the queue check.
@@ -34,7 +35,18 @@ def drain_queue(path):
     with closing(sqlite3.connect(f'{path.as_uri()}?mode=rw', uri=True, timeout=3)) as db:
         with db:
             db.execute('BEGIN IMMEDIATE')
-            db.execute((SOURCE / 'deploy/retire-worker.sql').read_text())
+            if team:
+                db.execute('''CREATE TRIGGER IF NOT EXISTS team_retirement BEFORE INSERT ON inbox
+                           WHEN NEW.number <= 1 OR NOT EXISTS (SELECT 1 FROM inbox WHERE request=NEW.request)
+                           BEGIN SELECT RAISE(IGNORE); END''')
+                waiting = db.execute('''SELECT 1 FROM inbox AS start WHERE start.id=start.request AND
+                    json_extract(start.outgoing,'$.target') IS NOT NULL AND NOT EXISTS
+                    (SELECT 1 FROM inbox AS final WHERE final.request=start.request AND
+                     json_extract(final.outgoing,'$.content."net.matrix_agents.task_outcome".status') IS NOT NULL) LIMIT 1''').fetchone()
+                if waiting:
+                    return True
+            else:
+                db.execute((SOURCE / 'deploy/retire-worker.sql').read_text())
             return db.execute('''
                 SELECT EXISTS(SELECT 1 FROM inbox WHERE sent IS NULL) OR
                        EXISTS(SELECT 1 FROM assignment_reactions JOIN inbox ON assignment=inbox.id
@@ -109,9 +121,32 @@ def archive_worker(data, key):
             part = database.with_name(database.name + suffix)
             if part.is_file() and not part.is_symlink():
                 part.rename(archive / part.name)
+    if key == 'vps-manager':
+        for relative in ('matrix/gateway.sqlite3', 'matrix/gateway.sqlite3-wal', 'matrix/gateway.sqlite3-shm', 'execution'):
+            source = state / relative
+            if source.exists():
+                source.rename(archive / source.name)
     if state.exists():
         rmtree(state)
     (data / 'context' / f'{key}.token').unlink(missing_ok=True)
+
+
+def desk_pending(path):
+    if not path.is_file():
+        return False
+    with closing(sqlite3.connect(f'{path.as_uri()}?mode=ro', uri=True)) as db:
+        tables = {name for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        return 'roster_requests' in tables and bool(db.execute('SELECT 1 FROM roster_requests WHERE done=0 LIMIT 1').fetchone())
+
+
+def drain_host(path):
+    if not path.is_file():
+        return None
+    with closing(sqlite3.connect(f'{path.as_uri()}?mode=rw', uri=True, timeout=3)) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute("CREATE TRIGGER IF NOT EXISTS team_retirement BEFORE INSERT ON tasks BEGIN SELECT RAISE(IGNORE); END")
+        return bool(db.execute('SELECT 1 FROM tasks WHERE outcome IS NULL OR notified=0 OR '
+                               '(source_thread IS NOT NULL AND source_notified=0) LIMIT 1').fetchone())
 
 
 def retire_locked(data, settings, registry, key):
@@ -123,13 +158,21 @@ def retire_locked(data, settings, registry, key):
         return 'retired'
     entries = registry['agents']
     entry = entries.get(key)
-    local_worker(key, entry)
+    starter = bool(entry and registry.get('team_version') == 2 and entry.get('starter_role'))
+    if not starter:
+        local_worker(key, entry)
     progress = entry.get('retirement')
     if not progress:
         progress = entry['retirement'] = 'draining'
         save(data / 'agents.json', registry)
     if progress == 'draining':
-        pending = drain_queue(data / 'state' / key / 'matrix/connector.sqlite3')
+        matrix = data / 'state' / key / 'matrix'
+        if key == 'vps-manager':
+            pending = drain_host(matrix / 'gateway.sqlite3')
+        elif registry.get('team_version') == 2:
+            pending = desk_pending(matrix / 'connector.sqlite3') or drain_queue(matrix / 'connector.sqlite3', team=True)
+        else:
+            pending = drain_queue(matrix / 'connector.sqlite3')
         publish_inventory(settings, data, registry)
         another_stopping = any(other != key and saved.get('retirement') in {'stopped', 'revoked'}
                                for other, saved in entries.items())
@@ -137,6 +180,9 @@ def retire_locked(data, settings, registry, key):
             return 'draining'
         compose(data, '--profile', 'agents', 'stop', key, 'engine-' + key)
         compose(data, '--profile', 'agents', 'rm', '-f', key, 'engine-' + key)
+        if key == 'vps-manager' and settings['systemd']:
+            from host_services import remove_host_broker
+            remove_host_broker(settings)
         progress = entry['retirement'] = 'stopped'
         save(data / 'agents.json', registry)
     if progress == 'stopped':
@@ -161,6 +207,10 @@ def retire_locked(data, settings, registry, key):
                                       f'label=com.docker.compose.network={network}').split()
             if networks:
                 run('docker', 'network', 'rm', *networks)
+    if key in TEAM_MANAGERS:
+        (data / 'roster' / (key + '.key')).unlink(missing_ok=True)
+    if key == 'vps-manager':
+        (data / 'context/vps-manager-ops.token').unlink(missing_ok=True)
     archive_worker(data, key)
     registry.setdefault('retired', {})[key] = {'name': entry['name'], 'at': datetime.now(timezone.utc).isoformat()}
     save(data / 'settings.json', settings)
@@ -233,8 +283,8 @@ def prepare_invitation(data, settings, operator):
 
 
 def prepare_management(data, settings, registry, operator):
-    if (settings['systemd'] and not settings.get('roster_management')
-            and 'chief-of-staff' in registry['agents'] and not invitation_ready(data)):
+    if (settings['systemd']
+            and {'hiring-manager', 'chief-of-staff'}.intersection(registry['agents']) and not invitation_ready(data)):
         prepare_invitation(data, settings, operator)
 
 
@@ -244,28 +294,36 @@ def enable_management(data, password_file=None, *, automatic=False):
     with operator_lock(data):
         settings = load(data / 'settings.json')
         registry = load(data / 'agents.json')
-        if automatic and settings.get('roster_management'):
+        authorities = [key for key in ('chief-of-staff', 'hiring-manager', 'coach', 'scouter')
+                       if registry['agents'].get(key, {}).get('active') and not registry['agents'][key].get('retirement')
+                       and (key == 'chief-of-staff' or registry['agents'][key].get('starter_role') == key)]
+        if 'hiring-manager' in registry['agents'] and 'chief-of-staff' in authorities:
+            authorities.remove('chief-of-staff')
+        if automatic and settings.get('roster_management') and all(
+                (data / 'roster' / (key + '.key')).exists() for key in authorities if key != 'chief-of-staff'):
             return
-        if not settings['systemd'] or not registry['agents'].get('chief-of-staff', {}).get('active'):
+        if not settings['systemd'] or not authorities:
             if automatic:
                 return
             raise ValueError('Enable systemd and activate Chief of Staff before enabling roster management')
         settings, registry = open_existing(data)
         auth = data / 'roster'
-        if not automatic or not invitation_ready(data):
+        directory(auth)
+        if {'hiring-manager', 'chief-of-staff'}.intersection(authorities) and (not automatic or not invitation_ready(data)):
             operator = login(settings['owner'], password(settings, password_file))['access_token']
             try:
                 prepare_invitation(data, settings, operator)
             finally:
                 request('POST', CLIENT + '/logout', {}, operator)
-        private_secret(auth / 'bridge-key', uid=RUNTIME_UID)
+        for key in authorities:
+            private_secret(auth / ('bridge-key' if key == 'chief-of-staff' else key + '.key'), uid=RUNTIME_UID)
         roster_units(settings, data)
         settings['roster_management'] = True
         compose_config(settings, data, registry)
-        up(data, 'chief-of-staff')
+        up(data, *authorities)
         save(data / 'settings.json', settings)
         publish_inventory(settings, data, registry)
-    print('Roster management is ready in the Chief of Staff DM.')
+    print('Team management is ready in Element.')
 
 
 def reconcile_retirements(data):

@@ -54,7 +54,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                                     'SYSTEMD_ENABLED': str(settings['systemd']).lower()},
                     'volumes': [volume(data / 'bot', '/state'), volume(data / 'monitor/outbox', '/monitor/outbox', True),
                                 volume(data / 'monitor/acks', '/monitor/acks'), volume(dashboard, '/dashboard', True)]},
-        'context': {**restricted, 'image': 'constellation-context:6.13.0-1622b48-office',
+        'context': {**restricted, 'image': 'constellation-context:6.13.0-1622b48-team1',
                     'build': {'context': str(SOURCE), 'dockerfile': 'deploy/context.Dockerfile'},
                     'networks': ['memory'], 'depends_on': {'neo4j': {'condition': 'service_healthy'}},
                     'environment': {'AMPLIFIER_CONTEXT_INTELLIGENCE_SERVER_CONFIG_FILE': '/etc/context/server.json'},
@@ -128,7 +128,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                 volume(data / 'context' / f'{key}.token', '/writer-token', True),
                 volume(data / 'context/observation-reader.token', '/reader-token', True),
             ]
-            if settings.get('roster_management'):
+            if settings.get('roster_management') and 'hiring-manager' not in registry['agents']:
                 socket = volume(f"/run/{settings['project']}-roster.sock", '/run/office-roster.sock', True)
                 socket['bind'] = {'create_host_path': False}
                 worker['volumes'] += [socket, volume(data / 'roster/bridge-key', '/roster-key', True)]
@@ -154,6 +154,25 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
         else:
             worker.update(healthcheck=health('test', '-s', '/tmp/matrix-agent-ready'))
             worker['volumes'] += workspace
+        if key in {'coach', 'hiring-manager', 'scouter'} and entry.get('starter_role') == key:
+            worker['environment']['TEAM_ROLE'] = key
+            worker['environment']['SCOUT_WEEKLY_UTC'] = settings.get('scout_weekly_utc', 'Mon 09:00')
+            worker['environment']['ROSTER_CONFIGURE_COMMAND'] = './constellation_matrix --data-dir ' + quote(str(data)) + ' agent configure'
+            worker['volumes'].append(volume(SOURCE / 'integrations/chief-of-staff', '/app/chief-of-staff', True))
+            credential = data / 'roster' / (key + '.key')
+            if settings.get('roster_management') and credential.is_file():
+                socket = volume(f"/run/{settings['project']}-roster.sock", '/run/office-roster.sock', True)
+                socket['bind'] = {'create_host_path': False}
+                worker['volumes'] += [socket, volume(credential, '/roster-key', True)]
+                worker['environment']['ROSTER_MANAGEMENT'] = 'true'
+        if key == 'scouter' and entry.get('starter_role') == key:
+            worker['networks'].append('provider')
+            services[instance]['environment']['TEAM_ROLE'] = 'scouter'
+        if registry.get('team_version') == 2:
+            grant_mount = volume(directory / 'tool-credentials', '/tool-credentials', True)
+            services[instance]['environment'].update(catalog, MATRIX_SERVER_NAME=server)
+            services[instance]['volumes'] += [volume(dashboard, '/catalog', True), grant_mount]
+            worker['volumes'].append(grant_mount)
         services[key] = worker
     if registry['agents'] or settings['telegram']:
         network['workshop-targets'] = {'internal': workshop_internal}
@@ -166,7 +185,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
             **restricted, 'image': 'constellation-persona-workshop:0.7.4',
             'build': str(SOURCE / 'integrations/chief-of-staff/persona'),
             'networks': workshop_networks,
-            'profiles': ['agents'], 'volumes': [volume(data / 'state/chief-of-staff/persona', '/data')],
+            'profiles': ['agents'], 'volumes': [volume(data / ('persona-workshop' if registry.get('team_version') == 2 else 'state/chief-of-staff/persona'), '/data')],
             'healthcheck': health('persona-workshop', '--home', '/data', 'api', 'GET', '/api/v1/status'),
         }
     return {'name': settings['project'], 'services': services, 'networks': network,

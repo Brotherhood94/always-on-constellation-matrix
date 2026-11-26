@@ -45,7 +45,7 @@ function reviewable(value, cap) {
     !/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/u.test(value);
 }
 
-export function workerProfile(key, answer) {
+export function workerProfile(key, answer, withPersona = false) {
   const text = answer.trim();
   const draft = JSON.parse(/^\x60\x60\x60(?:json)?\s*([\s\S]*?)\s*\x60\x60\x60$/u.exec(text)?.[1] ?? text);
   if (!validKey.test(key) || !reviewable(draft?.name, 64) || typeof draft?.model !== 'string' ||
@@ -58,22 +58,19 @@ export function workerProfile(key, answer) {
         skill.resources.every(resource => /^task:(?:\*|[A-Za-z0-9][A-Za-z0-9._/-]{0,119})$/u.test(resource)))) {
     throw new Error('The draft is not a valid Office worker profile');
   }
+  const persona = withPersona ? {purpose: draft.capabilities[0].description, duties: draft.capabilities.map(c => c.description),
+    working_style: reviewable(draft.working_style, 500) ? draft.working_style : draft.limits} : null;
   return { key, name: draft.name, model: draft.model, effort: draft.effort, profile: {
-    role: 'worker', limits: draft.limits,
+    role: 'worker', limits: draft.limits, ...(persona && {persona, contacts:['task-manager']}),
     capabilities: draft.capabilities.map(({ code, description, resources }) => ({ code, description, resources })),
   } };
 }
 
-async function draftWorker(key, brief) {
+export async function draftWorker(key, brief) {
   let evidence = { brief };
-  if (gapId.test(brief)) {
+  if (gapId.test(brief) && process.env.TEAM_ROLE !== 'hiring-manager') {
     const token = (await readFile('/reader-token', 'utf8')).trim();
-    const result = await contextRequest('/cypher', token, {
-      workspace: 'agents-team',
-      query: 'MATCH (e:ObservationRecordedEvent {workspace:$workspace, created_by:$author}) ' +
-        'WHERE e.node_id STARTS WITH $prefix RETURN e.data AS data LIMIT 2',
-      params: { author: 'chief-of-staff', prefix: brief + '__' },
-    });
+    const result = await contextRequest('/office/review/legacy-observation', token, {prefix:brief + '__'});
     const observation = result.results.length === 1 ? JSON.parse(result.results[0].data).observation : null;
     if (observation?.observation_id !== brief || observation.proposal_type !== 'new') {
       throw new Error('Choose an archived hiring observation');
@@ -81,7 +78,7 @@ async function draftWorker(key, brief) {
     evidence = { ...Object.fromEntries(['facts', 'proposal', 'why', 'verification']
       .map(field => [field, String(observation[field] ?? '').slice(0, 1200)])), observation: brief };
   }
-  const workshop = JSON.parse(await readFile('/direct/workshop.json', 'utf8'));
+  const workshop = JSON.parse(await readFile(process.env.TEAM_ROLE ? '/state/workshop.json' : '/direct/workshop.json', 'utf8'));
   const managed = workshop.map(({ key, name, profile_active }) => ({ key, name, profile_active }));
   const prompt = [
     'Draft a small new local Office worker profile as a proposal for the operator to review.',
@@ -93,10 +90,10 @@ async function draftWorker(key, brief) {
   ].join('\n');
   const answer = await runTurn({ url: process.env.INSTANCE_ACP_URL, workspace: '/workspace', revision: '0.22.17',
     token: '/acp/credential-token', ca: '/acp/ca.pem', turnTimeoutMs: 160000 }, null, prompt, () => {});
-  return workerProfile(key, answer);
+  return workerProfile(key, answer, process.env.TEAM_ROLE === 'hiring-manager');
 }
 
-async function submit(payload) {
+export async function submit(payload) {
   const key = (await readFile('/roster-key', 'utf8')).trim();
   return new Promise((resolve, reject) => {
     const socket = createConnection('/run/office-roster.sock');
@@ -120,7 +117,7 @@ async function submit(payload) {
 }
 
 export function createRosterApproval({ db, client, room, owner, checkDestination, currentAgents,
-  draft = draftWorker, apply = submit, configureCommand = 'sudo ./constellation_matrix agent configure', now = Date.now }) {
+  actor = 'chief-of-staff', describeRetirement, draft = draftWorker, apply = submit, configureCommand = 'sudo ./constellation_matrix agent configure', now = Date.now }) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS roster_requests (
       request TEXT PRIMARY KEY, operation TEXT NOT NULL, proposal TEXT, proposed INTEGER, poll TEXT UNIQUE,
@@ -128,6 +125,12 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       announced TEXT, next INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0
     )
   `);
+  const columns = db.prepare('PRAGMA table_info(roster_requests)').all().map(row => row.name);
+  if (!columns.includes('initiated')) db.exec("ALTER TABLE roster_requests ADD COLUMN initiated TEXT DEFAULT 'operator'");
+  if (!columns.includes('summary')) db.exec("ALTER TABLE roster_requests ADD COLUMN summary TEXT DEFAULT ''");
+  const enqueue = (request, operation, summary = '', initiated = 'operator') =>
+    db.prepare('INSERT OR IGNORE INTO roster_requests (request,operation,summary,initiated) VALUES (?,?,?,?)')
+      .run(request, JSON.stringify(operation), summary, initiated);
   const update = (statement, ...params) => db.prepare(statement).run(...params);
   const id = row => digest(row.request);
   const say = (row, step, text) => sendEncrypted(client, room, 'roster-' + step + '-' + id(row), mentionMessage(text));
@@ -142,23 +145,26 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
     if (raw.sender !== owner || raw.type !== 'm.room.encrypted' || (raw.room_id && raw.room_id !== room) ||
         raw.unsigned?.redacted_because) return null;
     const request = command(event);
-    if (request) {
+    if (request && ['chief-of-staff', 'hiring-manager'].includes(actor)) {
       if (db.prepare('SELECT 1 FROM roster_requests WHERE request=?').get(raw.event_id)) return '';
       const roster = currentAgents();
       if (!roster) return 'The worker roster is unavailable. Try the command again when it is current.';
       const target = roster.find(agent => agent.key === request.key);
-      if (protectedKeys.has(request.key) || (request.kind === 'retire' && (!target ||
-          target.role !== 'worker' || target.placement !== 'local'))) return 'Choose an ordinary local Office worker.';
+      const starter = ['task-manager','hiring-manager','coach','scouter','vps-manager','manager'].includes(request.key);
+      const starterRetirement = actor === 'hiring-manager' && request.kind === 'retire' && starter && request.key !== actor && target;
+      if (!starterRetirement && (protectedKeys.has(request.key) || starter || (request.kind === 'retire' && (!target ||
+          target.role !== 'worker' || target.placement !== 'local')))) return 'Choose an ordinary local Office worker.';
       if (request.kind === 'add' && target) return 'That worker ID is already registered. Choose a fresh ID.';
       let operation = { kind: request.kind, agent: request.key };
       if (request.kind === 'add') {
         try {
           operation = { ...operation, profile: await draft(request.key, request.brief) };
         } catch {
-          return 'Chief of Staff could not prepare a hire profile. Try again with a short brief or an archived hiring observation ID.';
+          return 'The hire profile could not be prepared. Try again with a short description of the new agent’s duties.';
         }
       }
-      update('INSERT OR IGNORE INTO roster_requests (request,operation) VALUES (?,?)', raw.event_id, JSON.stringify(operation));
+      const summary = request.kind === 'retire' && describeRetirement ? await describeRetirement(target) : '';
+      enqueue(raw.event_id, operation, summary);
       return '';
     }
     if (![pollResponse, 'm.poll.response'].includes(event.type)) return null;
@@ -183,12 +189,12 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
     update('UPDATE roster_requests SET next=? WHERE request=?', now() + 30_000, row.request);
     await checkDestination();
     const operation = JSON.parse(row.operation);
-    const action = operation.kind === 'add' ? 'Hire' : 'Retire';
+    const action = {add:'Hire', retire:'Retire', tool:'Enable tool for', coach:'Change protected contacts for', undo:'Restore contacts for'}[operation.kind];
     const target = action + ' ' + operation.agent;
     if (!row.proposal) {
       const content = operation.kind === 'add' ? JSON.stringify(operation.profile, null, 2) :
-        'Finish accepted assignments, then revoke access and archive this local worker.';
-      row.proposal = await say(row, 'proposal', target + '\n\n' + content);
+        operation.kind === 'retire' ? 'Finish accepted assignments, revoke access and archive the agent.' : JSON.stringify(operation, null, 2);
+      row.proposal = await say(row, 'proposal', [target, row.summary, content].filter(Boolean).join('\n\n'));
       row.proposed = (await client.getRawEvent(room, row.proposal)).origin_server_ts;
       update('UPDATE roster_requests SET proposal=?, proposed=? WHERE request=?', row.proposal, row.proposed, row.request);
     }
@@ -215,7 +221,7 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
     let status = row.action === 'reject' ? 'declined' : 'expired';
     if (row.action === 'approve') {
       const result = await apply({ request: row.request, proposal: row.proposal, poll: row.poll, vote: row.vote,
-        decided: row.decided, choice: row.choice, operation: row.operation });
+        decided: row.decided, choice: row.choice, operation: row.operation, ...(actor !== 'chief-of-staff' && {actor, initiated:row.initiated}) });
       status = result.status;
     }
     const notifications = {
@@ -224,13 +230,18 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       provisioned: 'Registered ' + operation.agent + '. Finish provider sign-in on the VPS:\n' + configureCommand + ' ' + operation.agent,
       draining: 'Retiring ' + operation.agent + '. It will finish accepted work before its access is revoked.',
       retired: 'Retired ' + operation.agent + '. Its private archive is available on the VPS.',
-      retry: 'The VPS could not finish ' + target.toLowerCase() + ' yet. Chief of Staff will retry.',
+      checking: 'Approved. Waiting for the named agent to verify the connection.',
+      enabled: 'The target verified the tool. It is enabled for ' + operation.agent + '.',
+      failed: 'The target could not verify this tool. Its previous tools remain available.',
+      credentials: 'The target needs its private tool credential. Reconnect it on that host and retry.',
+      applied: 'The approved persona and contact list are active.',
+      retry: 'The VPS could not finish ' + target.toLowerCase() + ' yet. The approved operation will retry.',
     };
     if (!Object.hasOwn(notifications, status)) throw new Error('Unexpected roster result');
     if (row.announced !== status) await say(row, status, notifications[status]);
     update('UPDATE roster_requests SET announced=?, done=? WHERE request=?', status,
-      Number(!['draining', 'retry'].includes(status)), row.request);
+      Number(!['draining', 'retry', 'checking'].includes(status)), row.request);
   }
 
-  return { accept, tick };
+  return { accept, tick, enqueue };
 }

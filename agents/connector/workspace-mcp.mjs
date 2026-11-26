@@ -3,6 +3,7 @@ import { basename, dirname, join, relative } from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { registerTeamTools } from './team-tools.mjs';
 import { registerGitHubTools } from './github-tools.mjs';
 import { inspectAttachment } from './attachment-reader.mjs';
 import { FileTooLarge, readWorkspaceBytes, workspacePath, writeWorkspaceFile } from './workspace-paths.mjs';
@@ -20,6 +21,7 @@ function report(error) {
 }
 
 const server = new McpServer({ name: 'matrix-workspace-files', version: '1.0.0' });
+registerTeamTools(server);
 const path = z.string().min(1).max(1024);
 server.registerTool('list_files', {
   description: 'List files and directories under a relative workspace directory. Defaults to the workspace root. Returns paths and modification times, newest first.',
@@ -116,7 +118,7 @@ if (process.env.AGENT_USERNAME === 'coder') {
       return report(error);
     }
   });
-  await registerGitHubTools(server);
+  if (!process.env.MATRIX_CATALOG_PATH) await registerGitHubTools(server);
 }
 
 await server.connect(new StdioServerTransport());

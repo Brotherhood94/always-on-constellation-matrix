@@ -38,9 +38,11 @@ def compose_remote(data, config, desktop):
     runtime = data / 'state' / key
     worker = {'restart': 'unless-stopped', 'user': '991:991', 'read_only': True, 'init': True,
               'tmpfs': ['/tmp'], 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true']}
-    mounts = [volume(runtime / 'work', '/workspace'), volume(desktop, '/workspace/desktop')]
+    mounts = [volume(runtime / 'work', '/workspace'), volume(desktop, '/workspace/desktop'),
+              volume(runtime / 'tool-credentials', '/tool-credentials', True)]
     metadata = {'AGENT_USERNAME': key, 'AGENT_NAME': account['name'], 'AGENT_MODEL': account['model'],
-                'AGENT_REASONING': account['effort']}
+                'AGENT_REASONING': account['effort'], 'MATRIX_CATALOG_PATH': config['catalog'],
+                'MATRIX_SERVER_NAME': config['server_name']}
     management = config.get('workshop_host')
     return {'name': 'constellation-remote-' + key, 'services': {
         'engine': {**worker, 'image': ENGINE, 'networks': ['acp', 'outbound'],
@@ -144,7 +146,7 @@ def execute(data, args):
         directory(data, 0o711)
         with operator_lock(data):
             state = data / 'state' / key
-            for name in ('work/desktop', 'instance', 'exchange', 'matrix'):
+            for name in ('work/desktop', 'instance', 'exchange', 'matrix', 'tool-credentials'):
                 directory(state / name, uid=RUNTIME_UID)
             save(state / 'matrix/matrix-token', config['matrix_token'] + '\n', uid=RUNTIME_UID)
             save(state / 'matrix/room-id', config['room'] + '\n', uid=RUNTIME_UID)

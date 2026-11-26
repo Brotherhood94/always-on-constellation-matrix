@@ -153,6 +153,7 @@ def profile_lines(key, preset, width):
         f"Role: {profile['role']}  |  Runs: {placement(key, preset)}",
         f"Suggested model: {preset['model']}  |  Reasoning: {preset['effort']}",
         '',
+        *wrap(profile.get('persona', {}).get('purpose', ''), width),
         'Capabilities',
     ]
     for capability in profile['capabilities']:
@@ -225,12 +226,14 @@ def agent_checklist(screen, presets, initial=()):
     def describe(key, width):
         return profile_lines(key, presets[key], width)
 
-    return checklist(screen, '🤖 Select agents to install', labels, initial, describe=describe)
+    return checklist(screen, '🤖 Select agents to install', labels, initial, describe=describe, focus_done=bool(initial))
 
 
-def select_agents(presets, initial=()):
+def select_agents(presets, initial=None):
     if not presets:
         return []
+    if initial is None:
+        initial = list(presets) if set(presets) == {'task-manager', 'hiring-manager', 'vps-manager', 'coach', 'scouter'} else []
     selection = terminal_picker(agent_checklist, presets, initial)
     if selection is not None:
         return selection
@@ -238,7 +241,10 @@ def select_agents(presets, initial=()):
     for key, preset in presets.items():
         print('\n'.join(profile_lines(key, preset, 79)))
         print()
-    return [value.strip() for value in input('Agents to install (comma separated): ').split(',') if value.strip()]
+    choice = input('Agents to install (comma separated, Enter for defaults, none for an empty team): ').strip()
+    if not choice:
+        return list(initial)
+    return [] if choice == 'none' else [value.strip() for value in choice.split(',') if value.strip()]
 
 
 def select_integrations(initial):

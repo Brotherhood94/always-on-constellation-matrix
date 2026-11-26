@@ -1,0 +1,21 @@
+{
+  "key": "analyst",
+  "name": "Analyst",
+  "profile": {
+    "role": "worker",
+    "limits": "Works in its own workspace and with evidence shared in Office.",
+    "capabilities": [
+      {
+        "code": "analysis",
+        "description": "Analyze requirements, evidence and options and write an actionable plan.",
+        "resources": [
+          "task:*",
+          "thread:*",
+          "workspace:analyst"
+        ]
+      }
+    ]
+  },
+  "model": "gpt-6.2-sol",
+  "effort": "medium"
+}

@@ -2,6 +2,7 @@ FROM constellation-office-connector:0.22.17 AS tools
 FROM constellation-amplifier-base:0.22.17
 USER root
 COPY --from=tools /usr/local/bin/node /usr/local/bin/node
+COPY --from=tools /usr/bin/gh /usr/bin/gh
 COPY --from=tools /app /opt/workspace-tools
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils unzip && rm -rf /var/lib/apt/lists/*
 COPY agents/engine/provider-requirements.txt /opt/office/provider-requirements.txt
