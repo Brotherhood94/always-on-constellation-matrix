@@ -104,3 +104,33 @@ test('an unexpected Control member blocks the Office draft before encryption', a
     { client, owner, guide: agent, domain: 'sample.test', control: '!control:sample.test' });
   assert.equal(result.ok, false);
 });
+
+test('Office reports bridge sign-in, unresolved usernames, and provisioning failures separately', async () => {
+  const make = (type, content, state_key = '') => ({ type, state_key, content });
+  const options = {
+    client: { getRoomState: async () => [
+      make('m.room.create', { 'm.federate': false, type: 'm.space' }),
+      make('m.room.join_rules', { join_rule: 'invite' }),
+      make('m.room.member', { membership: 'join' }, owner),
+      make('m.room.member', { membership: 'join' }, agent),
+    ] },
+    database: { query: async () => ({ rows: [] }) },
+    key: 'fixture', owner, guide: agent, domain: 'sample.test', space: '!telegram:sample.test',
+  };
+  for (const [status, code, error, expected] of [
+    [400, 'FI.MAU.NOT_LOGGED_IN', 'Not logged in', /!tg login qr/u],
+    [403, 'M_FORBIDDEN', 'Login is not logged in', /Telegram session is disconnected/u],
+    [404, 'M_NOT_FOUND', 'Identifier not found', /could not resolve that exact username/u],
+    [401, 'M_UNKNOWN_TOKEN', 'Invalid auth token', /telegram layout/u],
+    [403, 'M_FORBIDDEN', 'Provisioning API is disabled', /telegram layout/u],
+    [429, 'M_LIMIT_EXCEEDED', 'Too many requests', /rate-limited/u],
+    [500, 'M_UNKNOWN', 'Database connection secret never print this', /HTTP 500/u],
+  ]) {
+    const result = await telegramOfficeAction({ id: '$test', action: 'add', target: '@sample' }, {
+      ...options, bridgeFetch: async () => Response.json({ errcode: code, error }, { status }),
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, expected);
+    assert.doesNotMatch(result.message, /never print this/u);
+  }
+});

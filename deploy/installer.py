@@ -1035,7 +1035,8 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
                 if action == 'activate':
                     run_telegram(data, action)
                 rooms = provision_telegram_layout(settings, data, workspace, token, options.bridge_room)
-                run_telegram(data, 'start-guide')
+                guide_args = ('--refresh-bridge',) if action == 'layout' else ()
+                run_telegram(data, 'start-guide', *guide_args)
                 coordinator = telegram_office_agent(registry)
                 if registry['agents'].get(coordinator, {}).get('active') and 'root' not in registry['agents']:
                     compose_config(settings, data, registry)

@@ -52,9 +52,18 @@ update_portal disallow
 [[ $(bridge_config_json | shasum -a 256) == "$config_before" ]]
 echo 'The generated YAML supports idempotent allow and disallow and preserves the rest of the configuration.'
 
-bridge_config_json |
-  docker run --rm -i --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" \
-    -B /src/bridge_config.py office-provisioning /state
+office_provisioning() {
+  bridge_config_json |
+    docker run --rm -i --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" \
+      -B /src/bridge_config.py office-provisioning /state
+}
+[[ $(office_provisioning) == changed ]]
+office_config=$(bridge_config_json | shasum -a 256)
+docker run --rm --network none -v "$state:/state" --entrypoint sh "$py" -c \
+  'printf stale-key > /state/guide/office-bridge-key'
+[[ $(office_provisioning) == unchanged ]]
+[[ $(bridge_config_json | shasum -a 256) == "$office_config" ]]
+echo 'Office provisioning repaired a mismatched guide key without rotating the bridge configuration.'
 docker run --rm --network none -v "$state:/state" --entrypoint /bin/sh "$syn" -c 'python -m synapse.app.homeserver --server-name telegram.test --config-path /state/synapse/homeserver.yaml --generate-config --report-stats=no --data-directory /state/synapse'
 docker run --rm -i --network none -v "$state:/state" --entrypoint python "$syn" - <<'PY'
 from pathlib import Path

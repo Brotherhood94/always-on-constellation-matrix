@@ -88,13 +88,18 @@ def office_provisioning(root):
     config = json.load(sys.stdin)
     provision = config['provisioning']
     key = provision.get('shared_secret', '')
-    if not re.fullmatch(r'constellation-office-[0-9a-f]{64}', key):
+    if not isinstance(key, str) or not re.fullmatch(r'constellation-office-[0-9a-f]{64}', key):
         key = 'constellation-office-' + secrets.token_hex(32)
-    provision['shared_secret'] = key
-    provision['allow_matrix_auth'] = False
-    provision['debug_endpoints'] = False
-    write(root / 'bridge/config.yaml', config, uid=991)
-    write(root / 'guide/office-bridge-key', (key + '\n').encode(), uid=991)
+    desired = {'shared_secret': key, 'allow_matrix_auth': False, 'debug_endpoints': False}
+    changed = any(provision.get(name) != value for name, value in desired.items())
+    if changed:
+        provision.update(desired)
+        write(root / 'bridge/config.yaml', config, uid=991)
+    key_file = root / 'guide/office-bridge-key'
+    expected = (key + '\n').encode()
+    if not key_file.is_file() or key_file.read_bytes() != expected:
+        write(key_file, expected, uid=991)
+    print('changed' if changed else 'unchanged')
 
 
 def database_sql(root):

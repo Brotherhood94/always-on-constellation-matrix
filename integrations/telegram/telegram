@@ -32,24 +32,30 @@ resolve_matrix_owner() {
 }
 
 prepare_office_provisioning() {
-  if [[ ! -s "$TELEGRAM_DATA/guide/office-bridge-key" ]]; then
-    install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/guide"
-    docker run --rm -i --network none --entrypoint yq "$image" -o=json '.' \
-      < "$TELEGRAM_DATA/bridge/config.yaml" |
-      "${config[@]}" office-provisioning "$TELEGRAM_DATA"
-  fi
+  install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/guide"
+  docker run --rm -i --network none --entrypoint yq "$image" -o=json '.' \
+    < "$TELEGRAM_DATA/bridge/config.yaml" |
+    "${config[@]}" office-provisioning "$TELEGRAM_DATA"
+}
+
+bridge_recreate=()
+configure_office_bridge() {
+  local configuration
+  configuration=$(prepare_office_provisioning)
+  if [[ $configuration == changed || ${1:-} == --refresh-bridge ]]; then bridge_recreate+=(--force-recreate); fi
 }
 
 case ${1:-} in
   start-guide)
-    [[ $# == 1 && -s "$TELEGRAM_DATA/guide/token" && -s "$TELEGRAM_DATA/guide/room-id" ]]
+    [[ ( $# == 1 || ( $# == 2 && $2 == --refresh-bridge ) ) &&
+       -s "$TELEGRAM_DATA/guide/token" && -s "$TELEGRAM_DATA/guide/room-id" ]]
     if [[ -n $("${compose[@]}" ps --status running --quiet telegram-bridge) ]]; then
-      prepare_office_provisioning
+      configure_office_bridge "${2:-}"
       "${config[@]}" database-sql "$TELEGRAM_DATA" |
         "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d postgres
       "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/space.sql"
       "${config[@]}" space-reader "$TELEGRAM_DATA"
-      "${compose[@]}" up -d --no-deps --build --wait --wait-timeout 120 telegram-bridge
+      "${compose[@]}" up -d --no-deps --build --wait --wait-timeout 120 "${bridge_recreate[@]}" telegram-bridge
     fi
     "${compose[@]}" up -d --no-deps --build telegram-guide
     if [[ -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
@@ -79,12 +85,12 @@ case ${1:-} in
     ;;
   activate)
     [[ $# == 1 && -s "$TELEGRAM_DATA/bridge/registration.yaml" ]]
-    prepare_office_provisioning
+    configure_office_bridge
     "${compose[@]}" build telegram-bridge
     previous=$(mktemp "$TELEGRAM_DATA/.synapse-config.XXXXXXXX")
     cp -p "$MATRIX_DATA/synapse/homeserver.yaml" "$previous"
     "${config[@]}" enable "$TELEGRAM_DATA"
-    if "${compose[@]}" up -d --no-deps telegram-bridge &&
+    if "${compose[@]}" up -d --no-deps "${bridge_recreate[@]}" telegram-bridge &&
        "${stack[@]}" restart synapse &&
        "${stack[@]}" up -d --no-deps --wait --wait-timeout 120 synapse &&
        "${compose[@]}" up -d --no-deps --wait --wait-timeout 120 telegram-bridge; then

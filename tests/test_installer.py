@@ -805,8 +805,9 @@ class InstallerTest(unittest.TestCase):
                     telegram(data, [action, '--owner-password-file', '/fixture/matrix-pass'])
                 steps['password'].assert_called_once_with(self.settings, Path('/fixture/matrix-pass'))
                 steps['provision_telegram_layout'].assert_called_once_with(self.settings, data, rooms, 'fixture-token', None)
-                expected = ['activate', 'start-guide'] if action == 'activate' else ['start-guide']
-                self.assertEqual([call.args[1] for call in steps['run_telegram'].call_args_list], expected)
+                expected = [('activate',), ('start-guide',)] if action == 'activate' else [
+                    ('start-guide', '--refresh-bridge')]
+                self.assertEqual([call.args[1:] for call in steps['run_telegram'].call_args_list], expected)
                 steps['sync_workshop'].assert_not_called()
 
     def test_adding_a_remote_worker_keeps_the_telegram_workshop_network(self):

@@ -14,6 +14,34 @@ const matrixLink = (room, event) => 'https://matrix.to/#/' + encodeURIComponent(
 const bounded = (text, size) => typeof text === 'string' && text.trim() && Buffer.byteLength(text) <= size;
 const fail = message => ({ ok: false, message });
 
+async function bridgeOpenFailure(response, direct) {
+  const { errcode, error } = (await response.json().catch(() => null)) ?? {};
+  if (errcode === 'FI.MAU.NOT_LOGGED_IN') {
+    return fail('Your Matrix account has no Telegram login. Open Telegram → Telegram Bridge and use !tg login qr to connect.');
+  }
+  if (errcode === 'M_FORBIDDEN' && error === 'Login is not logged in') {
+    return fail('Your Telegram session is disconnected. Open Telegram → Telegram Bridge and use !tg list-logins to check it.');
+  }
+  if (response.status === 401 || errcode === 'M_UNKNOWN_TOKEN' || errcode === 'M_MISSING_TOKEN' ||
+      (errcode === 'M_FORBIDDEN' && error === 'Provisioning API is disabled')) {
+    return fail('The Office connection to Telegram Bridge needs repair. Run ./constellation_matrix telegram layout on the VPS.');
+  }
+  if (response.status === 429 || errcode === 'M_LIMIT_EXCEEDED') {
+    return fail('Telegram Bridge is rate-limited. Wait before retrying the request.');
+  }
+  if (errcode === 'M_NOT_FOUND') {
+    return fail(direct
+      ? 'Telegram could not resolve that exact username. Check it with !tg resolve-identifier @username in Telegram → Telegram Bridge.'
+      : 'Telegram Bridge could not find that group. Run !tg sync-chats in Telegram Bridge and check the group ID.');
+  }
+  if (response.status === 404 || response.status === 405 || errcode === 'M_UNRECOGNIZED') {
+    return fail('The running bridge is missing the Office chat-opening route. Run ./constellation_matrix telegram layout on the VPS.');
+  }
+  const check = direct ? 'Check the username with !tg resolve-identifier @username in Telegram Bridge.'
+    : 'Check the group ID in Telegram Bridge.';
+  return fail(`Telegram Bridge could not open the chat (HTTP ${response.status}). ${check}`);
+}
+
 export async function privateTelegramControl(client, { control, owner, guide, domain }) {
   const state = await client.getRoomState(control);
   const find = type => state.find(event => event.type === type && event.state_key === '')?.content;
@@ -77,8 +105,7 @@ export async function telegramOfficeAction(input, options) {
   const response = await bridgeFetch('http://telegram-bridge:29317' + endpoint, {
     method: 'POST', redirect: 'error', headers: { authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(23_000),
   });
-  if (!response.ok) return fail(direct ? 'The bridge could not open that username. Check the spelling and Telegram Bridge sign-in.'
-    : 'The bridge could not open that group. Run !tg sync-chats in Telegram Bridge and check the group ID.');
+  if (!response.ok) return bridgeOpenFailure(response, direct);
   const result = await response.json();
   const room = direct ? result.dm_room_mxid : result.room;
   if (!matrixRoom.test(room ?? '') || room === space || room === control) return fail('The bridge did not return a Telegram room.');

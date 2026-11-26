@@ -22,6 +22,8 @@ For a private chat, you can also write “Add @username to Telegram Rooms” or 
 
 The bridge uses the operator's linked Telegram account. Open a new room from Task Manager’s reply or **Telegram → Rooms**. For an undiscovered group, send `!tg sync-chats` in Telegram Bridge and retry. A basic group can be opened with `telegram add chat:<id>`. If several rooms share a name, remove one by its Matrix room ID. Removal unlinks the room, retains its history and membership, and blocks drafts for the room while it is unlinked. An explicit add can link it again.
 
+If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. This lookup leaves the Telegram conversation unchanged. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
+
 Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office command opens a private Telegram Control thread. Only the operator can approve and send the exact text there. For text you want to keep within Control, open **Telegram → Telegram Control** and send the draft command directly without a mention. Dot is optional for both paths.
 
 ## Get the Telegram API credentials
@@ -167,7 +169,7 @@ A Telegram relay uses the selected Telegram login with bridge attribution. Matri
 
 ## Repair an existing Telegram layout
 
-Run this from the updated checkout to repair the top-level **Telegram** Space, refresh the guide, and enable Telegram actions for the installed Task Manager. It also updates the running bridge when its image changes. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
+Run this from the updated checkout to repair the top-level **Telegram** Space, refresh the guide, and enable Telegram actions for the installed Task Manager. It reconciles the Office connection credentials and reloads the running bridge. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
 
 ```sh
 ./constellation_matrix telegram layout
