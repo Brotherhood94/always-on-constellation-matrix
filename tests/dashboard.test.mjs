@@ -132,13 +132,21 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.deepEqual(pinned, ['$operator', state.entries.dashboard.event]);
   assert.equal(messages.size, 2);
 
-  pinned = ['$telegram-operator'];
+  pinned = ['$telegram-operator', '$old-telegram-guide'];
+  telegramState.entries['telegram-setup'] = { body: 'Set up Telegram', event: '$old-telegram-guide', revision: 'old' };
   await reconcileTelegramPin(matrix, telegramState, command);
   const guide = messages.get(telegramState.entries['telegram-setup'].event);
   assert.match(guide.body, /https:\/\/my\.telegram\.org\/apps/);
   assert.match(guide.body, /message box in Telegram Bridge.*\n!tg login qr\nTelegram Bridge replies.*QR code/u);
   assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
+  assert.match(guide.body, /peer ID is the number Telegram assigns to the person or group/u);
+  assert.match(guide.body, /!tg list-logins\n!tg resolve-identifier <login-id> @<telegram-username>/u);
+  assert.match(guide.body, /Found 1001 \/ Sample Contact.*use user:1001/u);
+  assert.match(guide.body, /!tg search <name>/u);
+  assert.match(guide.body, /t\.me\/c\/1234567890\/42.*channel:1234567890/u);
+  assert.match(guide.body, /Export chat history → JSON.*result\.json.*top-level id/u);
+  assert.match(guide.formatted_body, /!tg resolve-identifier &lt;login-id&gt; @&lt;telegram-username&gt;/u);
   assert.match(guide.body, /Approve and send/);
   assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
   assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram activate`));

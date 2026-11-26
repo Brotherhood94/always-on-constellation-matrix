@@ -70,7 +70,7 @@ function telegramGuide(command) {
       { code: '(umask 077; touch "$HOME/telegram-api.json")\nchmod 600 "$HOME/telegram-api.json"\nnano "$HOME/telegram-api.json"' },
       { code: '{"api_id": 1234567, "api_hash": "REPLACE_WITH_YOUR_API_HASH"}' },
       { code: `${command} telegram prepare "$HOME/telegram-api.json"\n${operatorCommand} telegram activate` },
-      'Enter your existing Matrix operator password if prompted to link the bridge chat.',
+      'Enter your existing Matrix operator password if prompted. After activation, open the Telegram Space in Element to find Telegram Control and Telegram Bridge.',
     ]],
     ['3. Element and Telegram mobile · Link your Telegram account', [
       'In Element, open Telegram → Telegram Bridge. Copy the line below, paste it into the message box in Telegram Bridge, and press Enter to send it.',
@@ -78,13 +78,22 @@ function telegramGuide(command) {
       'Telegram Bridge replies in that chat with a QR code. On your phone, open Telegram → Settings → Devices → Link Desktop Device and scan the code.',
       'Wait for the bridge to confirm sign-in. If the code expires, send the same command again in Telegram Bridge.',
     ]],
-    ['4. Element and VPS terminal · Verify a contact or group', [
-      'In Telegram Bridge, send !tg list-logins. For a contact, send !tg resolve-identifier <login-id> <telegram-username>. Verify the name and peer ID. For a group, confirm its membership and peer ID.',
-      'Allow only the verified peer. Use user: for a contact, chat: for a basic group, or channel: for a supergroup without topics.',
+    ['4. Element · Find the Telegram peer ID', [
+      'The peer ID is the number Telegram assigns to the person or group you want to connect. The login ID identifies your own connected Telegram account.',
+      'Open Telegram → Telegram Bridge. Send the first line and copy your login ID. Then send the second line with your login ID and the person’s Telegram @username.',
+      { code: '!tg list-logins\n!tg resolve-identifier <login-id> @<telegram-username>' },
+      'In the reply, check the contact’s name and copy the number before the slash. For example, if the reply says “Found 1001 / Sample Contact”, use user:1001.',
+      'If you only know the name, try !tg search <name> in Telegram Bridge. Match the result to the person’s Telegram profile before using its ID.',
+      'For a supergroup without topics, copy a message link in Telegram. In https://t.me/c/1234567890/42, use channel:1234567890. The last number is the message ID.',
+      'For a basic group or a group without a numeric message link, use Telegram Desktop → open the group → ⋯ → Export chat history → JSON. In result.json, check the chat name and use the top-level id. Use chat: for a basic group or channel: for a supergroup without topics.',
+      { label: 'Telegram chat export instructions', url: 'https://telegram.org/blog/export-and-more' },
+    ]],
+    ['5. VPS terminal and Element · Allow and verify the chat', [
+      'Replace both placeholders with the verified Telegram peer and the login ID for your own account. The Matrix room ID is collected after the portal is created.',
       { code: `${command} telegram allow '<peer-type>:<peer-id>' '<login-id>'` },
       'Ask the contact or group to send a test message. Open the resulting room in Element and confirm which Telegram conversation receives your reply.',
     ]],
-    ['5. VPS terminal and Element · Bind the chat and approve a draft', [
+    ['6. VPS terminal and Element · Bind the chat and approve a draft', [
       { code: ['prepare-agent', 'sign-in', 'probe', 'start-agent'].map(step => `${command} telegram ${step}`).join('\n') },
       'Complete the Codex device sign-in in your browser. In Element, invite the local @telegram-agent account to the verified chat and send !tg set-relay <login-id>.',
       'Find the Internal Room ID in the verified chat under Room settings → Advanced. Save this example as a private JSON file. Use a unique id, your verified peer and room, and the same connected account ID for login and receiver. For a group, change trigger to request.',
