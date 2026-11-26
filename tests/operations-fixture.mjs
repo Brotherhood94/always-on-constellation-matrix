@@ -540,8 +540,7 @@ try {
   const notice = await eventually(() => readShortcut(officeSetup, office));
   assert.equal(notice.msgtype, 'm.notice');
   assert.match(notice.body, /Installer still open\nContinue in the same VPS terminal/u);
-  assert.match(notice.body, /Installer closed or interrupted[\s\S]*already registered.*\n.* agent configure/u);
-  assert.match(notice.body, /still need to choose or register your agents.*\n.* setup-guide/u);
+  assert.match(notice.body, /Installer closed or interrupted[\s\S]*first unfinished step.*\n.* setup-guide\nIf your agents are already registered.*\n.* agent configure/u);
   assert.ok(notice.formatted_body.includes("<pre><code>./constellation_matrix --data-dir '/srv/fixture workspace' agent configure</code></pre>"));
   assert.ok(notice.formatted_body.includes(`<pre><code>${officeCommand}</code></pre>`));
   assert.equal(notice['m.mentions'], undefined);

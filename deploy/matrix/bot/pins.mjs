@@ -44,10 +44,10 @@ export function officeSetupNotice(command) {
     ]],
     ['Installer closed or interrupted', [
       'Run the appropriate command from the Constellation checkout on the VPS.',
-      'If your agents are already registered, resume Amplifier provider setup.',
-      { code: command.replace(/ setup-guide$/u, ' agent configure') },
-      'If you still need to choose or register your agents, resume the installation guide.',
+      'Start here to resume setup from the first unfinished step.',
       { code: command },
+      'If your agents are already registered, go straight to Amplifier provider setup.',
+      { code: command.replace(/ setup-guide$/u, ' agent configure') },
     ]],
   ]), msgtype: 'm.notice' };
 }
