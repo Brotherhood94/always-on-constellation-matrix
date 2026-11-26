@@ -171,6 +171,39 @@ test('Task Manager opens one Telegram chat from an Italian username handoff requ
   }
 });
 
+test('a mixed-language Office send keeps the exact quoted text in one private approval draft', async () => {
+  const f = fixture();
+  const binding = { id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 };
+  f.setBinding(binding);
+  const target = { id: caller.actor, name: 'Task Manager' };
+  const text = 'send "Hello, there!" a @SampleContact Telegram';
+  const content = mentionMessage(text, target);
+  const context = { owner, userId: target.id, name: target.name };
+  assert.deepEqual(telegramIntent(text, { office: true }), {
+    action: 'send', target: '@SampleContact', type: 'direct', text: 'Hello, there!',
+  });
+  const assignment = telegramOfficeAssignment({ sender: owner, content }, context);
+  assert.deepEqual(assignment, { sender: owner, text: 'Telegram: send a private message to @SampleContact saying "Hello, there!"' });
+  const request = { ...caller, ...assignment, id: '$quoted-send', method: 'submit' };
+  assert.equal((await f.broker().office(request)).status, 'pending');
+  await f.broker().tick();
+  await f.broker().office(request);
+  await f.broker().tick();
+  const [draft] = f.store.all('SELECT payload,requires_dot FROM control_request');
+  assert.deepEqual(JSON.parse(draft.payload), { action: 'compose', destination: 'sam', verifiedBinding: binding,
+    chatType: 'direct', text: 'Hello, there!' });
+  assert.equal(draft.requires_dot, 0);
+  assert.equal(f.store.all('SELECT * FROM control_request').length, 1);
+  assert.equal(f.effects.length, 0);
+  for (const invalid of [
+    'send "Telegram" a @SampleContact',
+    'send "Hello" a @SampleContact:example.org Telegram',
+    'send "Hello" a @SampleContact Telegram e manda "again"',
+    'send "Hello" a @SampleContact and @OtherContact on Telegram',
+    'do not send "Hello" a @SampleContact Telegram',
+  ]) assert.equal(telegramIntent(invalid, { office: true }), null, invalid);
+});
+
 test('Task Manager can relay a Dot assignment to queue one operator-approved Telegram send', async () => {
   const f = fixture();
   const binding = { id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 };

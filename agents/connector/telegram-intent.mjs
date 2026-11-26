@@ -63,6 +63,14 @@ export function telegramIntent(body, { office = false } = {}) {
   if (/^(?:list|show(?: me)?|elenca|mostrami)(?:\s+(?:my|the|le|mie))*\s+(?:(?:telegram\s+)?rooms|(?:stanze|chat)(?:\s+(?:di )?telegram)?)$/iu.test(plain)) {
     return { action: 'list' };
   }
+  const quotedSend = /^(?:send|invia|manda|scrivi)\s+(?:"([^"\r\n]+)"|“([^”\r\n]+)”|«([^»\r\n]+)»)\s+(?:to|ad?)\s+(@[a-z0-9_]{4,32})(\s+(?:(?:on|su)\s+)?telegram)?[.!]?$/iu.exec(input);
+  if (quotedSend) {
+    if (office && !explicitChannel && !quotedSend[5]) return null;
+    const text = quotedSend[1] ?? quotedSend[2] ?? quotedSend[3];
+    return text.trim() && Buffer.byteLength(text) <= 3500
+      ? { action: 'send', target: quotedSend[4], type: 'direct', text }
+      : null;
+  }
   const exact = /^(?:invia|manda|send)\s+(?:(?:una sola volta|once)\s+)?(?:il testo(?: esatto)?|(?:the )?exact text)\s+(?:"([^"\r\n]+)"|“([^”\r\n]+)”|«([^»\r\n]+)»)\s+(?:alla chat privata(?: già autorizzata e verificata)? di|to the private chat (?:of|with))\s+(.+)$/iu.exec(plain);
   if (exact) {
     const namedChannel = /\s+(?:on|su) telegram[.!]?$/iu.test(input);

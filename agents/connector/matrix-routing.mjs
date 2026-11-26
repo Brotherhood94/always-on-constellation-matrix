@@ -34,9 +34,10 @@ export function telegramOfficeAssignment(event, { owner, planner, userId, name }
   }
   const intent = telegramIntent(text, { office: true });
   if (!intent) return null;
-  // Send the existing exact-username form so an already running Telegram connector can handle it.
-  if (intent.action === 'open' && intent.type === 'direct' && /^@[a-z0-9_]{4,32}$/iu.test(intent.target)) {
-    text = 'Telegram: open ' + intent.target;
+  // Use forms understood by already running Telegram connectors.
+  if (intent.type === 'direct' && /^@[a-z0-9_]{4,32}$/iu.test(intent.target)) {
+    if (intent.action === 'open') text = 'Telegram: open ' + intent.target;
+    if (intent.action === 'send') text = `Telegram: send a private message to ${intent.target} saying "${intent.text}"`;
   }
   return { sender, text };
 }
