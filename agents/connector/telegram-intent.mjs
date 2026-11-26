@@ -90,6 +90,14 @@ export function telegramIntent(body, { office = false } = {}) {
     const dest = destination(summary[1]);
     return dest && { action: 'read', ...dest, question: input };
   }
+  const chatRequest = compact(plain).replace(/^chiedi (?:a|al) (?:telegram|teelgram) (?:agent|agente|agetn) di /iu, '');
+  const linkChat = /^(?:connettere|collegare|connetti|collega|apri) /iu;
+  if (linkChat.test(chatRequest)) {
+    const telegramSpace = /^(?:in|nel|nello|allo) (?:spazio|sapzio) telegram /iu;
+    const chat = chatRequest.replace(linkChat, '').replace(telegramSpace, '');
+    const username = /^(?:una|la) (?:nuova )?chat(?: privata)? con (?:l['’]utente (?:il cui username (?:è|e)|con username) )?(@[a-z0-9_]{4,32})$/iu.exec(chat);
+    if (username) return { action: 'open', target: username[1], type: 'direct' };
+  }
   const room = /^(add|open|unlink|remove|find|search for|aggiungi|apri|rimuovi|scollega|cerca|trova)\s+(.+)$/iu.exec(plain);
   if (!room) return null;
   const verb = room[1].toLowerCase();

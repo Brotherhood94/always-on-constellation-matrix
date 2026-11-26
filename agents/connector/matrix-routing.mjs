@@ -32,7 +32,13 @@ export function telegramOfficeAssignment(event, { owner, planner, userId, name }
     text = text.slice(start + 2).trim();
     if (/\r|\n/u.test(text)) return null;
   }
-  return telegramIntent(text, { office: true }) ? { sender, text } : null;
+  const intent = telegramIntent(text, { office: true });
+  if (!intent) return null;
+  // Send the existing exact-username form so an already running Telegram connector can handle it.
+  if (intent.action === 'open' && intent.type === 'direct' && /^@[a-z0-9_]{4,32}$/iu.test(intent.target)) {
+    text = 'Telegram: open ' + intent.target;
+  }
+  return { sender, text };
 }
 const replyControl = /(?:^|\n)(HANDOFF|HANDOFF_ROUTE|TASK_OUTCOME|ATTACH_FILES|CAPABILITY_GAP|OFFICE_NEED):[ \t]+([^\r\n]*)$/;
 const directRequests = [

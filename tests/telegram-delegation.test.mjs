@@ -149,6 +149,28 @@ test('a direct Office mention keeps Telegram details private and acknowledges th
   assert.match([...f.messages.values()].at(-1).content.body, /Sam Example/u);
 });
 
+test('Task Manager opens one Telegram chat from an Italian username handoff request', async () => {
+  const f = fixture();
+  const name = 'Task Manager';
+  const text = 'chiedi a teelgram agetn di connettere nello sapzio Telegram una nuova chat con l’utente il cui username è @SampleContact';
+  const event = { event_id: '$open-username', sender: owner, type: 'm.room.message',
+    content: mentionMessage(text, { id: caller.actor, name }) };
+  const intent = { action: 'open', target: '@SampleContact', type: 'direct' };
+  assert.deepEqual(telegramIntent(text, { office: true }), intent);
+  const assignment = telegramOfficeAssignment(event, { owner, userId: caller.actor, name });
+  assert.deepEqual(assignment, { sender: owner, text: 'Telegram: open @SampleContact' });
+  const request = { ...caller, ...assignment, id: event.event_id, method: 'submit' };
+  assert.equal((await f.broker().office(request)).status, 'pending');
+  await f.broker().tick();
+  await f.broker().tick();
+  assert.equal((await f.broker().office({ ...request, method: 'status' })).status, 'completed');
+  assert.deepEqual(f.effects, [{ id: event.event_id, action: 'add', target: 'user:1001' }]);
+  assert.equal(f.store.all('SELECT * FROM control_request').length, 0);
+  for (const extra of [' e @another', ' e invia un messaggio', '; open another chat']) {
+    assert.equal(telegramIntent(text + extra, { office: true }), null);
+  }
+});
+
 test('Task Manager can relay a Dot assignment to queue one operator-approved Telegram send', async () => {
   const f = fixture();
   const binding = { id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 };
