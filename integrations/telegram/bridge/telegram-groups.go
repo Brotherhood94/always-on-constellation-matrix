@@ -11,15 +11,34 @@ import (
 	"maunium.net/go/mautrix/bridgev2/networkid"
 )
 
-func IsTelegramGroupID(peer string) bool {
+func validTelegramPeer(peer string, allowed ...string) bool {
 	kind, value, _ := strings.Cut(peer, ":")
 	number, err := strconv.ParseInt(value, 10, 64)
-	return (kind == "chat" || kind == "channel") && err == nil && number > 0 && strconv.FormatInt(number, 10) == value
+	if err != nil || number <= 0 || strconv.FormatInt(number, 10) != value {
+		return false
+	}
+	for _, candidate := range allowed {
+		if candidate == kind {
+			return true
+		}
+	}
+	return false
+}
+
+func IsTelegramGroupID(peer string) bool {
+	return validTelegramPeer(peer, "chat", "channel")
 }
 
 func ResolveTelegramGroup(ctx context.Context, login *bridgev2.UserLogin, peer string, open bool) (*bridgev2.Portal, error) {
 	if !IsTelegramGroupID(peer) {
 		return nil, mautrix.MNotFound.WithMessage("Use an existing Telegram group ID")
+	}
+	return ResolveTelegramPortal(ctx, login, peer, open)
+}
+
+func ResolveTelegramPortal(ctx context.Context, login *bridgev2.UserLogin, peer string, open bool) (*bridgev2.Portal, error) {
+	if !validTelegramPeer(peer, "user", "chat", "channel") {
+		return nil, mautrix.MNotFound.WithMessage("Use an existing Telegram peer ID")
 	}
 	if login.Client == nil || !login.Client.IsLoggedIn() {
 		return nil, bridgev2.ErrNotLoggedIn

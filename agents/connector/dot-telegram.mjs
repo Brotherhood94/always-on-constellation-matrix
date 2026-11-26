@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { requestTelegramService } from './telegram-office.mjs';
 
 const requestField = 'org.matrixconstellation.telegram.request';
-const event = /^\$[^\s\x00-\x1f]{1,254}$/u;
+const event = /^$[^\s\x00-\x1f]{1,254}$/u;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const html = value => value.replace(/[&<>]/gu, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char]);
 
@@ -33,9 +34,12 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
       request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, event_id TEXT UNIQUE
     );
   `);
+  if (!db.prepare('PRAGMA table_info(telegram_requests)').all().some(column => column.name === 'room_id')) {
+    db.exec('ALTER TABLE telegram_requests ADD COLUMN room_id TEXT');
+  }
   const put = db.prepare('INSERT OR IGNORE INTO telegram_requests(request_id, fingerprint) VALUES (?, ?)');
   const get = db.prepare('SELECT * FROM telegram_requests WHERE request_id=?');
-  const saved = db.prepare('UPDATE telegram_requests SET event_id=? WHERE request_id=? AND (event_id IS NULL OR event_id=?)');
+  const saved = db.prepare('UPDATE telegram_requests SET event_id=?, room_id=? WHERE request_id=? AND (event_id IS NULL OR event_id=?)');
 
   async function queue(requestId, payload, response, failure) {
     const fingerprint = hash(JSON.stringify(payload));
@@ -43,7 +47,18 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
     const prior = get.get(requestId);
     if (prior.fingerprint !== fingerprint) return failure('This request ID belongs to a different Telegram request.');
     let eventId = prior.event_id;
-    if (!eventId) {
+    if (!eventId && control.local === true) {
+      try {
+        const result = await requestTelegramService('/telegram-dot/requests.sock', { id: requestId, ...payload }, 15000);
+        if (result.status === 'conflict') return failure('This request ID belongs to a different Telegram request.');
+        if (result.status !== 'queued' || result.room !== control.room || !event.test(result.event)) {
+          return failure('Telegram Bridge is unavailable. Retry with the same request ID.');
+        }
+        eventId = result.event;
+      } catch {
+        return failure('The Telegram request could not be confirmed. Retry with the same request ID.');
+      }
+    } else if (!eventId) {
       const client = getClient();
       if (!client) return failure('Dot is connecting to Matrix. Retry with the same request ID.');
       try {
@@ -57,13 +72,14 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
           formatted_body: '<a href="https://matrix.to/#/' + encodeURIComponent(agent) + '">telegram-agent</a>' + html(description),
           'm.mentions': { user_ids: [agent] }, [requestField]: payload,
         });
-        saved.run(eventId, requestId, eventId);
       } catch {
         return failure('The Telegram request could not be confirmed. Retry with the same request ID.');
       }
     }
+    if (!prior.event_id) saved.run(eventId, control.room, requestId, eventId);
+    const room = prior.room_id ?? (prior.event_id ? control.legacy : undefined) ?? control.room;
     return response({ request_id: requestId, status: 'requested_in_telegram_control',
-      request_url: `https://matrix.to/#/${encodeURIComponent(control.room)}/${encodeURIComponent(eventId)}` });
+      request_url: `https://matrix.to/#/${encodeURIComponent(room)}/${encodeURIComponent(eventId)}` });
   }
 
   return {
@@ -75,14 +91,14 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
       };
       const annotations = { idempotentHint: true, destructiveHint: false, openWorldHint: false };
       server.registerTool('prepare_telegram_message', {
-        description: 'Queue an exact new or reply message in private Telegram Agent for the operator to approve in Element. This tool cannot send to Telegram. Ask for one exact destination if unclear.',
+        description: 'Queue an exact new or reply message in the private Telegram Bridge room for the operator to approve in Element. This tool cannot send to Telegram. Ask for one exact destination if unclear.',
         inputSchema: { ...shared,
           text: z.string().min(1).refine(value => !!value.trim() && Buffer.byteLength(value) <= 3500),
           source_event: z.string().regex(event).optional().describe('Optional Matrix event ID of a received message in this same connected chat.'),
         }, annotations,
       }, ({ request_id, ...input }) => queue(request_id, { action: 'compose', ...input }, response, failure));
       server.registerTool('request_telegram_update', {
-        description: 'Ask Telegram Agent for a read-only update from one connected Telegram chat. The result is posted only in Telegram Agent in Element and mentions the operator and Dot. This tool does not return chat contents.',
+        description: 'Ask Telegram Agent for a read-only update from one connected Telegram chat. The result is posted only in Telegram Bridge in Element and mentions the operator. This tool does not return chat contents.',
         inputSchema: { ...shared, question: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= 1000) },
         annotations,
       }, ({ request_id, ...input }) => queue(request_id, { action: 'update', ...input }, response, failure));

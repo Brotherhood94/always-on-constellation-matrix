@@ -7,15 +7,15 @@ import sys
 
 from installer import available_profiles, starter_profiles
 from agent_picker import select_agents
-from installer import (CLIENT, PRESETS, SOURCE, agent_activate, install, interactive, load, password,
+from installer import (CLIENT, PRESETS, SOURCE, agent_activate, agent_add, install, interactive, load, password,
                        pending_local_agents, prompt_graph_password, request, run, save, show_element_setup,
-                       telegram, telegram_layout_options, workspace_command)
+                       telegram, telegram_layout_options, workspace_command, workspace_layout)
 from onboarding import confirm_sign_in, deliver_welcome, progress, select_roster
 from roster import enable_management
 from setup_guide import confirm_element, element_page, interactive_terminal
 
 
-HOST_ACTIONS = ('metadata', 'install', 'enroll', 'configure', 'finish', 'telegram-layout')
+HOST_ACTIONS = ('metadata', 'install', 'enroll', 'configure', 'finish', 'telegram-layout', 'layout', 'add-helper')
 GUIDE_FIELDS = ('server_name', 'owner', 'tailscale', 'telegram', 'dot')
 SUDO_PASSWORD_NOTICE = 'If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt.'
 
@@ -175,9 +175,25 @@ def telegram_as_operator(data, args):
                                                          'bridge_room': options.bridge_room})
 
 
+def layout_as_operator(data, args):
+    current = metadata(data, refresh_legacy=True)
+    with matrix_session(current, password(current['settings'], args.owner_password_file)) as token:
+        print('Layout repair uses sudo to update the deployment and reload its affected services.', flush=True)
+        elevate(data, '_host', 'layout', payload={'token': token})
+
+
+def add_helper_as_operator(data, args):
+    current = metadata(data, refresh_legacy=True)
+    with matrix_session(current, password(current['settings'], args.owner_password_file)) as token:
+        print('Helper setup uses sudo to register its Matrix devices and deploy its containers.', flush=True)
+        elevate(data, '_host', 'add-helper', payload={'token': token})
+    if args.configure:
+        configure_as_operator(data, 'helper')
+
+
 def execute_host(data, args):
     try:
-        if args.action in {'install', 'enroll', 'telegram-layout'}:
+        if args.action in {'install', 'enroll', 'telegram-layout', 'layout', 'add-helper'}:
             payload = json.load(sys.stdin)
         if args.action == 'install':
             install(data, SimpleNamespace(config=None), entered=payload)
@@ -203,6 +219,16 @@ def execute_host(data, args):
         elif args.action == 'finish':
             enable_management(data, automatic=True)
             deliver_welcome(data, workspace_command(data, elevated=False))
+        elif args.action == 'layout':
+            token = payload.get('token')
+            if not isinstance(token, str) or not token:
+                raise ValueError('Sign in with the workspace’s Matrix operator account')
+            workspace_layout(data, args, token=token)
+        elif args.action == 'add-helper':
+            token = payload.get('token')
+            if not isinstance(token, str) or not token:
+                raise ValueError('Sign in with the workspace’s Matrix operator account')
+            agent_add(data, SimpleNamespace(starter='helper', configure=False), operator_token=token)
         elif args.action == 'telegram-layout':
             action, token, room = (payload[key] for key in ('action', 'token', 'bridge_room'))
             if action not in ('activate', 'layout') or not isinstance(token, str) or not token:

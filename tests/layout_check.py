@@ -68,62 +68,50 @@ class LayoutTest(unittest.TestCase):
                 reconcile_layout(*args, office=unsafe, bridge_active=False, select=lambda _: None)
             self.assertNotIn(telegram_agent, request('GET', room_route(unsafe) + '/joined_members', token=token)['joined'])
 
-            def direct(key):
-                return direct_room(domain, agents, key, 'Fixture bridge chat', owner['user_id'], token,
-                                   bot['user_id'], bot['access_token'])
-
-            bridge = direct('legacy-telegram-bridge')
-            other = direct('other-telegram-bridge')
-            portal = request('POST', CLIENT + '/createRoom', {'preset': 'private_chat'}, token)['room_id']
+            agent_token = (root / 'connector/matrix-token').read_text().strip()
+            legacy = direct_room(domain, agents, 'legacy-control', 'Telegram Agent', owner['user_id'],
+                                 token, telegram_agent, agent_token, pin_user=telegram_agent)
+            old_event = request('PUT', room_route(legacy) + '/send/m.room.encrypted/old-telegram-request', {
+                'algorithm': 'm.megolm.v1.aes-sha2', 'ciphertext': 'synthetic-envelope',
+            }, agent_token)['event_id']
+            bridge = control
+            bot_token = bot['access_token']
+            contact, group = [request('POST', CLIENT + '/createRoom', {'preset': 'private_chat', 'name': name},
+                                      token)['room_id'] for name in ('Sample Contact', 'Sample Group')]
             with sqlite3.connect(root / 'connector/telegram.sqlite3') as connection:
                 connection.execute('CREATE TABLE binding (id TEXT, room TEXT)')
-                connection.execute('INSERT INTO binding VALUES (?, ?)', ('test', portal))
-            save(root / 'connector/config.json', {'space': space, 'controlRoom': control})
-            for room in (space, control, portal):
+                connection.executemany('INSERT INTO binding VALUES (?, ?)', [('contact', contact), ('group', group)])
+            save(root / 'connector/config.json', {'space': space, 'controlRoom': legacy})
+            for room in (space, legacy, bridge, contact, group):
                 link_child(agents, room, domain, token)
             guide_token = (root / 'guide/token').read_text().strip()
-            name_route = room_route(control) + '/state/m.room.name'
-            request('PUT', name_route, {'name': 'Telegram Control'}, guide_token)
-            previous_control_event = request('PUT', room_route(control) + '/send/m.room.encrypted/old-telegram-request', {
-                'algorithm': 'm.megolm.v1.aes-sha2', 'ciphertext': 'synthetic-envelope',
-            }, guide_token)['event_id']
-            request('POST', room_route(control) + '/leave', {}, token)
-            invite(control, owner['user_id'], guide_token)
-            event = request('PUT', room_route(bridge) + '/send/m.room.message/layout-history',
-                            {'msgtype': 'm.text', 'body': 'Fixture history'}, token)['event_id']
-            selected = []
-
-            def select(candidates):
-                selected.append(set(candidates))
-                return bridge
-
-            migrated = reconcile_layout(*args, office=rooms['office'], bridge_active=True, select=select)
-            self.assertEqual(migrated, {**fresh, 'bridge': bridge})
-            self.assertEqual(request('GET', name_route, token=token)['name'], 'Telegram Agent')
-            self.assertEqual(request('GET', room_route(control) + '/event/' + encoded(previous_control_event), token=token)
+            request('PUT', room_route(legacy) + '/state/m.room.pinned_events', {'pinned': [old_event]}, token)
+            save(root / 'guide/shortcut-pins.json', {'entries': {'telegram-setup': {'event': old_event}}})
+            migrated = reconcile_layout(*args, office=rooms['office'], bridge_active=True, select=lambda _: None)
+            self.assertEqual(migrated, {**fresh, 'legacy': legacy})
+            join(bridge, bot['user_id'], bot_token)
+            self.assertEqual(request('GET', room_route(legacy) + '/event/' + encoded(old_event), token=token)
                              ['type'], 'm.room.encrypted')
-            alias = CLIENT + '/directory/room/' + encoded(f'#telegram-control:{domain}')
-            request('DELETE', alias, token=guide_token)
-            self.assertEqual(reconcile_layout(*args, office=rooms['office'], bridge_active=True, select=select), migrated)
-            self.assertEqual(request('GET', alias, token=token)['room_id'], control)
-            self.assertEqual(selected, [{bridge, other}])
-            self.assertEqual(children(space), {control, bridge, portal})
-            self.assertFalse({space, control, bridge, portal} & children(agents))
-            self.assertTrue({rooms['office'], rooms['alerts'], other} <= children(agents))
+            self.assertEqual(request('GET', room_route(legacy) + '/state/m.room.pinned_events', token=token)['pinned'], [])
+            self.assertEqual(reconcile_layout(*args, office=rooms['office'], bridge_active=True, select=lambda _: None), migrated)
+            self.assertEqual(children(space), {bridge, contact, group})
+            self.assertFalse({space, legacy, bridge, contact, group} & children(agents))
+            self.assertTrue({rooms['office'], rooms['alerts']} <= children(agents))
             account_data = f"{CLIENT}/user/{encoded(owner['user_id'])}/account_data/m.direct"
-            existing = {bot['user_id']: [bridge, other], '@telegram_1001:' + domain: [portal, unrelated]}
+            direct_user = '@telegram_1001:' + domain
+            existing = {bot['user_id']: [bridge], direct_user: [unrelated, group]}
             request('PUT', account_data, existing, token)
-            classify_telegram_rooms(space, owner['user_id'], token, [portal, unrelated])
-            classify_telegram_rooms(space, owner['user_id'], token, [portal, unrelated])
+            portals = [(contact, 'user:1001'), (group, 'chat:3003'), (unrelated, 'user:222')]
+            for _ in range(2):
+                classify_telegram_rooms(space, owner['user_id'], token, portals, bridge=bridge, legacy=legacy)
             self.assertEqual(request('GET', account_data, token=token),
-                             {bot['user_id']: [bridge, other], '@telegram_1001:' + domain: [unrelated]})
-            self.assertEqual(request('GET', room_route(bridge) + '/event/' + encoded(event), token=token)
-                             ['content']['body'], 'Fixture history')
-            self.assertEqual(set(request('GET', room_route(control) + '/joined_members', token=token)['joined']),
-                             {owner['user_id'], f'@telegram-agent:{domain}'})
-            request('PUT', room_route(space) + '/state/m.space.child/' + encoded(portal), {}, guide_token)
-            self.assertEqual(reconcile_layout(*args, bridge_active=True, select=select), migrated)
-            self.assertEqual(children(space), {control, bridge})
+                             {bot['user_id']: [group], direct_user: [unrelated, contact]})
+            self.assertEqual(request('GET', room_route(group) + '/state/m.room.name', token=token)['name'], 'Sample Group')
+            self.assertEqual(set(request('GET', room_route(bridge) + '/joined_members', token=token)['joined']),
+                             {owner['user_id'], telegram_agent, bot['user_id']})
+            request('PUT', room_route(space) + '/state/m.space.child/' + encoded(contact), {}, guide_token)
+            self.assertEqual(reconcile_layout(*args, bridge_active=True, select=lambda _: None), migrated)
+            self.assertEqual(children(space), {bridge, group})
 
     def test_idempotent_space_direct_chats_and_pin_power(self):
         server = os.environ['MATRIX_SERVER_NAME']

@@ -31,6 +31,12 @@ function cmd(store, command, event = '$control', time = now + 5) {
   return store.command({ room: config.controlRoom, sender: config.owner, event, encrypted: true }, command, config, time);
 }
 
+function review(store, draft, action = 'approve', poll = '$registered-review') {
+  const row = store.draft(draft);
+  store.registerReview(draft, row.version, poll);
+  return { action: 'review', poll, choice: reviewAnswer(row, action) };
+}
+
 test('manual never queues, forum topics and group chatter are excluded, and scope is per binding', () => {
   const store = fixture({ bindings: [{ ...dm, mode: 'manual' }, group] });
   assert.throws(() => store.bind({ ...group, peer: 'channel:33:4' }, config.controlRoom, now));
@@ -65,7 +71,7 @@ test('only the encrypted private control event can authorize a particular draft'
   const command = { action: 'approve', draft, version: 1 };
   const valid = { room: config.controlRoom, sender: config.owner, encrypted: true,
     content: { msgtype: 'm.text', body: `telegram approve ${draft} 1` } };
-  assert.deepEqual(controlCommand(valid, config), command);
+  assert.equal(controlCommand(valid, config), null);
   assert.equal(controlCommand({ ...valid, room: dm.room }, config), null);
   assert.equal(controlCommand({ ...valid, encrypted: false }, config), null);
   assert.equal(controlCommand({ ...valid, sender: '@telegram_22:test' }, config), null);
@@ -73,9 +79,11 @@ test('only the encrypted private control event can authorize a particular draft'
   assert.equal(controlCommand({ ...valid, content: { ...valid.content, 'm.relates_to': { rel_type: 'm.replace' } } }, config), null);
   assert.equal(store.nextSend(now + 4), undefined);
   assert.equal(cmd(store, { ...command, version: 2 }, '$wrong-version'), false);
-  assert.equal(cmd(store, command), true);
-  assert.equal(cmd(store, command), false);
-  assert.equal(cmd(store, command, '$duplicate'), false);
+  assert.equal(cmd(store, command, '$text-command'), false);
+  const vote = review(store, draft);
+  assert.equal(cmd(store, vote), true);
+  assert.equal(cmd(store, vote), false);
+  assert.equal(cmd(store, vote, '$duplicate'), false);
   assert.equal(store.prepareSend(draft, '{"device":"stable"}', now + 6), true);
   assert.equal(store.prepareSend(draft, '{"device":"again"}', now + 7), false);
 });
@@ -124,6 +132,35 @@ test('only one encrypted decision on a registered review poll can act on its exa
   assert.equal(store.nextSend(now + 8), undefined);
 });
 
+test('Bridge cutover reissues approved-but-unsent drafts with a fresh poll exactly once', () => {
+  const store = fixture();
+  store.run("UPDATE binding SET mode='auto' WHERE id=?", dm.id);
+  store.record(input(dm), now + 2);
+  const id = candidate(store);
+  const old = review(store, id);
+  assert.equal(cmd(store, old), true);
+  store.run('UPDATE draft SET control_event=? WHERE id=?', '$old-control', id);
+  const before = store.draft(id);
+  const anchors = new Map([['$old-control', '$carried-draft']]);
+  store.migrateReviews('!bridge:test', config.controlRoom, anchors, now + 5);
+  const after = store.draft(id);
+  assert.equal(store.binding(dm.id).mode, 'draft');
+  assert.equal(after.state, 'awaiting_approval');
+  assert.equal(after.control_event, '$carried-draft');
+  assert.equal(after.body, before.body);
+  assert.equal(after.txn, before.txn);
+  assert.equal(after.version, 2);
+  assert.equal(after.approval, null);
+  assert.equal(cmd(store, old, '$late-vote'), false);
+  store.migrateReviews('!bridge:test', config.controlRoom, anchors, now + 6);
+  assert.equal(store.draft(id).version, 2);
+  const cfg = { ...config, controlRoom: '!bridge:test' };
+  const event = { room: cfg.controlRoom, sender: config.owner, encrypted: true, event: '$new-vote' };
+  assert.equal(store.command(event, review(store, id, 'approve', '$fresh-poll'), cfg, now + 7), true);
+  assert.equal(store.prepareSend(id, '{}', now + 8), true);
+  assert.throws(() => store.migrateReviews('!other:test', cfg.controlRoom, new Map(), now + 9), /Reconcile/);
+});
+
 test('new human content, policy revision, expiry and pause protect against stale sending', () => {
   for (const invalidate of [
     store => store.record(input(dm, '$human', 'owner'), now + 6),
@@ -134,17 +171,18 @@ test('new human content, policy revision, expiry and pause protect against stale
     const store = fixture();
     store.record(input(dm), now + 2);
     const draft = candidate(store);
-    assert.equal(cmd(store, { action: 'approve', draft, version: 1 }), true);
+    assert.equal(cmd(store, review(store, draft)), true);
     invalidate(store);
     assert.equal(store.prepareSend(draft, '{}', now + 7), false);
     assert.equal(store.binding('group').active, 1);
   }
 });
 
-test('explicit auto goes through the outbox and 429 retry preserves the encrypted body and transaction', () => {
-  const store = fixture({ bindings: [{ ...dm, mode: 'auto' }] });
+test('poll approval goes through the outbox and 429 retry preserves the encrypted body and transaction', () => {
+  const store = fixture({ bindings: [dm] });
   store.record(input(dm), now + 2);
   const id = candidate(store);
+  assert.equal(cmd(store, review(store, id)), true);
   const draft = store.nextSend(now + 5);
   assert.equal(draft.id, id);
   assert.equal(store.prepareSend(id, '{"body":"cipher"}', now + 6), true);
@@ -161,10 +199,11 @@ test('uncertain post survives restart, receipt must match and it never blindly s
   const temporary = mkdtempSync(join(tmpdir(), 'telegram-policy-'));
   try {
     const path = join(temporary, 'state.sqlite3');
-    let store = fixture({ path, bindings: [{ ...dm, mode: 'auto' }, group] });
+    let store = fixture({ path, bindings: [dm, group] });
     store.record(input(dm), now + 2);
     const id = candidate(store);
     const first = store.draft(id);
+    assert.equal(cmd(store, review(store, id)), true);
     assert.equal(store.prepareSend(id, '{}', now + 6), true);
     store.db.close();
     store = new TelegramStore(path);
@@ -208,7 +247,7 @@ test('Dot can submit a real mention and never act on a draft approval', () => {
   assert.equal(addressedRequest({ ...message, sender: '@unrelated:test' }, settings), null);
   assert.equal(addressedRequest({ ...message, content: { ...message.content, 'm.mentions': {} } }, settings), null);
   assert.equal(addressedRequest({ ...message, content: { ...message.content, 'm.relates_to': { rel_type: 'm.replace' } } }, settings), null);
-  const store = fixture({ bindings: [dm, { ...group, mode: 'auto' }] });
+  const store = fixture();
   const request = addressedRequest(message, settings);
   assert.equal(store.queueControl(message.event_id, request, now), true);
   assert.equal(store.queueControl(message.event_id, request, now), false);
@@ -221,7 +260,7 @@ test('Dot can submit a real mention and never act on a draft approval', () => {
   assert.equal(draft.state, 'awaiting_approval');
   assert.equal(draft.body, request.text);
   assert.equal(store.nextSend(now), undefined);
-  const approve = { action: 'approve', draft: draft.id, version: 1 };
+  const approve = review(store, draft.id);
   assert.equal(store.command({ sender: settings.dot, room: config.controlRoom, event: '$dot-approval', encrypted: true },
     approve, settings, now), false);
   assert.equal(cmd(store, approve), true);

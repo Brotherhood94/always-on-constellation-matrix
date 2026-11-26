@@ -4,7 +4,7 @@
 
 Give Task Manager a request in Element or from Dot in ChatGPT. It can assign parts of the work to other agents, keep the handoffs in one encrypted Office thread, and return the result with evidence. The team runs on a Linux VPS and stays available when your laptop is offline.
 
-Start with five roles and add specialists as your work grows. Use the record of real assignments, handoffs, and outcomes to decide when to improve how agents work together, equip an existing agent, or add someone to the team.
+Start with six roles and add specialists as your work grows. Use the record of real assignments, handoffs, and outcomes to decide when to improve how agents work together, equip an existing agent, or add someone to the team.
 
 [Quick start](#quick-start) · [Starter team](#meet-the-starter-team) · [Office workflow](#follow-an-office-task) · [Architecture](#architecture) · [Deployment scenarios](docs/acceptance.md#post-deployment-scenarios)
 
@@ -18,7 +18,8 @@ Start with five roles and add specialists as your work grows. Use the record of 
 | **Hiring Manager** | Groups recurring capability gaps across differently worded assignments and proposes new personas or retirements. | **Hiring Manager** private chat |
 | **Coach** | Reviews handoffs in Context Intelligence and revises working styles and permitted contacts through Persona Workshop. | **Coach** private chat |
 | **Scouter** | Researches skills, MCP servers, and tools for existing duties and has the target agent verify approved access. | **Scouter** private chat |
-| **VPS Manager** | Prepares and verifies host maintenance. The operator votes on the exact operation before it runs. | **Office** for requests, **Root Operations** for approval |
+| **VPS Manager** | Prepares and verifies host maintenance. The operator votes on the exact operation before it runs. | **Office** for requests, **Agents → Rooms → Root Operations** for approval |
+| **Helper** | Answers setup and troubleshooting questions using the deployed guides and dashboard health. | **Agents → People → Helper** |
 
 Open the dashboard from **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. **Team connections** shows the permitted directions. Follow an arrow to review that route’s changes and recent Office handoffs, or select **View connection changes** for the workspace log. [Team connections and history](docs/team.md#team-connections) · [Starting contact permissions and role examples](docs/team.md#first-interactions)
 
@@ -35,7 +36,7 @@ From this checkout on an Ubuntu 24.04 VPS, use standard Docker Engine with Compo
 ```
 
 1. **Deploy the workspace.** Choose your network, Matrix username, and integrations. Set your Matrix password and a dedicated Context Intelligence password. If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt. The installer then displays the homeserver and Element Desktop sign-in instructions.
-2. **Choose your team.** Confirm Element sign-in in the terminal. Use the arrow keys to review the five preselected roles, press Enter to toggle any of them, and choose **Done**. The installer uses sudo to save the agent registrations and start local Amplifier containers, then opens Amplifier’s provider and model setup for each local agent.
+2. **Choose your team.** Confirm Element sign-in in the terminal. Use the arrow keys to review the six preselected roles, press Enter to toggle any of them, and choose **Done**. The installer uses sudo to save the agent registrations and start local Amplifier containers, then opens Amplifier’s provider and model setup for each local agent.
 3. **Open the welcome.** Once the selected agents are ready, Hiring Manager sends a private welcome if selected. Otherwise, a ready Office agent posts it in Office. The welcome points to **Workspace shortcuts**.
 
 ChatGPT via Codex is the only provider tested with a live account. Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
@@ -51,7 +52,7 @@ Run `./constellation_matrix setup-guide` to resume onboarding or append `--print
 ### Finish in Element
 
 - **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Telegram Agent → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Review recipients, drafts, and outbound approvals in **Telegram → Telegram Agent**. [Telegram setup and examples](docs/telegram.md)
+- **Telegram → Rooms → Telegram Bridge → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Review the verified recipient and exact text in **Telegram Bridge**, then vote **✅ Accept** or **❌ Decline**. [Telegram setup and examples](docs/telegram.md)
 
 ### Send your first task
 
@@ -111,7 +112,7 @@ On a systemd deployment, these management workflows become available as the rele
 
 ## Architecture
 
-Each agent has a Matrix identity, a private workspace, and a persistent Constellation Instance running Amplifier. The **Agents** Space groups **Office**, **VPS Alerts**, and the operator’s private chats with **Hiring Manager**, **Coach**, **Scouter**, and **VPS Manager** (in **Root Operations**). General Office workers also share a desktop for task files.
+Each agent has a Matrix identity, a private workspace, and a persistent Constellation Instance running Amplifier. The **Agents** Space groups **Office**, **VPS Alerts**, and the operator’s private chats with **Hiring Manager**, **Coach**, **Scouter**, and **Helper**. The encrypted approvals room **Root Operations** appears under **Agents → Rooms**. General Office workers also share a desktop for task files.
 
 The installer enables startup at boot. Docker restarts application containers, Tailscale Serve provides private dashboard access, and systemd runs host services, including the Dot tunnel once connected. [Architecture notes](docs/architecture.md) · [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 
@@ -186,6 +187,8 @@ For unattended provisioning, edit the example configuration, check it with `./co
 | Upgrade an existing team | Preview with `sudo ./constellation_matrix agent migrate-team`. [Migration and recovery](docs/team.md#upgrade-an-existing-team) |
 | Ask for VPS maintenance | Mention **VPS Manager** in Office or ask Task Manager to delegate. Review the action in the private [Root Operations chat](integrations/root/README.md). |
 | Trace an Office task | Open [Context Intelligence](integrations/context-execution/README.md) to see who handed off the work, whether the recipient accepted it, and how the original assignee closed the task. |
+| Get help with setup or a service | Open **Agents → People → Helper**. On an existing deployment, run `./constellation_matrix agent add --starter helper --configure`. [Helper guide](docs/team.md#ask-helper) |
+| Repair sidebar placement | Run `./constellation_matrix layout` on the VPS and sign in as the Matrix operator. [Layout migration](docs/telegram.md#repair-an-existing-workspace) |
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Agent](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
@@ -205,7 +208,6 @@ Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
 
 - Copy files from workspaces and approved folders to the shared desktop from local and remote agents. The plan includes approval for protected agents. [Shared desktop copy plan](next_features_plans/plan.md#shared-desktop-file-copying)
 - Route natural-language requests from ChatGPT to a verified Telegram chat and ask when several registered chats match.
-- Show the full destination in Telegram Agent for 10 seconds, then send without a separate approval.
 - Attach a named file from the VPS shared desktop to a Telegram message.
 
 [Telegram feature plan](next_features_plans/plan.md#send-telegram-messages-through-dot)

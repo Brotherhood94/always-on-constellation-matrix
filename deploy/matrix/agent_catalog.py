@@ -17,7 +17,7 @@ def clean(value, limit):
     return isinstance(value, str) and 0 < len(value.strip()) <= limit and value.isprintable()
 
 
-STARTER_ROLES = {'task-manager', 'coach', 'scouter', 'hiring-manager', 'vps-manager'}
+STARTER_ROLES = {'task-manager', 'coach', 'scouter', 'hiring-manager', 'vps-manager', 'helper'}
 PRIVATE_ROLES = {'hiring-manager', 'coach', 'scouter'}
 
 
@@ -53,6 +53,8 @@ def persona_for(entry):
 def contacts_for(key, entries):
     entry = entries[key]
     manager = next((k for k, v in entries.items() if v['profile']['role'] == 'coordinator'), None)
+    if key == 'helper':
+        return []
     if 'office_contacts' in entry:
         contacts = entry['office_contacts']
     else:
@@ -60,7 +62,11 @@ def contacts_for(key, entries):
         if key == manager:
             contacts.extend(k for k, v in entries.items() if role_id(k, v) == 'specialist')
     keys = [manager if k == 'task-manager' else k for k in contacts]
-    return sorted({k for k in keys if k in entries and k != key and not entries[k].get('retirement')})
+    helper_manager = manager if manager in {'task-manager', 'manager'} else None
+    if key == helper_manager:
+        keys.append('helper')
+    return sorted({k for k in keys if k in entries and k != key and (k != 'helper' or key == helper_manager)
+                   and not entries[k].get('retirement')})
 
 
 def profile(value):

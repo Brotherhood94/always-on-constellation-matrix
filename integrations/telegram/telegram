@@ -15,7 +15,7 @@ compose=(docker compose -p "${TELEGRAM_PROJECT:-matrix-telegram}" -f "$dir/compo
 config=(python3 -B "$dir/bridge_config.py")
 install -d -m 0711 "$TELEGRAM_DATA"
 install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/office" "$TELEGRAM_DATA/guide-actions" \
-  "$TELEGRAM_DATA/handoffs" "$TELEGRAM_DATA/mcp"
+  "$TELEGRAM_DATA/handoffs" "$TELEGRAM_DATA/mcp" "$TELEGRAM_DATA/dot-requests"
 install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/guide-actions"
 exec 9>"$TELEGRAM_DATA/operator.lock"
 flock -n 9 || { echo 'Another Telegram operator command is running.' >&2; exit 1; }
@@ -48,6 +48,20 @@ configure_office_bridge() {
 }
 
 case ${1:-} in
+  quiesce-layout)
+    if [[ -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
+      "${compose[@]}" --profile agent stop connector
+      : > "$TELEGRAM_DATA/restart-connector"
+    fi
+    "${compose[@]}" stop telegram-guide
+    ;;
+  resume-layout)
+    "${compose[@]}" start telegram-guide
+    if [[ -f "$TELEGRAM_DATA/restart-connector" ]]; then
+      "${compose[@]}" --profile agent start connector
+      rm -- "$TELEGRAM_DATA/restart-connector"
+    fi
+    ;;
   start-guide)
     [[ ( $# == 1 || ( $# == 2 && $2 == --refresh-bridge ) ) &&
        -s "$TELEGRAM_DATA/guide/token" && -s "$TELEGRAM_DATA/guide/room-id" ]]
@@ -59,12 +73,13 @@ case ${1:-} in
       "${config[@]}" space-reader "$TELEGRAM_DATA"
       "${compose[@]}" up -d --no-deps --build --wait --wait-timeout 120 "${bridge_recreate[@]}" telegram-bridge
     fi
-    "${compose[@]}" up -d --no-deps --build telegram-guide
-    if [[ -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
+    "${compose[@]}" up -d --no-deps --build --force-recreate telegram-guide
+    if [[ -f "$TELEGRAM_DATA/restart-connector" || -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
       if [[ ${2:-} == --refresh-bridge ]]; then
         "${compose[@]}" --profile agent up -d --no-deps --build --wait --wait-timeout 120 telegram-engine
       fi
-      "${compose[@]}" --profile agent up -d --no-deps --build connector
+      "${compose[@]}" --profile agent up -d --no-deps --build --force-recreate connector
+      rm -f -- "$TELEGRAM_DATA/restart-connector"
     fi
     ;;
   prepare)

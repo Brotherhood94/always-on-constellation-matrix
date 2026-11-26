@@ -19,13 +19,13 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 - **Agents → VPS Alerts → Pinned messages → Workspace shortcuts.** Open the dashboard to see resources and agent readiness. Open Context Intelligence to launch Neo4j Browser and sign in as `neo4j` with the dedicated password. The pin includes the command to retrieve the password privately on your VPS.
 - **Agents → VPS Alerts → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. An empty list is expected before you activate any Office agents. [Dot setup](dot.md)
-- **Telegram → Telegram Agent → Pinned messages → Set up Telegram.** The installer joins your account to the Telegram Space and Control. Use the pin to set up the bridge, verify a chat, and test draft delivery. Open **Telegram Bridge** in the same Space to scan the login QR code after activation. [Telegram setup](telegram.md)
+- **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Use the pin to activate the bridge, scan the login QR code, verify a chat, and test draft approvals. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
 
 The pins are published after you join the room and Element has registered your device’s encryption keys. You can finish these steps while the agents are being configured.
 
 ## 🤖 Select agents
 
-On a fresh interactive install, **Agents → Office** displays a **Finish setting up Office** message. Continue in the same VPS terminal if the installer is open. After confirming Element sign-in, use the arrow keys and Enter to review the five preselected starter agents and adjust your roster. Choose **Done** to register the agents. The installer uses sudo to save the agent registrations in the protected deployment directory and start local Amplifier containers. If prompted, enter the Linux password for the VPS account shown in the sudo prompt.
+On a fresh interactive install, **Agents → Office** displays a **Finish setting up Office** message. Continue in the same VPS terminal if the installer is open. After confirming Element sign-in, use the arrow keys and Enter to review the six preselected starter agents and adjust your roster. Choose **Done** to register the agents. The installer uses sudo to save the agent registrations in the protected deployment directory and start local Amplifier containers. If prompted, enter the Linux password for the VPS account shown in the sudo prompt.
 
 The installer opens Amplifier sign-in for each selected local agent. If you closed the installer or it was interrupted, run `./constellation_matrix agent configure` once your agents are registered to resume the remaining provider setup. Run `./constellation_matrix setup-guide` if you still need to choose or register your agents. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
 

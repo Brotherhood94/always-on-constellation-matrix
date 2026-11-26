@@ -94,16 +94,30 @@ def direct_account_data(user, peer, room, token):
         request('PUT', path, {**current, peer: [*current.get(peer, []), room]}, token)
 
 
-def direct_room(server, space, key, label, owner, operator, peer, token):
-    room = ensure_room(server, key + '-dm', label, operator, direct=peer)
+def reconcile_direct_account_data(user, assignments, token):
+    """Replace direct-chat mappings for managed rooms. A None peer means Rooms."""
+    path = f'{CLIENT}/user/{encoded(user)}/account_data/m.direct'
+    current = missing(path, token) or {}
+    updated = {peer: [room for room in rooms if room not in assignments] if isinstance(rooms, list) else rooms
+               for peer, rooms in current.items()}
+    for room, peer in assignments.items():
+        if peer and isinstance(updated.setdefault(peer, []), list):
+            updated[peer].append(room)
+    updated = {peer: rooms for peer, rooms in updated.items() if rooms or current.get(peer) == rooms}
+    if updated != current:
+        request('PUT', path, updated, token)
+
+
+def direct_room(server, space, key, label, owner, operator, peer, token, *, classify=True, pin_user=None):
+    room = ensure_room(server, key + '-dm', label, operator, direct=peer if classify else None, pin_user=pin_user)
     active = {event['state_key'] for event in request('GET', room_route(room) + '/state', token=operator)
               if event['type'] == 'm.room.member' and event['content'].get('membership') in {'invite', 'join'}}
     if active - {owner, peer}:
         raise ValueError(f'Unexpected participant in {label}')
     invite(room, peer, operator)
     join(room, peer, token)
-    direct_account_data(owner, peer, room, operator)
-    direct_account_data(peer, owner, room, token)
+    reconcile_direct_account_data(owner, {room: peer if classify else None}, operator)
+    reconcile_direct_account_data(peer, {room: owner if classify else None}, token)
     link_child(space, room, server, operator)
     return room
 

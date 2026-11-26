@@ -347,7 +347,7 @@ class InstallerTest(unittest.TestCase):
                     show_element_setup({**self.settings, 'dot': dot, 'telegram': telegram})
                 rendered = output.getvalue()
                 self.assertEqual('Pinned messages → Connect Dot' in rendered, dot)
-                self.assertEqual('Telegram → Telegram Agent → Pinned messages' in rendered, telegram)
+                self.assertEqual('Telegram → Rooms → Telegram Bridge → Pinned messages' in rendered, telegram)
                 self.assertEqual(rendered.count('💬 Element Desktop'), 1)
                 self.assertNotIn('🔌 Dot · Secure MCP Tunnel', rendered)
                 self.assertNotIn('✈️ Telegram · Bridge and drafting agent', rendered)
@@ -798,6 +798,7 @@ class InstallerTest(unittest.TestCase):
                 with self.subTest(action=action), patch.multiple(
                     'installer', open_existing=DEFAULT, password=DEFAULT, login=DEFAULT, request=DEFAULT,
                     run_telegram=DEFAULT, provision_telegram_layout=DEFAULT, sync_workshop=DEFAULT,
+                    compose_config=DEFAULT, compose=DEFAULT, docker_build=DEFAULT,
                 ) as steps:
                     steps['open_existing'].return_value = (self.settings, self.registry)
                     steps['login'].return_value = {'access_token': 'fixture-token'}

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmod, unlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { telegramSpaceState } from './telegram-space.mjs';
+import { leaveTelegramPortal, telegramSpaceState } from './telegram-space.mjs';
 
 const matrixRoom = /^![^\s/\x00-\x1f]{1,254}$/u;
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
@@ -46,12 +46,12 @@ async function bridgeOpenFailure(response, direct, userId) {
   return fail(`Telegram Bridge could not open the chat (HTTP ${response.status}). ${check}`);
 }
 
-export async function privateTelegramControl(client, { control, owner, guide, domain }) {
+export async function privateTelegramControl(client, { control, owner, guide, domain, bridgeControl = false }) {
   const state = await client.getRoomState(control);
   const find = type => state.find(event => event.type === type && event.state_key === '')?.content;
   const members = new Map(state.filter(event => event.type === 'm.room.member' &&
     ['join', 'invite'].includes(event.content?.membership)).map(event => [event.state_key, event.content.membership]));
-  const allowed = new Set([owner, guide, '@dot:' + domain]);
+  const allowed = new Set([owner, guide, (bridgeControl ? '@telegrambot:' : '@dot:') + domain]);
   return find('m.room.encryption')?.algorithm === 'm.megolm.v1.aes-sha2' &&
     find('m.room.join_rules')?.join_rule === 'invite' && find('m.room.create')?.['m.federate'] === false &&
     !find('m.room.tombstone') && members.get(owner) === 'join' && members.get(guide) === 'join' &&
@@ -138,7 +138,7 @@ export async function telegramOfficeAction(input, options) {
     const result = await client.doRequest('PUT', roomRoute(control) + '/send/m.room.encrypted/' + transaction,
       null, payload, 15_000);
     if (!result.event_id) return fail('Matrix did not confirm the Telegram Agent request.');
-    return { ok: true, message: 'Draft requested. Open the Telegram Agent thread to review the result and approve delivery.\n' +
+    return { ok: true, message: 'Draft requested. Open the Telegram Bridge thread to review the result and approve delivery.\n' +
       matrixLink(control, result.event_id) };
   }
   if (!database || !matrixRoom.test(space ?? '')) return fail('Activate Telegram Bridge before managing Telegram rooms.');
@@ -198,6 +198,7 @@ export async function telegramOfficeAction(input, options) {
     if (matches.length !== 1) return fail(matches.length ?
       'More than one room matches. Use its Matrix room ID or Telegram peer ID.' : 'No linked Telegram room matches.');
     if (linked.has(matches[0])) await client.doRequest('PUT', route + encodeURIComponent(matches[0]), null, {}, 15_000);
+    if (options.bridgeControl) await leaveTelegramPortal(client, matches[0]);
     return { ok: true, message: 'Room removed from the Telegram Space. Its history is retained. Draft delivery is unavailable while it is unlinked.' };
   }
   const group = groupLink.exec(target);
@@ -224,7 +225,7 @@ export async function telegramOfficeAction(input, options) {
   }
   if (!linked.has(room)) await client.doRequest('PUT', route + encodeURIComponent(room),
     null, { via: [domain], suggested: false }, 15_000);
-  return { ok: true, message: 'Room opened under Telegram → Rooms. Join if Element prompts you.\n' + matrixLink(room) };
+  return { ok: true, message: 'Chat opened under Telegram → People. Join if Element prompts you.\n' + matrixLink(room) };
 }
 
 export async function listenTelegramOffice(path, options, { privateLookups = false } = {}) {

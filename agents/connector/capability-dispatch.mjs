@@ -40,7 +40,7 @@ export function routingFor(catalog, legacy, owner, planner) {
 export async function decideDispatch(catalog, event, reply, actor, client, room) {
   if (!dynamicTurn(catalog, event)) return undefined;
   const controls = controlsFromReply(reply);
-  const mayReturn = catalog.current()?.contactPolicy && !event.managed && event.delegator;
+  const mayReturn = (catalog.current()?.contactPolicy || actor.startsWith('@helper:')) && !event.managed && event.delegator;
   if (!controls.handoff && !controls.gap && !mayReturn) return {};
   await catalog.refresh(true);
   const joined = new Set(await client.getJoinedRoomMembers(room));
@@ -52,7 +52,7 @@ export async function decideDispatch(catalog, event, reply, actor, client, room)
     if (turn?.handoff && !turn.returning && target && joined.has(target.id)) return {returnTo:target};
     return {};
   }
-  return evaluateDelegation(catalog, actor, joined, controls);
+  return actor.startsWith('@helper:') ? {} : evaluateDelegation(catalog, actor, joined, controls);
 }
 
 export function gapNotice(event, decision, relation) {

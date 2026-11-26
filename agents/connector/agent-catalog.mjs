@@ -21,14 +21,23 @@ export function matchingAgents(snapshot, wanted, sender) {
 }
 
 export function canContact(snapshot, sender, target) {
+  const source = snapshot.agents.find(agent => agent.id === sender);
+  if (source?.key === 'helper') return false;
+  if (target.key === 'helper') return source?.role === 'coordinator' && ['task-manager', 'manager'].includes(source.key);
   return !snapshot.contactPolicy || Boolean(snapshot.agents.find(agent => agent.id === sender)?.contacts?.includes(target.key));
 }
 
 export function acceptsContact(policy, event, recipient) {
   const snapshot = policy?.snapshot;
-  if (!snapshot?.contactPolicy) return true;
-  const target = snapshot.agents.find(agent => agent.id === recipient);
+  const target = snapshot?.agents.find(agent => agent.id === recipient);
   const turn = event.content?.['net.matrix_agents.turn'];
+  if (recipient.startsWith('@helper:')) {
+    return Boolean(target?.active && policy.fresh && dispatchable.has(target.status) &&
+      !turn?.returning && canContact(snapshot, event.sender, target) &&
+      turn?.handoff?.capability === 'constellation-support' && turn.handoff.resource === 'workspace:constellation-matrix' &&
+      matchingAgents(snapshot, requirement(turn.handoff), event.sender).some(agent => agent.id === recipient));
+  }
+  if (!snapshot?.contactPolicy) return true;
   // The connector verifies the original assignment chain before accepting a return.
   if (turn?.returning === true) return !turn.handoff && (!turn.managed || (turn.managed.version === 2 && turn.managed.manager === recipient));
   const wanted = requirement(turn?.handoff);
@@ -143,6 +152,6 @@ export function evaluateDelegation(catalog, sender, joined, controls) {
   if (!target) return { blocker: 'The selected agent does not cover the required capability and resource.' };
   if (!canContact(snapshot, sender, target)) return { blocker: 'The selected agent is outside your permitted contacts.' };
   if (!canDispatch(target, joined)) return { blocker: 'The selected agent is unavailable or outside the Agents room.' };
-  return snapshot.contactPolicy ? { target, requirement: wanted,
+  return snapshot.contactPolicy || target.key === 'helper' ? { target, requirement: wanted,
     ...(snapshot.policyRevision && { policyRevision: snapshot.policyRevision }) } : { target };
 }

@@ -183,8 +183,9 @@ def retire_locked(data, settings, registry, key, *, actor=None, approval=None):
                                for other, saved in entries.items())
         if pending or (pending is None and entry['active']) or another_stopping:
             return 'draining'
-        compose(data, '--profile', 'agents', 'stop', key, 'engine-' + key)
-        compose(data, '--profile', 'agents', 'rm', '-f', key, 'engine-' + key)
+        services = [key, 'engine-' + key] + (['helper-dm'] if key == 'helper' else [])
+        compose(data, '--profile', 'agents', 'stop', *services)
+        compose(data, '--profile', 'agents', 'rm', '-f', *services)
         if key == 'vps-manager' and settings['systemd']:
             from host_services import remove_host_broker
             remove_host_broker(settings)

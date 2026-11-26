@@ -108,6 +108,22 @@ try {
     new RegExp(encodeURIComponent(dm)));
   assert.match((await add('$reopen-group', 'https://t.me/c/456/789')).message, new RegExp(encodeURIComponent(supergroup)));
   assert.equal((await children()).filter(event => event.content.via?.length).length, 3);
+  const openedByPeer = new Map([[dm, 'user:1001'], [group, 'chat:123'], [supergroup, 'channel:456']]);
+  const joinedPortals = { space, domain, owner, guide, key: 'fixture', bridgeFetch: async target => {
+    const query = new URL(target);
+    const room = query.searchParams.get('room_id');
+    assert.equal(query.searchParams.get('user_id'), owner);
+    assert.equal(decodeURIComponent(query.pathname.split('/').at(-1)), openedByPeer.get(room));
+    await post('rooms/' + encodeURIComponent(room) + '/invite', { user_id: guide }, ownerToken);
+    return Response.json({ room });
+  } };
+  await reconcileTelegramRooms(client, reader, joinedPortals);
+  assert.deepEqual(new Set(await client.getJoinedRooms()), new Set([space, dm, group, supergroup]));
+  const removed = await telegramOfficeAction({ id: '$revoke-portal-agent', action: 'remove', target: group },
+    { ...office, bridgeControl: true });
+  assert.equal(removed.ok, true);
+  assert.ok(!(await client.getJoinedRooms()).includes(group));
+  assert.ok((await ownerClient.getJoinedRooms()).includes(group));
   console.log('Office opened a verified contact by username and numeric user ID, and opened and removed a group in Synapse.');
 } finally {
   await reader.end();

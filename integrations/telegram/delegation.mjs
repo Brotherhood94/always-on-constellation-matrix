@@ -169,7 +169,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     if (text === null) return false;
     const intent = telegramIntent(text);
     // Existing free-form updates and threaded follow-ups still use the original dispatcher when enabled.
-    if (!intent && settings.dot) return false;
+    if (!intent && (settings.bridgeControl || settings.dot)) return false;
     if (await checkRoom()) submit(event.event_id, false, intent ?? { action: 'clarify' });
     return true;
   }

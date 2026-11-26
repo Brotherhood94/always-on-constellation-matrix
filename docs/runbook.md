@@ -66,7 +66,7 @@ Find the deployment URLs and the password retrieval command for your data direct
 
 ## Connect Dot and Telegram
 
-For enabled integrations, open **Agents → VPS Alerts → Pinned messages → Connect Dot** and **Telegram → Telegram Agent → Pinned messages → Set up Telegram** in Element. Set up Dot with an OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. For Telegram, prepare the bridge, sign in from its Element DM, and verify a chat. Follow the Telegram guide to bind that chat to the drafting agent for drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
+For enabled integrations, open **Agents → VPS Alerts → Pinned messages → Connect Dot** and **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram** in Element. Set up Dot with an OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. For Telegram, prepare the bridge, sign in from its private Element room, and verify a chat. Follow the Telegram guide to bind that chat to the drafting agent for drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
 
 ## Boot and service placement
 

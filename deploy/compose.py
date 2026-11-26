@@ -94,6 +94,8 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                            'command': ['node', '/app/dot-bridge.mjs'],
                            'environment': {**matrix, **catalog, 'DOT_STATE': '/state'},
                            'volumes': [volume(state / 'dot/matrix', '/state'), volume(dashboard, '/catalog', True)]}
+        if settings['telegram']:
+            services['dot']['volumes'].append(volume(data / 'telegram/dot-requests', '/telegram-dot', True))
     telegram_coordinator = telegram_office_agent(registry) if settings['telegram'] else None
     for key, entry in sorted(registry['agents'].items()):
         if entry.get('placement') != 'local':
@@ -104,7 +106,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
         network['provider'] = {}
         directory = state / key
         workspace = [volume(directory / 'work', '/workspace')]
-        office_worker = key not in {'vps-manager', 'chief-of-staff'}
+        office_worker = key not in {'vps-manager', 'chief-of-staff', 'helper'}
         if office_worker:
             workspace.append(volume(data / 'desktop', '/workspace/desktop'))
         metadata = {'AGENT_USERNAME': key, 'AGENT_NAME': entry['name'], 'AGENT_MODEL': entry['model'],
@@ -186,7 +188,14 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
         if key == 'scouter' and entry.get('starter_role') == key:
             worker['networks'].append('provider')
             services[instance]['environment']['TEAM_ROLE'] = 'scouter'
-        if registry.get('team_version') == 2:
+        if key == 'helper':
+            support = volume(data / 'support', '/support', True)
+            worker['volumes'].append(support)
+            dm_volumes = [volume(directory / 'dm', '/state') if item['target'] == '/state' else item
+                          for item in worker['volumes'] if item['target'] != '/context-token']
+            services['helper-dm'] = {**worker, 'command': ['node', '/app/helper-dm.mjs'],
+                                     'volumes': dm_volumes, 'networks': ['clients', private]}
+        if registry.get('team_version') == 2 and key != 'helper':
             grant_mount = volume(directory / 'tool-credentials', '/tool-credentials', True)
             services[instance]['environment'].update(catalog, MATRIX_SERVER_NAME=server)
             services[instance]['volumes'] += [volume(dashboard, '/catalog', True), grant_mount]

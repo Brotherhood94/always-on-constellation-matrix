@@ -17,10 +17,12 @@ import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
 import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramTaskStatus } from './telegram-office.mjs';
+import { helperIdentity, supportEvidence } from './helper-support.mjs';
 import { telegramIntent, telegramMention } from './telegram-intent.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
   AGENT_STATE, AGENT_WORKSPACE, MATRIX_PLANNER, AGENT_INSTRUCTIONS } = process.env;
+const helper = AGENT_USERNAME === 'helper';
 const userId = `@${AGENT_USERNAME}:${MATRIX_SERVER_NAME}`;
 const telegramHandoff = process.env.TELEGRAM_HANDOFF_SOCKET;
 const catalog = createCatalog(MATRIX_SERVER_NAME, process.env.MATRIX_CATALOG_PATH);
@@ -63,8 +65,9 @@ async function connect() {
   client.on('room.message', (incomingRoom, event) => {
     const { names, policy } = routing();
     if (names[userId] !== AGENT_NAME) return;
+    if (helper && event.sender !== policy.coordinator) return;
     const accepted = acceptedMessage({ ...event, room_id: incomingRoom }, {
-      roomId, owner: MATRIX_OWNER, userId, agents: Object.keys(names), displayNames: names, activatedAt, planner: MATRIX_PLANNER, routingPolicy: policy,
+      roomId, owner: MATRIX_OWNER, userId, agents: Object.keys(names), displayNames: names, activatedAt, planner: MATRIX_PLANNER, routingPolicy: policy, acceptAttachments: !helper,
     });
     if (accepted) store.enqueue(accepted);
   });
@@ -195,7 +198,8 @@ async function deliver(client, event) {
     }
   }
   const { names: members } = routing();
-  const peers = Object.entries(members).filter(([id]) => id !== userId).map(([id, name]) => ({ id, name }));
+  const peers = Object.entries(members).filter(([id]) => id !== userId && id !== `@helper:${MATRIX_SERVER_NAME}`)
+    .map(([id, name]) => ({ id, name }));
   let requesterName;
   if (event.replyTo) {
     const member = await client.getRoomStateEventContent(roomId, 'm.room.member', event.replyTo).catch(error => {
@@ -210,10 +214,15 @@ async function deliver(client, event) {
     const delegatedToWorker = event.managed && event.managed.manager !== userId && !event.replyTo;
     const context = await managedContext(event, members, id => readEncryptedRoomMessage(client, roomId, id));
     const read = id => readEncryptedRoomMessage(client, roomId, id);
-    const raw = event.delegator && catalog.current()?.contactPolicy ? await read(event.id) : null;
-    const validChain = !event.delegator || !catalog.current()?.contactPolicy || (raw &&
+    const verifiedRoute = helper || catalog.current()?.contactPolicy;
+    const raw = event.delegator && verifiedRoute ? await read(event.id) : null;
+    const validChain = !event.delegator || !verifiedRoute || (raw &&
       await assignedHandoff(raw, event.request, event.thread, userId, members, routing().policy.activators, read));
-    if (!context || !validChain) {
+    const permitted = !helper || (raw?.sender === routing().policy.coordinator &&
+      ['@task-manager:', '@manager:'].some(prefix => raw?.sender?.startsWith(prefix)) &&
+      raw?.content?.[turnKey]?.handoff?.capability === 'constellation-support' &&
+      raw?.content?.[turnKey]?.handoff?.resource === 'workspace:constellation-matrix');
+    if (!context || !validChain || !permitted) {
       store.ignoreAssignment(event.id);
       console.warn('Ignored a Matrix handoff with an unverifiable Manager route.');
       return;
@@ -242,7 +251,7 @@ async function deliver(client, event) {
       const guidance = guidanceFor(catalog, event, userId, managed || legacyHandoff);
       if (desk && !event.replyTo && reply === null && !raw?.content?.[turnKey]?.returning) desk.assignment(event);
       const profile = catalog.current()?.agents.find(a => a.id === userId)?.persona;
-      const effectiveIdentity = profile ? [identity, profile.purpose, ...profile.duties, profile.working_style].join('\n') : identity;
+      const effectiveIdentity = helper ? helperIdentity : profile ? [identity, profile.purpose, ...profile.duties, profile.working_style].join('\n') : identity;
       const telegram = process.env.TELEGRAM_OFFICE_SOCKET && telegramOfficeCommand(event.body, AGENT_NAME, userId);
       if (reply === null && telegram) {
         const original = await read(event.id);
@@ -258,7 +267,8 @@ async function deliver(client, event) {
           });
         }
       } else if (reply === null) {
-        reply = await runTurn({ workspace, event: { ...context, files: paths }, store, identity:effectiveIdentity, guidance });
+        reply = await runTurn({ workspace, event: { ...context, files: paths }, store, identity:effectiveIdentity,
+          guidance: helper ? await supportEvidence(context.body) : guidance });
       }
       if (!issues.length && AGENT_USERNAME === 'reviewer' && !event.replyTo && !event.managed && !dynamicTurn(catalog, event)) {
         const delegator = peers.find(peer => event.delegator ? peer.id === event.delegator : peer.name === 'Analyst');
@@ -284,7 +294,7 @@ async function deliver(client, event) {
   await publishActivity(client, event.id);
   let outgoing = event.outgoing;
   if (!outgoing) {
-    const delivery = await deliverAttachments(client, event, reply);
+    const delivery = helper ? { ids: [], issues: [] } : await deliverAttachments(client, event, reply);
     const decision = await decideDispatch(catalog, event, reply, userId, client, roomId);
     const proposal = threadReply(event, reply, peers, requesterName, outcomeRecipients, delivery, decision);
     const content = process.env.CONTEXT_INTELLIGENCE_URL
@@ -390,7 +400,7 @@ while (true) {
     await catalog.refresh();
     client ??= await connect();
     desk?.tick();
-    toolCheck ??= checkTargetTools(catalog.current()?.agents.find(agent => agent.id === userId), store.db, writeExecutionEvidence)
+    if (!helper) toolCheck ??= checkTargetTools(catalog.current()?.agents.find(agent => agent.id === userId), store.db, writeExecutionEvidence)
       .catch(() => console.warn('Target tool verification will retry.')).finally(() => { toolCheck = undefined; });
     const event = store.next();
     if (event || store.nextReactionCleanup() || telegramHandoff && store.nextTelegram()) await deliverBetweenBackups(client, event);

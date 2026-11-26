@@ -9,7 +9,7 @@ import sys
 from urllib.parse import quote
 
 from bridge_config import database_uri, load, write
-from layout import CLIENT, direct_account_data, encoded, ensure_room, invite, join, missing, room_route
+from layout import CLIENT, encoded, ensure_room, invite, join, missing, reconcile_direct_account_data, room_route
 from provision import MatrixError, register, request
 
 
@@ -126,24 +126,15 @@ def device_token(root, token_path, domain, device, display):
     return token
 
 
-def ensure_layout(root, domain, owner, token):
+def telegram_space(root, domain, owner, token):
     agent = f'@telegram-agent:{domain}'
-    out = root / 'connector/config.json'
-    current = load(out) if out.exists() else {}
-    recorded = root / 'layout.json'
-    saved = load(recorded) if recorded.exists() else {}
-    dot = current.get('dot')
-    if dot is not None and dot != f'@dot:{domain}':
-        raise SystemExit('Unexpected Dot identity in Telegram Agent configuration.')
+    path = root / 'layout.json'
+    saved = load(path) if path.exists() else {}
     profile = f'{CLIENT}/profile/{encoded(agent)}/displayname'
     if (missing(profile, token) or {}).get('displayname') != 'Telegram Agent':
         request('PUT', profile, {'displayname': 'Telegram Agent'}, token)
-    control = create_room('telegram-control', 'Telegram Agent', token, domain, owner, agent, dot=dot,
-                          expected=current.get('controlRoom') or saved.get('control'))
-    space = create_room('telegram', 'Telegram', token, domain, owner, agent, space=True,
-                        expected=current.get('space') or saved.get('space'))
-    space_child(space, control, token, domain)
-    return space, control
+    return create_room('telegram', 'Telegram', token, domain, owner, agent, space=True,
+                       expected=saved.get('space'))
 
 
 def bootstrap(root):
@@ -152,7 +143,8 @@ def bootstrap(root):
     agent = f'@telegram-agent:{domain}'
     device = 'TELEGRAM_CONNECTOR'
     token = device_token(root, directory / 'matrix-token', domain, device, 'Telegram Connector')
-    space, control = ensure_layout(root, domain, owner, token)
+    layout = load(root / 'layout.json')
+    space, control = layout['space'], layout['bridge']
     out = directory / 'config.json'
     current = load(out) if out.exists() else {}
     model = os.environ.get('TELEGRAM_MODEL', 'gpt-6.2-sol')
@@ -164,7 +156,7 @@ def bootstrap(root):
               'ca': '/state/engine-ca.pem', 'workspace': '/instance/workspace',
               'revision': hashlib.sha256(backend_version.encode()).hexdigest()}
     current.update(domain=domain, owner=owner, agent=agent, device=device, matrixUrl='http://synapse:8008',
-                   bridgeBot=f'@telegrambot:{domain}', controlRoom=control, space=space, model=model,
+                   bridgeBot=f'@telegrambot:{domain}', controlRoom=control, bridgeControl=True, space=space, model=model,
                    auditDatabase=database_uri(root, 'matrix_telegram_audit'), engine=engine)
     write(out, current, uid=991)
 
@@ -183,27 +175,21 @@ def clear_space_link(room, kind, target, token):
         request('PUT', route, {}, token)
 
 
-def classify_telegram_rooms(space, owner, token, portals):
-    if not portals:
-        return
+def classify_telegram_rooms(space, owner, token, portals, *, bridge=None, legacy=None):
+    domain = owner.split(':', 1)[1]
+    bot = f'@telegrambot:{domain}'
     state = read_room_state(room_route(space), token)
     linked = {room for (kind, room), event in state.items()
               if kind == 'm.space.child' and event['content'].get('via')}
-    managed = linked.intersection(portals)
-    if not managed:
-        return
-    route = f'{CLIENT}/user/{encoded(owner)}/account_data/m.direct'
-    current = missing(route, token) or {}
-    updated = {}
-    for peer, rooms in current.items():
-        if not isinstance(rooms, list):
-            updated[peer] = rooms
+    assignments = {}
+    for room, peer in portals:
+        if room not in linked:
             continue
-        remaining = [room for room in rooms if not isinstance(room, str) or room not in managed]
-        if remaining or remaining == rooms:
-            updated[peer] = remaining
-    if updated != current:
-        request('PUT', route, updated, token)
+        kind, _, value = peer.partition(':')
+        if kind in {'user', 'chat', 'channel'} and value.isascii() and value.isdecimal():
+            assignments[room] = f'@telegram_{value}:{domain}' if kind == 'user' else bot
+    assignments.update({room: None for room in (bridge, legacy) if room})
+    reconcile_direct_account_data(owner, assignments, token)
 
 
 def binding_rooms(root):
@@ -215,84 +201,136 @@ def binding_rooms(root):
         return [row[0] for row in connection.execute('SELECT room FROM binding ORDER BY id')] if exists else []
 
 
-def is_bridge_dm(room, owner, bot, token, *, allow_owner_only=False):
+def is_bridge_dm(room, owner, bot, token, *, agent=None, allow_owner_only=False):
     try:
         state = read_room_state(room_route(room), token)
     except MatrixError as error:
         if error.code not in {'M_FORBIDDEN', 'M_NOT_FOUND'}:
             raise
         return False
+    data = {kind: event['content'] for (kind, key), event in state.items() if not key}
     active = {user: event['content'].get('membership') for (kind, user), event in state.items()
               if kind == 'm.room.member' and event['content'].get('membership') in {'invite', 'join'}}
-    return (state.get(('m.room.join_rules', ''), {}).get('content', {}).get('join_rule') == 'invite'
-            and state.get(('m.room.encryption', ''), {}).get('content', {}).get('algorithm') == 'm.megolm.v1.aes-sha2'
-            and ('m.room.tombstone', '') not in state and active.get(owner) == 'join'
-            and (set(active) == {owner, bot} or allow_owner_only and set(active) == {owner}))
+    levels = data.get('m.room.power_levels', {})
+    user_level = levels.get('users', {}).get(owner, levels.get('users_default', 0))
+    event_levels = levels.get('events', {})
+    state_level = levels.get('state_default', 50)
+    can_manage = (state.get(('m.room.create', ''), {}).get('sender') == owner or
+                  user_level >= max(levels.get('invite', 0), *(event_levels.get(kind, state_level)
+                  for kind in ('m.room.power_levels', 'm.room.name', 'm.space.parent'))))
+    return (data.get('m.room.create', {}).get('m.federate') is False
+            and data.get('m.room.join_rules', {}).get('join_rule') == 'invite'
+            and data.get('m.room.encryption', {}).get('algorithm') == 'm.megolm.v1.aes-sha2'
+            and 'm.room.tombstone' not in data and active.get(owner) == 'join'
+            and can_manage and set(active) <= {owner, bot, agent} and (bot in active or allow_owner_only))
 
 
-def bridge_dm(domain, owner, token, recorded, *, select):
-    bot = f'@telegrambot:{domain}'
-    alias = 'telegram-bridge-dm'
-    managed = missing(f'{CLIENT}/directory/room/{encoded(f"#{alias}:{domain}")}', token)
-    if recorded or managed:
-        room = recorded or managed['room_id']
-        if not is_bridge_dm(room, owner, bot, token, allow_owner_only=bool(managed and managed['room_id'] == room)):
-            raise ValueError('The recorded Telegram Bridge DM no longer has the expected audience or encryption.')
-    else:
+def bridge_dm(domain, owner, token, recorded, *, select, active=True):
+    bot, agent = f'@telegrambot:{domain}', f'@telegram-agent:{domain}'
+    room = recorded
+    if not room:
+        alias = f'{CLIENT}/directory/room/{encoded(f"#telegram-bridge-dm:{domain}")}'
+        room = (missing(alias, token) or {}).get('room_id')
+    if not room and active:
         directs = missing(f'{CLIENT}/user/{encoded(owner)}/account_data/m.direct', token) or {}
         candidates = [room for room in dict.fromkeys(directs.get(bot, [])) if is_bridge_dm(room, owner, bot, token)]
-        if candidates:
-            room = candidates[0] if len(candidates) == 1 else select(candidates)
+        if len(candidates) > 1:
+            room = select(candidates)
             if room is None:
                 return None
-        else:
-            room = ensure_room(domain, alias, 'Telegram Bridge', token, direct=bot)
-    invite(room, bot, token)
-    direct_account_data(owner, bot, room, token)
+        elif candidates:
+            room = candidates[0]
+    if not room or not is_bridge_dm(room, owner, bot, token, agent=agent, allow_owner_only=True):
+        room = ensure_room(domain, 'telegram-workspace', 'Telegram Bridge', token, pin_user=agent)
+    if active:
+        invite(room, bot, token)
+    invite(room, agent, token)
     return room
 
 
+def verify_cutover(root, previous, bridge):
+    database = root / 'connector/telegram.sqlite3'
+    if not previous or previous == bridge or not database.is_file():
+        return
+    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
+        if (connection.execute("SELECT 1 FROM sqlite_master WHERE name='draft'").fetchone()
+                and connection.execute("SELECT 1 FROM draft WHERE state IN ('publishing','matrix_accepted','unknown')").fetchone()):
+            raise ValueError('Reconcile unconfirmed Telegram deliveries before moving approvals to Telegram Bridge.')
+
+
 def reconcile_layout(root, domain, owner, operator, agents, *, office=None, bridge_active, select):
+    agent = f'@telegram-agent:{domain}'
     agent_token = device_token(root, root / 'connector/matrix-token', domain, 'TELEGRAM_CONNECTOR', 'Telegram Connector')
-    space, control = ensure_layout(root, domain, owner, agent_token)
+    space = telegram_space(root, domain, owner, agent_token)
     path = root / 'layout.json'
     previous = load(path) if path.exists() else {}
-    if previous.get('space', space) != space or previous.get('control', control) != control:
-        raise ValueError('The saved Telegram rooms do not match the Matrix layout.')
+    config_path = root / 'connector/config.json'
+    config = load(config_path) if config_path.exists() else {}
+    old_control = config.get('controlRoom') or previous.get('control')
+    bridge = bridge_dm(domain, owner, operator, previous.get('bridge'), select=select, active=bridge_active)
+    if bridge is None:
+        raise ValueError('Select a Telegram Bridge room to continue the layout repair.')
+    verify_cutover(root, old_control, bridge)
+    legacy = previous.get('legacy') or (old_control if old_control != bridge else None)
     join(space, owner, operator)
-    join(control, owner, operator)
+    join(bridge, agent, agent_token)
+    route = room_route(bridge) + '/state/'
+    levels = request('GET', route + 'm.room.power_levels', token=operator)
+    users = levels.setdefault('users', {})
+    events = levels.setdefault('events', {})
+    before = (users.get(agent), events.get('m.room.pinned_events'))
+    users[agent] = max(users.get(agent, 0), 10)
+    events['m.room.pinned_events'] = 10
+    if before != (users[agent], events['m.room.pinned_events']):
+        request('PUT', route + 'm.room.power_levels', levels, operator)
+    if (missing(route + 'm.room.name', operator) or {}).get('name') != 'Telegram Bridge':
+        request('PUT', route + 'm.room.name', {'name': 'Telegram Bridge'}, operator)
     if office:
         state = read_room_state(room_route(office), operator)
         content = {kind: event['content'] for (kind, key), event in state.items() if not key}
-        if (office in {agents, space, control} or content.get('m.room.create', {}).get('m.federate') is not False
+        if (office in {agents, space, bridge, legacy} or content.get('m.room.create', {}).get('m.federate') is not False
                 or content.get('m.room.join_rules', {}).get('join_rule') != 'invite'
                 or content.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2'
                 or 'm.room.tombstone' in content or membership(office, owner, operator) != 'join'):
             raise ValueError('Telegram Agent can only join the private encrypted Office room.')
-        agent = f'@telegram-agent:{domain}'
         invite(office, agent, operator)
         join(office, agent, agent_token)
     guide = root / 'guide'
     device_token(root, guide / 'token', domain, 'TELEGRAM_SETUP', 'Telegram Setup Guide')
-    write(guide / 'room-id', (control + '\n').encode(), uid=991)
+    if legacy and legacy != bridge:
+        clear_space_link(space, 'child', legacy, agent_token)
+        clear_space_link(agents, 'child', legacy, operator)
+        clear_space_link(legacy, 'parent', agents, agent_token)
+        clear_space_link(legacy, 'parent', space, agent_token)
+        source = (missing(room_route(legacy) + '/state/m.room.pinned_events', agent_token) or {}).get('pinned', [])
+        receipt_path = guide / 'shortcut-pins.json'
+        receipt = load(receipt_path) if receipt_path.exists() else {}
+        entry = receipt.get('entries', {}).get('telegram-setup', {})
+        pins = {entry.get('event'), *receipt.get('replaced', [])}
+        remaining = [event for event in source if event not in pins]
+        if remaining != source:
+            request('PUT', room_route(legacy) + '/state/m.room.pinned_events', {'pinned': remaining}, agent_token)
+        write(guide / 'legacy-room-id', (legacy + '\n').encode(), uid=991)
+    if previous.get('bridge') and previous['bridge'] != bridge:
+        clear_space_link(space, 'child', previous['bridge'], agent_token)
+    write(guide / 'room-id', (bridge + '\n').encode(), uid=991)
     write(guide / 'space-id', (space + '\n').encode(), uid=991)
-    bridge = previous.get('bridge')
-    portals = binding_rooms(root)
-    if bridge_active:
-        bridge = bridge_dm(domain, owner, operator, bridge, select=select)
-        if bridge:
-            write(path, {'space': space, 'control': control, 'bridge': bridge})
-    for room in dict.fromkeys([control, *portals, *([bridge] if bridge else [])]):
-        space_child(space, room, agent_token, domain, preserve_removal=room not in {control, bridge})
+    for room in dict.fromkeys([bridge, *binding_rooms(root)]):
+        space_child(space, room, agent_token, domain, preserve_removal=room != bridge)
         clear_space_link(agents, 'child', room, operator)
     clear_space_link(agents, 'child', space, operator)
-    for room in (space, control):
-        clear_space_link(room, 'parent', agents, agent_token)
-    if bridge:
-        clear_space_link(bridge, 'parent', agents, operator)
-    if not path.exists():
-        write(path, {'space': space, 'control': control})
-    return {'space': space, 'control': control, 'bridge': bridge}
+    clear_space_link(space, 'parent', agents, agent_token)
+    clear_space_link(bridge, 'parent', agents, operator)
+    classify_telegram_rooms(space, owner, operator, [], bridge=bridge, legacy=legacy)
+    if config:
+        config.update(controlRoom=bridge, bridgeControl=True, space=space)
+        config.pop('dot', None)
+        if legacy and legacy != bridge:
+            config['legacyControlRoom'] = legacy
+        write(config_path, config, uid=991)
+    result = {'space': space, 'control': bridge, 'bridge': bridge, **({'legacy': legacy} if legacy else {})}
+    write(path, result)
+    return result
 
 
 def channel_credentials(root):
@@ -310,6 +348,17 @@ def configure_dot(root, dot_state, operation):
     dot = f'@dot:{domain}'
     if owner in (dot, agent) or agent != f'@telegram-agent:{domain}' or config.get('dot', dot) != dot:
         raise SystemExit('Unexpected local identities in the Telegram configuration.')
+    if config.get('bridgeControl'):
+        destination = dot_state / 'telegram-control.json'
+        if operation == 'configure':
+            existing = load(destination) if destination.is_file() else {}
+            write(destination, {**existing, 'room': control, 'owner': owner, 'local': True}, uid=991)
+        elif operation == 'leave':
+            destination.unlink(missing_ok=True)
+        elif operation != 'join' or not destination.is_file() or not load(destination).get('local'):
+            raise SystemExit('Configure the local Dot request channel before enabling Telegram tools.')
+        print('Dot uses the local request channel. Telegram Bridge membership is private.')
+        return
     token = (directory / 'matrix-token').read_text().strip()
     route = '/_matrix/client/v3/rooms/' + quote(control, safe='')
     state = read_room_state(route, token)

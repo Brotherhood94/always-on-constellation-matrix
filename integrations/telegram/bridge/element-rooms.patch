@@ -1,5 +1,33 @@
 --- a/bridgev2/portal.go
 +++ b/bridgev2/portal.go
-@@ -5569 +5569 @@
--		IsDirect:           portal.RoomType == database.RoomTypeDM,
-+		IsDirect:           false, // Show Telegram portals under Rooms in Element.
+@@ -4975,0 +4976,5 @@
++	peer := string(portal.PortalKey.ID)
++	isTelegramPortal := portal.ParentKey.ID == "" && !portal.UserBlocked && !portal.MessageRequest &&
++		(strings.HasPrefix(peer, "user:") || strings.HasPrefix(peer, "chat:") || strings.HasPrefix(peer, "channel:"))
++	var directInviter MatrixAPI
++	var ownerMember *ChatMember
+@@ -5009,0 +5015,7 @@
++			if isTelegramPortal && source != nil && extraUserID == source.UserMXID && portal.Receiver == source.ID {
++				wrappedContent.Raw["is_direct"] = true
++				thisEvtSender = portal.Bridge.Bot
++				if directInviter != nil {
++					thisEvtSender = directInviter
++				}
++			}
+@@ -5104,0 +5117,4 @@
++			if portal.RoomType == database.RoomTypeDM && member.Sender != "" && member.Sender == portal.OtherUserID &&
++				(member.Membership == "" || member.Membership == event.MembershipJoin) {
++				directInviter = intent
++			}
+@@ -5107 +5123,5 @@
+-			syncUser(extraUserID, member, nil)
++			if isTelegramPortal && source != nil && extraUserID == source.UserMXID && portal.Receiver == source.ID {
++				ownerMember = &member
++			} else {
++				syncUser(extraUserID, member, nil)
++			}
+@@ -5109,0 +5130,4 @@
++	if ownerMember != nil {
++		// Invite after the other participant's ghost has joined, so Element can map the chat to it.
++		syncUser(source.UserMXID, *ownerMember, nil)
++	}

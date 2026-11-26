@@ -7,7 +7,7 @@ const eventID = /^\$[^\s\x00-\x1f]{1,254}$/u;
 const loginID = /^[1-9][0-9]{0,18}$/u;
 const portalID = /^(user|chat|channel):[1-9][0-9]{0,18}$/u;
 const roomID = /^![^\s\x00-\x1f]{1,254}$/u;
-const modes = new Set(['manual', 'draft', 'auto']);
+const modes = new Set(['manual', 'draft']);
 const minimum = 60_000;
 const day = 24 * 60 * minimum;
 const maxAge = 15 * minimum;
@@ -43,8 +43,6 @@ export function controlCommand({ room, sender, type, content, encrypted }, confi
   }
   if (content?.msgtype !== 'm.text' ||
       content['m.relates_to'] || typeof content.body !== 'string') return null;
-  const match = /^telegram (approve|reject) ([a-f0-9-]{36}) ([1-9][0-9]{0,4})$/u.exec(content.body);
-  if (match) return { action: match[1], draft: match[2], version: Number(match[3]) };
   const request = /^telegram draft ([a-z][a-z0-9-]{0,39}) (\$[^\s\x00-\x1f]{1,254})$/u.exec(content.body);
   if (request) return { action: 'draft', binding: request[1], source: request[2] };
   const pause = /^telegram pause(?: ([a-z][a-z0-9-]{0,39}))?$/u.exec(content.body);
@@ -349,23 +347,17 @@ export class TelegramStore {
             source.context !== binding.context || source.at < now - maxAge) return false;
         return this.enqueue(binding, source.event, now);
       }
-      const review = command.action === 'review'
-        ? this.get('SELECT * FROM draft_review WHERE event=? AND closed=0', command.poll)
-        : null;
-      if (command.action === 'review' && !review) return false;
-      const draft = this.draft(review?.draft ?? command.draft);
-      if (!draft || draft.version !== (review?.version ?? command.version) || (review && review.hash !== draft.hash) ||
+      if (command.action !== 'review') return false;
+      const review = this.get('SELECT * FROM draft_review WHERE event=? AND closed=0', command.poll);
+      if (!review) return false;
+      const draft = this.draft(review.draft);
+      if (!draft || draft.version !== review.version || review.hash !== draft.hash ||
           draft.state !== 'awaiting_approval' || !this.current(draft, now)) return false;
-      let decision = command.action;
-      if (review) {
-        if (command.choice === reviewAnswer(draft, 'approve')) decision = 'approve';
-        else if (command.choice === reviewAnswer(draft, 'reject')) decision = 'reject';
-        else return false;
-      }
+      const decision = ['approve', 'reject'].find(action => command.choice === reviewAnswer(draft, action));
       if (decision === 'reject') {
         this.run(`UPDATE draft SET state='cancelled' WHERE id=?`, draft.id);
       } else if (decision === 'approve') {
-        const approval = JSON.stringify({ event: event.event, sender: event.sender, hash: draft.hash, version: draft.version,
+        const approval = JSON.stringify({ event: event.event, sender: event.sender, poll: review.event, hash: draft.hash, version: draft.version,
           target: draft.target, room: draft.room, generation: draft.generation, revision: draft.revision,
           context: draft.context, expiry: draft.until, at: now });
         this.run(`UPDATE draft SET state='ready', approval=? WHERE id=?`, approval, draft.id);
@@ -421,7 +413,7 @@ export class TelegramStore {
 
   insertDraft(binding, body, source, now, { control, recipient, reply } = {}) {
     const id = randomUUID();
-    const state = !control && binding.mode === 'auto' ? 'ready' : 'awaiting_approval';
+    const state = 'awaiting_approval';
     this.run(`INSERT INTO draft (id,binding,generation,room,target,revision,context,source,version,body,hash,until,state,txn,
       operator_approval,control_event,recipient,reply_event) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id, binding.id, binding.generation, binding.room, binding.target, binding.revision, binding.context, source,
@@ -435,6 +427,40 @@ export class TelegramStore {
     if (!draft || draft.version !== version || !eventID.test(event)) return;
     this.run('INSERT OR IGNORE INTO draft_review (event, draft, version, hash) VALUES (?, ?, ?, ?)',
       event, draft.id, draft.version, draft.hash);
+  }
+
+  migrateReviews(room, legacyRoom, anchors, now) {
+    return this.atomic(() => {
+      if (this.setting('review_room') === room) return;
+      if (this.get("SELECT 1 FROM draft WHERE state IN ('publishing','matrix_accepted','unknown')")) {
+        throw new Error('Reconcile Telegram delivery receipts before changing the review room.');
+      }
+      this.run("UPDATE binding SET mode='draft' WHERE mode='auto'");
+      this.expire(now);
+      if (legacyRoom && legacyRoom !== room) {
+        this.run("UPDATE draft_review SET closed=1");
+        this.run("UPDATE control_request SET status='cancelled', payload=NULL, result=NULL WHERE status IN ('queued','ready')");
+      }
+      for (const draft of this.all("SELECT * FROM draft WHERE state IN ('ready','awaiting_approval')")) {
+        if (!this.current(draft, now)) {
+          this.run("UPDATE draft SET state='stale', notified='stale' WHERE id=?", draft.id);
+          continue;
+        }
+        const event = legacyRoom ? anchors.get(draft.control_event) : draft.control_event;
+        if (legacyRoom && event) {
+          const request = this.get('SELECT * FROM control_request WHERE event=?', draft.control_event);
+          this.run(`INSERT OR IGNORE INTO control_request(event, requested, status, binding, generation, revision,
+            thread_root, requires_dot) VALUES (?, ?, 'done', ?, ?, ?, ?, 0)`, event, request?.requested ?? now,
+          draft.binding, draft.generation, draft.revision, event);
+          if (this.get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='telegram_task'")) {
+            this.run('UPDATE telegram_task SET thread=? WHERE thread=?', event, draft.control_event);
+          }
+        }
+        this.run(`UPDATE draft SET state='awaiting_approval', approval=NULL, notified=NULL, version=version+1,
+          control_event=?, ciphertext=NULL, retry_at=0 WHERE id=?`, event ?? null, draft.id);
+      }
+      this.set('review_room', room);
+    });
   }
 
   pendingReviewClose() {
@@ -458,13 +484,14 @@ export class TelegramStore {
       if (!draft || draft.state !== 'ready' || !this.current(draft, now)) return false;
       const binding = this.binding(draft.binding);
       if (binding.target !== draft.target || binding.room !== draft.room || digest(draft.body) !== draft.hash) return false;
-      if (binding.mode === 'draft' || draft.operator_approval) {
-        const approval = JSON.parse(draft.approval ?? '{}');
-        if (approval.sender !== JSON.parse(binding.target).operator || approval.hash !== draft.hash ||
-          approval.version !== draft.version || approval.room !== draft.room ||
-          approval.target !== draft.target || approval.generation !== draft.generation || approval.revision !== draft.revision ||
-          approval.context !== draft.context || approval.expiry !== draft.until) return false;
-      } else if (binding.mode !== 'auto') return false;
+      const approval = JSON.parse(draft.approval ?? '{}');
+      const review = this.get('SELECT event FROM draft_review WHERE draft=? AND version=? AND hash=?',
+        draft.id, draft.version, draft.hash);
+      if (!review || approval.poll !== review.event ||
+        approval.sender !== JSON.parse(binding.target).operator || approval.hash !== draft.hash ||
+        approval.version !== draft.version || approval.room !== draft.room ||
+        approval.target !== draft.target || approval.generation !== draft.generation || approval.revision !== draft.revision ||
+        approval.context !== draft.context || approval.expiry !== draft.until) return false;
       if (draft.ciphertext && draft.ciphertext !== ciphertext) throw new Error('Refusing to replace prepared ciphertext.');
       this.run(`UPDATE draft SET state='publishing', attempted=?, ciphertext=?, attempts=attempts+1 WHERE id=?`, now, ciphertext, id);
       return true;

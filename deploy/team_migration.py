@@ -167,7 +167,8 @@ def migrate(data, args):
                 local = [k for k,e in registry['agents'].items() if e['placement']=='local']
                 up(data,*('engine-'+k for k in local))
                 sync_workshop(settings,data,registry)
-                up(data,*(k for k in local if registry['agents'][k]['active']))
+                active = [key for key in local if registry['agents'][key]['active']]
+                up(data, *active, *(['helper-dm'] if 'helper' in active else []))
                 service_units(settings,data,broker=registry['agents'].get('vps-manager',{}).get('active',False))
                 configure_network(settings,data,settings)
                 journal['phase'] = 'retire'

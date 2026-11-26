@@ -22,9 +22,9 @@ class StarterTeamTests(unittest.TestCase):
         registry['agents']['chief-of-staff'] = {'active':True}
         self.assertFalse(authorized_actor(settings,registry,'chief-of-staff'))
 
-    def test_new_operator_can_confirm_five_and_see_each_persona(self):
+    def test_new_operator_can_confirm_starter_team_and_see_each_persona(self):
         presets = installer.starter_profiles()
-        self.assertEqual(set(presets), {'task-manager', 'hiring-manager', 'coach', 'scouter', 'vps-manager'})
+        self.assertEqual(set(presets), {'task-manager', 'hiring-manager', 'coach', 'scouter', 'vps-manager', 'helper'})
         with patch('agent_picker.terminal_picker', return_value=None), patch('builtins.input', return_value=''), patch('builtins.print'):
             self.assertEqual(select_agents(presets), list(presets))
         roster = {'local_server': 'office.example', 'team_version': 2, 'agents': {}}
@@ -34,6 +34,9 @@ class StarterTeamTests(unittest.TestCase):
         catalog = document(roster, [], 'office.example', 1)
         rows = {row['key']: row for row in catalog['agents']}
         self.assertEqual(set(rows['coach']['contacts']), {'task-manager', 'hiring-manager', 'scouter'})
+        self.assertIn('helper', rows['task-manager']['contacts'])
+        self.assertEqual(rows['helper']['contacts'], [])
+        self.assertNotIn('helper', rows['scouter']['contacts'])
         for row in rows.values():
             self.assertTrue(row['persona']['duties'])
             self.assertTrue(row['persona']['working_style'])
@@ -46,7 +49,7 @@ class StarterTeamTests(unittest.TestCase):
         registry = {'agents':entries}
         plan = preview(registry, ['reviewer'])
         self.assertEqual(plan['task_manager'],'manager')
-        self.assertEqual(set(plan['add']),{'hiring-manager','coach','scouter'})
+        self.assertEqual(set(plan['add']),{'hiring-manager','coach','scouter','helper'})
         self.assertEqual(plan['retain'],['coder','manager','vps-manager'])
         self.assertTrue(plan['archive_chief'])
         self.assertIn('reviewer',entries)

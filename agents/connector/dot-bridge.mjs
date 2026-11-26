@@ -143,7 +143,7 @@ async function publish({ task_id, title, plan, first_agent }) {
   await catalog.refresh(true);
   if (catalog.configured && !catalog.fresh()) return failure('The agent catalog is unavailable or stale.');
   const target = catalog.configured ? registered(first_agent) : agents[first_agent];
-  if (!target || (catalog.configured && !canDispatch(target, new Set(await client.getJoinedRoomMembers(roomId))))) {
+  if (!target || first_agent === 'helper' || (catalog.configured && !canDispatch(target, new Set(await client.getJoinedRoomMembers(roomId))))) {
     return failure('The selected agent is unregistered, unavailable or outside Office.');
   }
   if (publishing) return failure('Another plan is being posted. Retry with the same task ID.');
@@ -190,7 +190,7 @@ function mcpServer() {
     await catalog.refresh(true);
     if (!catalog.fresh() || !client) return failure('The agent catalog or Agents membership is unavailable.');
     const joined = new Set(await client.getJoinedRoomMembers(roomId));
-    return response({ agents: catalog.current().agents.map(agent => ({ ...agent, selectable: canDispatch(agent, joined) })) });
+    return response({ agents: catalog.current().agents.map(agent => ({ ...agent, selectable: agent.key !== 'helper' && canDispatch(agent, joined) })) });
   });
   server.registerTool('publish_plan', {
     description: 'Post a plan to the private encrypted Office room and explicitly mention one starting agent. Returns the task ID and thread link. Reuse the same task ID and content when retrying.',

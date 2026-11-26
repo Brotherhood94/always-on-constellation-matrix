@@ -59,11 +59,13 @@ services:
       TELEGRAM_GUIDE_SOCKET: /guide-actions/actions.sock
       TELEGRAM_HANDOFF_SOCKET: /telegram-handoffs/requests.sock
       TELEGRAM_MCP_SOCKET: /telegram-mcp/tools.sock
+      TELEGRAM_DOT_SOCKET: /telegram-dot/requests.sock
     volumes:
       - ${TELEGRAM_DATA:?}/connector:/state
       - ${TELEGRAM_DATA:?}/guide-actions:/guide-actions:ro
       - ${TELEGRAM_DATA:?}/handoffs:/telegram-handoffs
       - ${TELEGRAM_DATA:?}/mcp:/telegram-mcp
+      - ${TELEGRAM_DATA:?}/dot-requests:/telegram-dot
       - ${TELEGRAM_CONTEXT_TOKEN:-/dev/null}:/context-token:ro
   telegram-engine:
     <<: *worker

@@ -23,7 +23,7 @@ export function addressedRequest(event, settings) {
     if (compose && boundedText(compose[2], 120) && boundedText(compose[3], 3500)) {
       return { action: 'compose', destination: compose[2].trim(), chatType: compose[1].toLowerCase(), text: compose[3] };
     }
-    if (!settings.dot || !mentioned) return null;
+    if ((!settings.bridgeControl && !settings.dot) || !mentioned) return null;
     if (relation && (relation.rel_type !== 'm.thread' || !eventId.test(relation.event_id) || relation.event_id === event.event_id)) return null;
     const question = content.body.replace(/^(?:>[^\n]*\n)+\n/u, '')
       .replace(/^\s*@?telegram[ -]agent(?::[a-z0-9.-]+)?[,:]?\s*/iu, '').trim();
@@ -36,7 +36,7 @@ export function addressedRequest(event, settings) {
   const request = content[telegramRequest];
   const guide = sender === settings.agent && request?.origin === 'office' && request.action === 'compose' &&
     request.source_event === undefined;
-  const dot = settings.dot && sender === settings.dot && mentioned && request?.origin !== 'office';
+  const dot = !settings.bridgeControl && settings.dot && sender === settings.dot && mentioned && request?.origin !== 'office';
   if ((!guide && !dot) || relation || !request || !boundedText(request.destination, 120) ||
       !['direct', 'group'].includes(request.chat_type)) return null;
 
@@ -102,6 +102,18 @@ function html(value) {
 
 export function controlThread(root, reply = root) {
   return { rel_type: 'm.thread', event_id: root, is_falling_back: true, 'm.in_reply_to': { event_id: reply } };
+}
+
+export function operatorNotice(owner, body, preview) {
+  const lines = value => html(value).replaceAll('\n', '<br>');
+  return {
+    msgtype: 'm.text',
+    body: [owner, body, ...(preview ? ['', preview.text, '', preview.footer] : [])].join('\n'),
+    format: 'org.matrix.custom.html',
+    formatted_body: '<a href="' + matrixLink(owner) + '">' + html(owner.split(':')[0].slice(1)) +
+      '</a><br>' + lines(body) + (preview ? '<pre><code>' + html(preview.text) + '</code></pre>' + lines(preview.footer) : ''),
+    'm.mentions': { user_ids: [owner] },
+  };
 }
 
 export function updateReply(settings, requestEvent, body, sources = [], thread = requestEvent) {

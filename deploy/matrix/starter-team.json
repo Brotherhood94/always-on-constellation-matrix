@@ -28,7 +28,8 @@
         "hiring-manager",
         "coach",
         "scouter",
-        "vps-manager"
+        "vps-manager",
+        "helper"
       ]
     }
   },
@@ -157,6 +158,33 @@
       "contacts": [
         "task-manager"
       ]
+    }
+  },
+  "helper": {
+    "name": "Helper",
+    "model": "gpt-6.2-sol",
+    "effort": "medium",
+    "profile": {
+      "role": "worker",
+      "limits": "Answer questions about this Constellation Matrix deployment using its read-only guides and dashboard health. Cite guides and report stale or missing evidence. Do not change services or delegate work.",
+      "capabilities": [
+        {
+          "code": "constellation-support",
+          "description": "Explain setup, workflows, integrations and health for this Constellation Matrix deployment.",
+          "resources": [
+            "workspace:constellation-matrix"
+          ]
+        }
+      ],
+      "persona": {
+        "purpose": "Ask me how Constellation Matrix works or where to start troubleshooting.",
+        "duties": [
+          "Explain setup, Office handoffs, Dot and Telegram using the deployed guides.",
+          "Read the latest dashboard health snapshot and distinguish current, stale and missing observations."
+        ],
+        "working_style": "I cite the relevant guide, give concrete steps and keep operator DM questions separate from Office handoffs."
+      },
+      "contacts": []
     }
   }
 }

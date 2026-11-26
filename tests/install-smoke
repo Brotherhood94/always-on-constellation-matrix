@@ -246,7 +246,7 @@ load = lambda path: json.loads(path.read_text())
 roster = load(data / 'agents.json')
 targets = load(data / 'workshop-management/targets.json')
 assert roster['agents']['manager']['starter_role'] == 'task-manager'
-assert set(targets) == {'manager','vps-manager','coach','scouter','hiring-manager','coder'}
+assert set(targets) == {'manager','vps-manager','coach','scouter','hiring-manager','coder','helper'}
 assert targets['manager']['target'] == load(work / 'initial-targets.json')['manager']['target']
 private = {(data / 'state' / key / 'matrix/control-room-id').read_text() for key in ('hiring-manager','coach','scouter')}
 assert len(private) == 3
@@ -259,6 +259,7 @@ assert [r['sequence'] for r in report['changes']] == list(range(report['latest']
 after = report['changes'][0]
 assert after['reason'] == 'starter-team migration'
 assert ['manager', 'scouter'] in after['added'] and 'scouter' in after['joined']
+assert ['manager', 'helper'] in after['added'] and 'helper' in after['joined']
 assert any(r['reason'] == 'retirement completed' and 'fixture-worker' in r['left'] for r in report['changes'])
 assert load(data / 'dashboard/agents.json')['policyRevision'] == after['id']
 print('Whole-stack starter-team migration reused the original coordinator and registered all replacement Workshop targets.')

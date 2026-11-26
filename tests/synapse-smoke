@@ -25,6 +25,9 @@ config = yaml.safe_load(path.read_text())
 config.update(listeners=[{'type': 'http', 'port': 8008, 'tls': False, 'resources': [{'names': ['client']}]}],
               registration_shared_secret='synthetic-test-registration-secret',
               rc_message={'per_second': 25, 'burst_count': 100},
+              rc_joins={'local': {'per_second': 25, 'burst_count': 100}, 'remote': {'per_second': 25, 'burst_count': 100}},
+              rc_joins_per_room={'per_second': 25, 'burst_count': 100},
+              rc_invites={key: {'per_second': 25, 'burst_count': 100} for key in ('per_room', 'per_user', 'per_issuer')},
               rc_login={'address': {'per_second': 50, 'burst_count': 50}, 'account': {'per_second': 50, 'burst_count': 50}})
 path.write_text(json.dumps(config))
 PY
@@ -53,8 +56,20 @@ if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/operations.mjs
 fi
 docker exec -u 0 -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
-  -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/workspace/deploy \
+  -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/workspace/deploy -e MATRIX_HELPER_SMOKE="${MATRIX_HELPER_SMOKE:-0}" \
   "$name" python -B /workspace/tests/team_migration_fixture.py
+if [[ ${MATRIX_HELPER_SMOKE:-0} == 1 ]]; then
+  desk_tls=$(mktemp -d)
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+    -keyout "$desk_tls/key.pem" -out "$desk_tls/cert.pem" >/dev/null 2>&1
+  docker run --rm --network "$name" --user 0:0 --entrypoint node \
+    -v "$name:/fixture:ro" -v "$desk_tls:/helper-tls:ro" -v "$src/tests/helper-fixture.mjs:/app/helper-fixture.mjs:ro" \
+    -v "$src/agents/connector/helper-dm.mjs:/app/helper-dm.mjs:ro" \
+    -v "$src/agents/connector/helper-support.mjs:/app/helper-support.mjs:ro" \
+    "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/helper-fixture.mjs
+  rm -rf -- "$desk_tls"
+  unset desk_tls
+fi
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 || ${MATRIX_TEAM_DESKS_SMOKE:-0} == 1 ]]; then
   desk_tls=$(mktemp -d)
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \

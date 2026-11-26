@@ -22,7 +22,7 @@ jobs:
       - run: docker build -t constellation-office-connector:0.22.17 agents/connector
       - run: |
           mkdir -p "$RUNNER_TEMP/matrix-topology"
-          MATRIX_OPERATIONS_SMOKE=1 MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" tests/synapse-smoke
+          MATRIX_OPERATIONS_SMOKE=1 MATRIX_HELPER_SMOKE=1 MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" tests/synapse-smoke
       - run: bash integrations/root/tests/run
       - run: MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" bash integrations/context-execution/tests/isolated
       - run: docker build -t matrix-telegram-connector:0.2.1 -f integrations/telegram/Dockerfile .

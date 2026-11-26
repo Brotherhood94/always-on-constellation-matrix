@@ -57,6 +57,8 @@ with urllib.request.urlopen(request, timeout=12) as result: print(result.read().
 
 
 def apply_tool(data, settings, registry, operation, change):
+    if operation['agent'] == 'helper':
+        raise ValueError('Helper uses only its deployed guides and dashboard snapshots')
     entry = registry['agents'][operation['agent']]
     if not entry.get('active') or entry.get('retirement'):
         raise ValueError('Choose an active agent')

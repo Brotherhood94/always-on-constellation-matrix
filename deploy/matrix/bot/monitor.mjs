@@ -5,7 +5,7 @@ import matrix from '@vector-im/matrix-bot-sdk';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
 import { officeSetupNotice, reconcilePins, reconcileTelegramPin, shortcutRecipientDevices, shortcutRecipientKey } from './pins.mjs';
 import { reconcileTelegramRooms } from './telegram-space.mjs';
-import { listenTelegramOffice, privateTelegramControl, telegramControlSearch } from './telegram-office.mjs';
+import { listenTelegramOffice, privateTelegramControl } from './telegram-office.mjs';
 
 const {
   LogService, LogLevel, MatrixClient, RustSdkCryptoStorageProvider,
@@ -86,13 +86,6 @@ async function initialize() {
     const key = await client.crypto.createIdentity();
     await writeAtomic(join(STATE_DIR, 'bot-recovery-key'), key);
   }
-  if (telegram) {
-    const options = { client, control: roomId, owner: MATRIX_OWNER, guide: userId, domain: MATRIX_SERVER_NAME,
-      readKey: async () => (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim() };
-    client.on('room.decrypted_event', (room, event) => {
-      telegramControlSearch(room, event, options).catch(() => console.error('Telegram Agent search could not reply.'));
-    });
-  }
   client.start().catch(error => {
     console.error('Matrix sync stopped:', error.body?.errcode || error.code || error.name);
     process.exit(1);
@@ -136,7 +129,7 @@ async function shortcuts({ client, roomId }) {
     recipientKey: async () => {
       if (!(await client.getJoinedRoomMembers(roomId)).includes(MATRIX_OWNER)) return null;
       if (telegram && !(await privateTelegramControl(client, { control: roomId, domain: MATRIX_SERVER_NAME,
-        owner: MATRIX_OWNER, guide: userId }))) return null;
+        owner: MATRIX_OWNER, guide: userId, bridgeControl: true }))) return null;
       return operatorDeviceKey(client);
     },
     getPinned: async () => {
@@ -156,7 +149,8 @@ async function shortcuts({ client, roomId }) {
   };
   if (telegram) {
     const command = (await readFile(join(STATE_DIR, 'command'), 'utf8')).trim();
-    await reconcileTelegramPin(pinRoom, state, command);
+    const legacy = (await readOptional(join(STATE_DIR, 'legacy-room-id')))?.trim();
+    await reconcileTelegramPin(pinRoom, state, command, legacy);
   } else {
     const links = JSON.parse(await readFile(WORKSPACE_LINKS, 'utf8'));
     await reconcilePins(pinRoom, links, state, { command: GUIDE_COMMAND, graphPassword: GRAPH_PASSWORD_COMMAND,
@@ -219,7 +213,7 @@ async function telegramRooms({ client, roomId }) {
   }
   const space = (await readFile(join(STATE_DIR, 'space-id'), 'utf8')).trim();
   const options = {
-    space, domain: MATRIX_SERVER_NAME, owner: MATRIX_OWNER, guide: userId, control: roomId,
+    space, domain: MATRIX_SERVER_NAME, owner: MATRIX_OWNER, guide: userId, control: roomId, bridgeControl: true,
   };
   const socketOptions = async () => ({ ...options, client, database: spaceDatabase,
     key: (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim() });
@@ -229,7 +223,7 @@ async function telegramRooms({ client, roomId }) {
   if (!guideSocket && process.env.TELEGRAM_GUIDE_SOCKET) {
     guideSocket = await listenTelegramOffice(process.env.TELEGRAM_GUIDE_SOCKET, socketOptions, { privateLookups: true });
   }
-  if (spaceDatabase) await reconcileTelegramRooms(client, spaceDatabase, options);
+  if (spaceDatabase) await reconcileTelegramRooms(client, spaceDatabase, await socketOptions());
 }
 
 let sender;

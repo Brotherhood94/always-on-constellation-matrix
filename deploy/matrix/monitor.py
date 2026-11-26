@@ -61,6 +61,9 @@ def project_containers(project):
 
 def agent_inventory(containers, agents_root=Path("/srv/agents")):
     inventory = []
+    helper_dm = next((item["State"] for item in containers
+                      if (item["Config"].get("Labels") or {}).get("com.docker.compose.service") == "helper-dm"
+                      and (item["Config"].get("Labels") or {}).get("com.docker.compose.oneoff", "false").lower() != "true"), {})
     for container in containers:
         config = container["Config"]
         labels = config.get("Labels") or {}
@@ -78,6 +81,8 @@ def agent_inventory(containers, agents_root=Path("/srv/agents")):
             status = "Restarting"
         elif state.get("Running"):
             status = {"healthy": "Available", "starting": "Starting", "unhealthy": "Unavailable"}.get(health, "Running")
+        if service == "helper" and helper_dm.get("Health", {}).get("Status") != "healthy":
+            status = "Unavailable"
         model = settings.get("AGENT_MODEL")
         effort = settings.get("AGENT_REASONING")
         agent_state = agents_root / service / "state"

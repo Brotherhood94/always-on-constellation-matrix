@@ -56,6 +56,10 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
   async function verifyControl({ requireDot = false } = {}) {
     const state = await liveState(config.controlRoom);
     const members = new Map(state.members);
+    if (config.bridgeControl) {
+      return state.encrypted && state.private && !state.tombstone && members.size === 3 &&
+        [config.owner, config.agent, config.bridgeBot].every(member => members.get(member) === 'join');
+    }
     return state.encrypted && state.private && !state.tombstone &&
       members.get(config.owner) === 'join' && members.get(config.agent) === 'join' &&
       [...members.keys()].every(member => [config.owner, config.agent, config.dot].includes(member)) &&
@@ -66,7 +70,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     const child = await request('GET', `${route(space)}/state/m.space.child/${encodeURIComponent(room)}`).catch(error => {
       if (error.status !== 404 || error.code !== 'M_NOT_FOUND') throw error;
     });
-    return child !== undefined && !child.via?.length;
+    return config.bridgeControl ? !child?.via?.length : child !== undefined && !child.via?.length;
   }
 
   async function recentMessages(room, range) {

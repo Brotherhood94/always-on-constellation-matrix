@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import secrets
 from shlex import quote
+from shutil import which
 import stat
 import subprocess
 import sys
@@ -37,7 +38,7 @@ PROJECT = re.compile(r'[a-z][a-z0-9-]{0,38}')
 RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
-            'telegram-agent', 'telegrambot', 'roster-inviter', 'root', 'vps-manager-ops'}
+            'telegram-agent', 'telegrambot', 'roster-inviter', 'root', 'vps-manager-ops', 'helper-dm'}
 LEGACY_CONNECTION = 'chatgpt-codex'
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
@@ -372,9 +373,11 @@ def register_entry(settings, registry, key, definition):
     if effort not in {'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}:
         raise ValueError('Invalid reasoning effort')
     placement = agent_placement(key, definition)
-    if placement not in {'local', 'remote'} or (key in (PRIVATE_ROLES | {'task-manager', 'chief-of-staff', 'vps-manager'}) and placement != 'local'):
+    if placement not in {'local', 'remote'} or (key in (PRIVATE_ROLES | {'task-manager', 'chief-of-staff', 'vps-manager', 'helper'}) and placement != 'local'):
         raise ValueError('Invalid agent placement')
     validated = profile(definition['profile'])
+    if key == 'helper' and (name != 'Helper' or validated != profile(starter_profiles()['helper']['profile'])):
+        raise ValueError('Use the built-in Helper profile for this identity')
     if validated['role'] == 'observer' and key != 'chief-of-staff':
         raise ValueError('The observer role belongs to Chief of Staff')
     previous = registry['agents'].get(key)
@@ -396,7 +399,7 @@ def register_entry(settings, registry, key, definition):
         raise ValueError('Agent display names must be unique and only one coordinator can be installed')
     desired = {'name': name, 'server': server, 'placement': placement, 'model': model,
                'effort': effort, 'profile': validated, 'active': False}
-    if registry.get('team_version') == 2 and key in starter_profiles():
+    if key == 'helper' or registry.get('team_version') == 2 and key in starter_profiles():
         desired['starter_role'] = key
     if subscription is not None:
         desired['subscription'] = subscription
@@ -418,7 +421,7 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     if key != 'dot':
         for name in ('work', 'instance', 'exchange', 'tool-credentials'):
             directory(layout / name, uid=RUNTIME_UID)
-    if key not in {'dot', 'vps-manager', 'chief-of-staff'}:
+    if key not in {'dot', 'vps-manager', 'chief-of-staff', 'helper'}:
         directory(layout / 'work/desktop', uid=RUNTIME_UID)
     peer = f'@{key}:{server}'
     if key == 'vps-manager':
@@ -445,11 +448,21 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     room = rooms['office']
     if key in {'vps-manager', 'chief-of-staff'}:
         label = 'Root Operations' if key == 'vps-manager' else entry['name']
-        room = direct_room(server, rooms['space'], 'root' if key == 'vps-manager' else key, label, rooms['owner'], owner_token, peer, token)
+        room = direct_room(server, rooms['space'], 'root' if key == 'vps-manager' else key, label,
+                           rooms['owner'], owner_token, peer, token, classify=key != 'vps-manager')
     save(matrix_state / 'room-id', room + '\n', uid=gateway_uid)
     if key in PRIVATE_ROLES and entry.get('starter_role') == key:
         private = direct_room(server, rooms['space'], key, entry['name'], rooms['owner'], owner_token, peer, token)
         save(matrix_state / 'control-room-id', private + '\n', uid=gateway_uid)
+    if key == 'helper':
+        support = layout / 'dm'
+        directory(support, uid=RUNTIME_UID)
+        dm_token = support / 'matrix-token'
+        if not dm_token.exists():
+            session = login(key, secret, 'MATRIXHELPERDM', 'Helper Private Chat')
+            save(dm_token, session['access_token'] + '\n', uid=RUNTIME_UID)
+        private = direct_room(server, rooms['space'], key, 'Helper', rooms['owner'], owner_token, peer, token, pin_user=peer)
+        save(support / 'room-id', private + '\n', uid=RUNTIME_UID)
     if key == 'dot':
         private_secret(matrix_state / 'bridge-token', uid=RUNTIME_UID)
     if key == 'chief-of-staff':
@@ -506,12 +519,39 @@ def provision_layout(settings, data, registry, passphrase, *, unattended=False, 
         request('POST', CLIENT + '/logout', {}, token)
 
 
+def publish_helper_guides(data):
+    paths = ('README.md', 'docs/architecture.md', 'docs/setup-guide.md', 'docs/team.md',
+             'docs/runbook.md', 'docs/dot.md', 'docs/telegram.md', 'policy/README.md')
+    git = ['git', '-c', f'safe.directory={SOURCE}', '-C', str(SOURCE)]
+    revision = (subprocess.run([*git, 'rev-parse', '--verify', 'HEAD'],
+                               capture_output=True, text=True).stdout.strip() if which('git') else '')
+    if not re.fullmatch(r'[a-f0-9]{40}', revision):
+        revision = None
+    guides = []
+    for path in paths:
+        file = SOURCE / path
+        if file.is_file():
+            body = file.read_text()
+            committed = subprocess.run([*git, 'show', f'{revision}:{path}'],
+                                       capture_output=True, text=True).stdout if revision else None
+            link = (f'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/{revision}/{path}'
+                    if body == committed else None)
+            guides.append({'path': path, 'link': link, 'body': body})
+    if not revision or any(not document['link'] for document in guides):
+        revision = 'checkout-' + sha256(json.dumps(guides).encode()).hexdigest()[:16]
+    directory(data / 'support', 0o755)
+    save(data / 'support/guides.json', {'revision': revision, 'documents': guides}, mode=0o644)
+
+
 def compose_config(settings, data, registry):
     if 'root' in registry['agents']:
         raise ValueError('Run agent migrate-root to replace the legacy Root agent before changing the deployment.')
     if settings['telegram']:
         directory(data / 'telegram', 0o711)
         directory(data / 'telegram/office', uid=RUNTIME_UID)
+        directory(data / 'telegram/dot-requests', uid=RUNTIME_UID)
+    if 'helper' in registry['agents']:
+        publish_helper_guides(data)
     environment = base_environment(settings, data)
     env_write(data, environment)
     context_config(settings, data, registry)
@@ -560,6 +600,8 @@ def publish_inventory(settings, data, registry):
         status = 'Registered' if entry['placement'] == 'remote' else 'Unavailable'
         if row.get('State') == 'running' and entry['active']:
             status = {'healthy': 'Available', 'starting': 'Starting', 'unhealthy': 'Unavailable'}.get(row.get('Health'), 'Running')
+        if key == 'helper' and entry['active'] and health.get('helper-dm', {}).get('Health') != 'healthy':
+            status = 'Unavailable'
         observed.append({'name': entry['name'], 'server': entry['server'], 'status': status})
     now = int(time.time())
     save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now, workshop_profiles(data)), mode=0o644)
@@ -791,7 +833,8 @@ def install(data, args, *, entered=None):
         if settings['telegram']:
             run_telegram(data, 'start-guide')
         sync_workshop(settings, data, registry)
-        up(data, *(key for key in local_agents if registry['agents'][key]['active']))
+        active = [key for key in local_agents if registry['agents'][key]['active']]
+        up(data, *active, *(['helper-dm'] if 'helper' in active else []))
         publish_inventory(settings, data, registry)
         configure_network(settings, data, current)
         if settings['systemd']:
@@ -873,8 +916,9 @@ def provision_agent(data, settings, registry, candidate, inviter, *, actor=None,
     return key
 
 
-def agent_add(data, args):
-    candidate = load(args.profile)
+def agent_add(data, args, *, operator_token=None):
+    starter = getattr(args, 'starter', None)
+    candidate = {'key': starter, **starter_profiles()[starter]} if starter else load(args.profile)
     configure = getattr(args, 'configure', False)
     if configure:
         from roster import local_worker
@@ -883,11 +927,14 @@ def agent_add(data, args):
             raise ValueError('Run --configure from an interactive terminal')
     with operator_lock(data):
         settings, registry = open_existing(data)
-        own = login(settings['owner'], password(settings, args.owner_password_file))['access_token']
+        own = operator_token or login(settings['owner'], password(settings, args.owner_password_file))['access_token']
         try:
+            if operator_token is not None:
+                verify_operator(load(data / 'rooms.json'), own)
             key = provision_agent(data, settings, registry, candidate, own)
         finally:
-            request('POST', CLIENT + '/logout', {}, own)
+            if operator_token is None:
+                request('POST', CLIENT + '/logout', {}, own)
     if configure:
         agent_activate(data, key, pending_only=True)
     else:
@@ -937,12 +984,13 @@ def agent_activate(data, key, *, pending_only=False):
         if entry['placement'] != 'local':
             raise ValueError('Complete provider sign-in on the authorized worker host')
         engine = 'engine-' + key
+        connectors = (key, 'helper-dm') if key == 'helper' else (key,)
         up(data, engine)
         if entry['active']:
             entry['active'] = False
             save(data / 'agents.json', registry)
             publish_inventory(settings, data, registry)
-            compose(data, '--profile', 'agents', 'stop', key)
+            compose(data, '--profile', 'agents', 'stop', *connectors)
         configured = configure_amplifier(data, engine, entry)
         if key == 'vps-manager':
             state = data / 'state/vps-manager'
@@ -955,7 +1003,7 @@ def agent_activate(data, key, *, pending_only=False):
         else:
             compose(data, '--profile', 'agents', 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/probe.mjs')
         sync_workshop(settings, data, registry)
-        up(data, key)
+        up(data, *connectors)
         entry['amplifier'] = configured
         entry['active'] = True
         save(data / 'agents.json', registry)
@@ -994,15 +1042,54 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
         return choose_option('✈️ Choose the Telegram Bridge chat to keep', {room: room for room in candidates})
 
     owner = rooms['owner']
-    layout = reconcile_layout(root, settings['server_name'], owner, token, rooms['space'],
-                              office=rooms['office'], bridge_active=active, select=select)
+    config = root / 'connector/config.json'
+    migrating = config.is_file() and not load(config).get('bridgeControl')
+    if migrating:
+        run_telegram(data, 'quiesce-layout')
+    try:
+        layout = reconcile_layout(root, settings['server_name'], owner, token, rooms['space'],
+                                  office=rooms['office'], bridge_active=active, select=select)
+    except BaseException:
+        if migrating and not load(config).get('bridgeControl'):
+            run_telegram(data, 'resume-layout')
+        raise
     if active and (root / 'guide/space-db').is_file():
         portals = compose(data, 'exec', '-T', 'postgres', 'psql', '-qXAt', '--set', 'ON_ERROR_STOP=1',
                           '-U', 'synapse', '-d', 'matrix_telegram', '--set', f'owner={owner}',
-                          input="SELECT room FROM telegram_space_sent_portal WHERE owner = :'owner';\n",
+                          input="SELECT room, peer FROM telegram_space_sent_portal WHERE owner = :'owner';\n",
                           capture_output=True, text=True).stdout.splitlines()
-        classify_telegram_rooms(layout['space'], owner, token, portals)
+        classify_telegram_rooms(layout['space'], owner, token, [row.split('|', 1) for row in portals], bridge=layout['bridge'])
+    if settings['dot']:
+        root_state = data / 'state/dot/matrix'
+        prior_config = root_state / 'telegram-control.json'
+        previous = load(prior_config) if prior_config.is_file() else {}
+        legacy = previous.get('legacy') or (previous.get('room') if not previous.get('local') else None)
+        save(prior_config, {'room': layout['bridge'], 'owner': owner, 'local': True,
+                            **({'legacy': legacy} if legacy and legacy != layout['bridge'] else {})}, uid=RUNTIME_UID)
     return layout
+
+
+def workspace_layout(data, args, *, token=None):
+    from layout import reconcile_direct_account_data
+    settings, registry = open_existing(data)
+    rooms = load(data / 'rooms.json')
+    owns_token = token is None
+    if owns_token:
+        token = login(settings['owner'], password(settings, args.owner_password_file))['access_token']
+    try:
+        verify_operator(rooms, token)
+        with operator_lock(data):
+            for key in ('vps-manager', 'root'):
+                path = data / 'state' / key / 'matrix/room-id'
+                if path.is_file():
+                    room = path.read_text().strip()
+                    if room and room != rooms['office']:
+                        reconcile_direct_account_data(rooms['owner'], {room: None}, token)
+        if settings['telegram']:
+            telegram(data, ['layout'], operator_token=token)
+    finally:
+        if owns_token:
+            request('POST', CLIENT + '/logout', {}, token)
 
 
 def verify_operator(rooms, token):
@@ -1050,14 +1137,17 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
                 guide_args = ('--refresh-bridge',) if action == 'layout' else ()
                 run_telegram(data, 'start-guide', *guide_args)
                 coordinator = telegram_office_agent(registry)
-                if registry['agents'].get(coordinator, {}).get('active') and 'root' not in registry['agents']:
+                if 'root' not in registry['agents'] and (settings['dot'] or registry['agents'].get(coordinator, {}).get('active')):
                     compose_config(settings, data, registry)
                     docker_build(CONNECTOR, SOURCE / 'agents/connector')
-                    up(data, coordinator)
+                    if registry['agents'].get(coordinator, {}).get('active'):
+                        up(data, coordinator)
+                    if settings['dot']:
+                        compose(data, 'up', '-d', '--no-deps', '--force-recreate', 'dot')
             finally:
                 if operator_token is None:
                     request('POST', CLIENT + '/logout', {}, token)
-        print('In Element, open Telegram → Telegram Agent → Pinned messages.')
+        print('In Element, open Telegram → Rooms → Telegram Bridge → Pinned messages.')
         if rooms['bridge']:
             print('Telegram Bridge is linked under Telegram.')
         return
@@ -1113,8 +1203,8 @@ def service_units(settings, data, broker=False):
 
 
 def main():
-    from operator_cli import (HOST_ACTIONS, configure_as_operator, execute_host, install_as_operator, print_guide,
-                              publish_metadata, setup_as_operator, telegram_as_operator)
+    from operator_cli import (HOST_ACTIONS, add_helper_as_operator, configure_as_operator, execute_host, install_as_operator, print_guide,
+                              layout_as_operator, publish_metadata, setup_as_operator, telegram_as_operator)
     from setup_guide import interactive_terminal
 
     parser = argparse.ArgumentParser(prog='constellation_matrix', description=__doc__, allow_abbrev=False)
@@ -1125,7 +1215,9 @@ def main():
     commands.add_parser('validate').add_argument('--config', type=Path, required=True)
     agent = commands.add_parser('agent').add_subparsers(dest='action', required=True)
     add = agent.add_parser('add')
-    add.add_argument('--profile', type=Path, required=True)
+    add_source = add.add_mutually_exclusive_group(required=True)
+    add_source.add_argument('--profile', type=Path)
+    add_source.add_argument('--starter', choices=['helper'])
     add.add_argument('--owner-password-file', type=Path)
     add.add_argument('--configure', action='store_true', help='Open Amplifier setup after registering a local Office worker')
     remove = agent.add_parser('remove', help='Drain, deregister and archive a local Office worker')
@@ -1134,7 +1226,7 @@ def main():
     management = agent.add_parser('management').add_subparsers(dest='management', required=True)
     enable = management.add_parser('enable', help='Enable approved roster changes in the Chief of Staff DM')
     enable.add_argument('--owner-password-file', type=Path)
-    team = agent.add_parser('migrate-team', help='Preview or apply the five-agent starter team')
+    team = agent.add_parser('migrate-team', help='Preview or apply the starter team')
     team.add_argument('--apply', action='store_true')
     team.add_argument('--retire', action='append', default=[], metavar='AGENT')
     team.add_argument('--owner-password-file', type=Path)
@@ -1167,6 +1259,7 @@ def main():
                          help='Permanently delete the deployment data, backups, and project volumes.')
     commands.add_parser('backup')
     commands.add_parser('restore-check')
+    commands.add_parser('layout', help='Repair managed Element sidebar entries').add_argument('--owner-password-file', type=Path)
     commands.add_parser('telegram').add_argument('arguments', nargs=argparse.REMAINDER)
     commands.add_parser('dot-connect').add_argument('tunnel_id')
     commands.add_parser('chief-review')
@@ -1207,6 +1300,12 @@ def main():
             return
         if args.command == 'agent' and args.action in {'configure', 'sign-in'}:
             configure_as_operator(data, args.key)
+            return
+        if args.command == 'agent' and args.action == 'add' and args.starter == 'helper':
+            add_helper_as_operator(data, args)
+            return
+        if args.command == 'layout':
+            layout_as_operator(data, args)
             return
         if args.command == 'telegram' and args.arguments[:1] in (['activate'], ['layout']):
             telegram_as_operator(data, args.arguments)
@@ -1262,6 +1361,8 @@ def main():
             open_existing(data)
             from recovery import backup
             backup(data, args.command)
+    elif args.command == 'layout':
+        workspace_layout(data, args)
     elif args.command == 'telegram':
         telegram(data, args.arguments)
     elif args.command in {'persona-sync', 'persona-connect', 'chief-review'}:

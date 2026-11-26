@@ -6,7 +6,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { TelegramStore, controlCommand, digest, pollStart, pollEnd, reviewAnswer, validateBinding } from './policy.mjs';
 import { bridgeAudit, matrixConnection, statusEvidence } from './matrix.mjs';
 import { draftWithInstance, runDelegatedWithInstance, summarizeWithInstance } from './acp.mjs';
-import { addressedRequest, controlThread, historyRange, isDirect, matrixLink, resolveDestination, updateReply } from './control.mjs';
+import { addressedRequest, controlThread, historyRange, isDirect, matrixLink, operatorNotice, resolveDestination, updateReply } from './control.mjs';
 import { createTelegramDelegation, listenTelegramSocket } from './delegation.mjs';
 import { requestTelegramService } from '../../agents/connector/telegram-office.mjs';
 
@@ -120,7 +120,7 @@ async function run() {
   let lastCleanup = 0;
   let stopping = false;
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { stopping = true; });
-  const { TELEGRAM_HANDOFF_SOCKET, TELEGRAM_MCP_SOCKET, TELEGRAM_GUIDE_SOCKET } = process.env;
+  const { TELEGRAM_HANDOFF_SOCKET, TELEGRAM_MCP_SOCKET, TELEGRAM_GUIDE_SOCKET, TELEGRAM_DOT_SOCKET } = process.env;
   const officeRoom = (await readFile(join(directory, 'office-room-id'), 'utf8').catch(error => {
     if (error.code !== 'ENOENT') throw error;
     return '';
@@ -159,6 +159,40 @@ async function run() {
   const sockets = delegation ? [await listenTelegramSocket(TELEGRAM_MCP_SOCKET, delegation.tool)] : [];
   if (delegation && TELEGRAM_HANDOFF_SOCKET) sockets.push(await listenTelegramSocket(TELEGRAM_HANDOFF_SOCKET, delegation.office));
 
+  if (settings.bridgeControl && TELEGRAM_DOT_SOCKET) {
+    store.db.exec(`CREATE TABLE IF NOT EXISTS dot_request (
+      id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, event TEXT
+    )`);
+    sockets.push(await listenTelegramSocket(TELEGRAM_DOT_SOCKET, async input => {
+      if (!input || typeof input.id !== 'string' || !/^[a-zA-Z0-9_-]{8,80}$/u.test(input.id) ||
+          !['compose', 'update'].includes(input.action) || !await checkRoom()) return { status: 'unavailable' };
+      const dot = '@dot:' + settings.domain;
+      const payload = { action: input.action, destination: input.destination, chat_type: input.chat_type,
+        ...(input.action === 'compose' ? { text: input.text, source_event: input.source_event } : { question: input.question }) };
+      const request = addressedRequest({ event_id: '$dot-request', sender: dot, type: 'm.room.message',
+        content: { msgtype: 'm.text', 'm.mentions': { user_ids: [settings.agent] },
+          'org.matrixconstellation.telegram.request': payload } }, { ...settings, dot, bridgeControl: false });
+      if (!request) return { status: 'unavailable' };
+      const fingerprint = digest(request);
+      store.run('INSERT OR IGNORE INTO dot_request(id, fingerprint) VALUES (?,?)', input.id, fingerprint);
+      const previous = store.get('SELECT * FROM dot_request WHERE id=?', input.id);
+      if (previous.fingerprint !== fingerprint) return { status: 'conflict' };
+      const result = event => ({ status: 'queued', room: settings.controlRoom, event });
+      if (previous.event) return result(previous.event);
+      const text = request.action === 'compose' ? 'Dot requested a Telegram draft.' : 'Dot requested a Telegram update.';
+      const encrypted = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', operatorNotice(settings.owner, text));
+      if (!await checkRoom()) return { status: 'unavailable' };
+      const event = await matrix.put(settings.controlRoom, 'dot-telegram-' + digest(input.id), encrypted);
+      const queued = store.atomic(() => {
+        if (!store.get('SELECT event FROM control_request WHERE event=?', event) &&
+            !store.queueControl(event, request, Date.now(), { requireDot: false, atomic: false })) return false;
+        store.run('UPDATE dot_request SET event=? WHERE id=?', event, input.id);
+        return true;
+      });
+      return queued ? result(event) : { status: 'unavailable' };
+    }));
+  }
+
   async function dispatch(room, event, encrypted, unreadable, initial) {
     const now = Date.now();
     if (room === officeRoom && officeRoom !== settings.controlRoom) {
@@ -192,11 +226,14 @@ async function run() {
     if (room === settings.controlRoom) {
       if (now - event.origin_server_ts > catchup || now + 60_000 < event.origin_server_ts) return;
       const command = controlCommand({ room, sender: event.sender, type: event.type, content: event.content, encrypted }, settings);
+      // Authentication and bridge commands are for the bridge bot alone.
+      if (typeof event.content?.body === 'string' && /^\s*!tg(?:\s|$)/iu.test(event.content.body)) return;
       if (command) {
         if (await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
       } else if (!await delegation?.direct(event)) {
         const request = addressedRequest(event, settings);
-        const requireDot = event.sender === settings.dot || (event.sender === settings.owner && request?.action !== 'compose');
+        const requireDot = !settings.bridgeControl && (event.sender === settings.dot ||
+          (event.sender === settings.owner && request?.action !== 'compose'));
         if (request && !pausedFile() && await matrix.verifyControl({ requireDot })) {
           store.queueControl(event.event_id, request, now, { requireDot });
         }
@@ -418,21 +455,24 @@ async function run() {
   async function notify(draft) {
     const awaiting = draft.state === 'awaiting_approval';
     const title = `Draft for ${draft.binding} · ${draft.id.slice(0, 8)}`;
+    const target = JSON.parse(draft.target);
+    if (awaiting && await liveBinding(draft.room, target) !== target.audience) {
+      store.pause(draft.binding, 'telegram_destination_changed_before_review');
+      return;
+    }
+    const destination = awaiting && (draft.recipient || (await matrix.liveState(draft.room)).name || draft.binding);
     const reference = draft.control_event
-      ? [`To: ${draft.recipient}`, `Request: ${matrixLink(settings.controlRoom, draft.control_event)}`,
+      ? [`Request: ${matrixLink(settings.controlRoom, draft.control_event)}`,
         ...(draft.reply_event ? [`Reply to: ${matrixLink(draft.room, draft.reply_event)}`] : [])]
-      : [`Source: https://matrix.to/#/${draft.room}/${draft.source}`];
-    const content = awaiting ? [
-      title, ...reference, '', draft.body, '',
-      `Expires: ${date.format(draft.until)}`, `telegram approve ${draft.id} ${draft.version}`,
-      `telegram reject ${draft.id} ${draft.version}`,
-    ].join('\n') : `${draft.binding}: ${draft.state.replaceAll('_', ' ')}. Draft ${draft.id}.`;
+      : [`Source: ${matrixLink(draft.room, draft.source)}`];
     const relation = draft.control_event && controlThread(store.controlThread(draft.control_event), draft.control_event);
-    const prepared = relation
-      ? await matrix.encryptEvent(settings.controlRoom, 'm.room.message', { msgtype: 'm.text', body: content, 'm.relates_to': relation })
-      : await matrix.encrypted(settings.controlRoom, content);
+    const message = awaiting ? operatorNotice(settings.owner, [title, `To: ${destination}`, ...reference].join('\n'), {
+      text: draft.body, footer: `Expires: ${date.format(draft.until)}. Use the poll to approve or decline.`,
+    }) : { msgtype: 'm.text', body: `${draft.binding}: ${draft.state.replaceAll('_', ' ')}. Draft ${draft.id}.` };
+    const prepared = await matrix.encryptEvent(settings.controlRoom, 'm.room.message',
+      { ...message, ...(relation && { 'm.relates_to': relation }) });
     if (!(await matrix.verifyControl())) throw new Error('Control room changed.');
-    await matrix.put(settings.controlRoom, `notice-${digest([draft.id, draft.state])}`, prepared);
+    await matrix.put(settings.controlRoom, `notice-${digest([draft.id, draft.version, draft.state])}`, prepared);
     if (awaiting && store.draft(draft.id).state === 'awaiting_approval') {
       const question = `${title}\nReview the draft above before sending.`;
       const poll = await matrix.encryptEvent(settings.controlRoom, pollStart, {
@@ -443,8 +483,8 @@ async function run() {
           max_selections: 1,
           question: { [pollText]: question },
           answers: [
-            { id: reviewAnswer(draft, 'approve'), [pollText]: 'Approve and send' },
-            { id: reviewAnswer(draft, 'reject'), [pollText]: 'Reject' },
+            { id: reviewAnswer(draft, 'approve'), [pollText]: '✅ Accept' },
+            { id: reviewAnswer(draft, 'reject'), [pollText]: '❌ Decline' },
           ],
         },
       });
@@ -496,9 +536,27 @@ async function run() {
     }
   }
 
+  async function migrateReviews() {
+    if (!settings.bridgeControl || store.setting('review_room') === settings.controlRoom) return;
+    if (!(await matrix.verifyControl())) return;
+    const anchors = new Map();
+    if (settings.legacyControlRoom) {
+      for (const { control_event } of store.all(`SELECT DISTINCT control_event FROM draft
+        WHERE control_event IS NOT NULL AND state IN ('ready','awaiting_approval') AND until>?`, Date.now())) {
+        const body = 'Telegram draft carried over from ' + matrixLink(settings.legacyControlRoom, control_event) + '.';
+        const prepared = await matrix.encrypted(settings.controlRoom, body);
+        const event = await matrix.put(settings.controlRoom, 'carried-draft-' + digest(control_event), prepared);
+        anchors.set(control_event, event);
+      }
+    }
+    store.migrateReviews(settings.controlRoom, settings.legacyControlRoom, anchors, Date.now());
+  }
+
   while (!stopping) {
     try {
       await handleSync();
+      await migrateReviews();
+      if (settings.bridgeControl && store.setting('review_room') !== settings.controlRoom) continue;
       const now = Date.now();
       store.expire(now);
       if (now - lastCleanup > 60_000) {

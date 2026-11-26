@@ -126,6 +126,8 @@ from telegram_provision import bridge_dm
 owner = request('POST', CLIENT + '/register', {'username': 'operator', 'password': 'fixture-long-password',
                                                  'auth': {'type': 'm.login.dummy'}})
 token = owner['access_token']
+request('POST', CLIENT + '/register', {'username': 'telegram-agent', 'password': 'fixture-long-password',
+                                      'auth': {'type': 'm.login.dummy'}})
 room = bridge_dm('telegram.test', owner['user_id'], token, None, select=lambda _: None)
 for _ in range(30):
     if membership(room, '@telegrambot:telegram.test', token) == 'join':
@@ -147,6 +149,8 @@ for method, route, secret, body, code in [
     ('POST', 'constellation_group/chat%3A123', key, None, 'FI.MAU.NOT_LOGGED_IN'),
     ('POST', 'create_dm/%40sample', key, None, 'FI.MAU.NOT_LOGGED_IN'),
     ('POST', 'create_dm/%40sample', 'invalid-key', None, 'M_UNKNOWN_TOKEN'),
+    ('POST', 'constellation_membership/user%3A123', key, None, 'FI.MAU.NOT_LOGGED_IN'),
+    ('PUT', 'constellation_membership/user%3A123', key, None, 'M_FORBIDDEN'),
 ]:
     endpoint = 'http://telegram-bridge:29317/_matrix/provision/v3/' + route + '?user_id=%40operator%3Atelegram.test'
     try:
@@ -172,6 +176,7 @@ docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gi
   -v "$src/../../deploy/matrix/bot/telegram-space.mjs:/app/telegram-space.mjs:ro" \
   -v "$src/../../deploy/matrix/bot/telegram-office.mjs:/app/telegram-office.mjs:ro" \
   -v "$src/acp.mjs:/app/acp.mjs:ro" -v "$src/control.mjs:/app/control.mjs:ro" -v "$src/service.mjs:/app/service.mjs:ro" \
+  -v "$src/delegation.mjs:/app/delegation.mjs:ro" \
   --entrypoint node "$connector_image" --input-type=module - <<'JS'
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -184,8 +189,7 @@ import { WebSocketServer } from 'ws';
 import matrix from '@vector-im/matrix-bot-sdk';
 import { matrixConnection } from './matrix.mjs';
 import { TelegramStore, pollStart, reviewAnswer } from './policy.mjs';
-import { telegramRequest } from './control.mjs';
-import { telegramControlSearch, telegramOfficeAction } from './telegram-office.mjs';
+import { telegramOfficeAction } from './telegram-office.mjs';
 import { listenTelegramSocket } from './delegation.mjs';
 import { requestTelegramService } from '../agents/connector/telegram-office.mjs';
 const url = 'http://synapse:8008';
@@ -230,7 +234,9 @@ assert.equal(text,'Isolated encrypted smoke test');
 sender.close();
 console.log('Telegram connector Matrix crypto round trip and exact-transaction retry passed.');
 
-const agent = await register('telegram-agent');
+const device = 'TESTTELEGRAMAGENT';
+const agent = { ...await api('/login', {type:'m.login.password', identifier:{type:'m.id.user',user:'telegram-agent'},
+  password:'fixture-long-password', device_id:device}), device };
 const dot = await register('dot');
 const bridgeBot = '@telegrambot:telegram.test';
 const botToken = (await readFile('/fixture/bridge/registration.yaml', 'utf8')).match(/^as_token:\s+(\S+)$/m)[1];
@@ -244,16 +250,14 @@ async function privateRoom(token, invite, asUser) {
     initial_state:[{type:'m.room.encryption',state_key:'',content:{algorithm:'m.megolm.v1.aes-sha2'}}]}, token);
   return created.room_id;
 }
-const controlRoom = await privateRoom(agent.access_token, [b.user_id, dot.user_id]);
+const controlRoom = await privateRoom(agent.access_token, [b.user_id, bridgeBot]);
 await api('/join/' + encodeURIComponent(controlRoom), {}, b.access_token);
-await api('/join/' + encodeURIComponent(controlRoom), {}, dot.access_token);
+await api('/join/' + encodeURIComponent(controlRoom) + '?user_id=' + encodeURIComponent(bridgeBot), {}, botToken);
 const officeRoom = await privateRoom(b.access_token, [agent.user_id]);
 await api('/join/' + encodeURIComponent(officeRoom), {}, agent.access_token);
 const {room_id: space} = await api('/createRoom', {preset:'private_chat', visibility:'private',
   creation_content:{type:'m.space','m.federate':false}, invite:[b.user_id]}, agent.access_token);
 await api('/join/' + encodeURIComponent(space), {}, b.access_token);
-const dotClient = await connect(dot, 'dot');
-await dotClient.applySync(await dotClient.sync(null, 0), async () => {});
 const portal = await privateRoom(botToken, [agent.user_id, b.user_id, remote.user_id], bridgeBot);
 const portalRoute = '/rooms/' + encodeURIComponent(portal);
 const spaceClient = new matrix.MatrixClient(url, agent.access_token);
@@ -286,7 +290,7 @@ const https = createServer({ key: await readFile('/acp-fixture/key.pem'), cert: 
 const acp = new WebSocketServer({ server: https, path: '/api/v1/acp' });
 let prompt, draftPrompt;
 const sockets = { TELEGRAM_HANDOFF_SOCKET: '/tmp/handoffs.sock', TELEGRAM_MCP_SOCKET: '/tmp/tools.sock',
-  TELEGRAM_GUIDE_SOCKET: '/tmp/guide.sock' };
+  TELEGRAM_GUIDE_SOCKET: '/tmp/guide.sock', TELEGRAM_DOT_SOCKET: '/tmp/dot-requests.sock' };
 const guide = await listenTelegramSocket(sockets.TELEGRAM_GUIDE_SOCKET, async input => {
   if (input.action === 'list') return { ok: true, rooms: [{ peer: 'user:1001', room: portal, name: 'Pilot' }] };
   assert.equal(input.action, 'resolve');
@@ -334,7 +338,7 @@ acp.on('connection', ws => {
 await new Promise(resolve => https.listen(0, resolve));
 await writeFile('/state/acp-fixture-token', 'test-token');
 await writeFile('/state/config.json', JSON.stringify({ matrixUrl:url, domain:'telegram.test', space,
-  agent:agent.user_id, device:agent.device, owner:b.user_id, dot:dot.user_id, bridgeBot, controlRoom, auditDatabase,
+  agent:agent.user_id, device:agent.device, owner:b.user_id, bridgeBot, controlRoom, bridgeControl: true, auditDatabase,
   engine:{ revision:'fixture', url: 'wss://localhost:' + https.address().port + '/api/v1/acp',
     ca: '/acp-fixture/cert.pem', token: '/state/acp-fixture-token', workspace: '/instance/workspace' } }));
 await writeFile('/state/matrix-token', agent.access_token, {mode:0o600});
@@ -352,6 +356,16 @@ async function waitFor(check, label) {
     await delay(100);
   }
   throw new Error('Timed out waiting for ' + label);
+}
+async function castVote(device, draft, action, transaction) {
+  let poll;
+  await waitFor(() => poll = store.get('SELECT event FROM draft_review WHERE draft=?', draft.id), 'a registered review poll');
+  const type = 'org.matrix.msc3381.poll.response';
+  const vote = await device.encryptEvent(controlRoom, type, {
+    'm.relates_to': { rel_type: 'm.reference', event_id: poll.event },
+    [type]: { answers: [reviewAnswer(draft, action)] },
+  });
+  return device.put(controlRoom, transaction, vote);
 }
 try {
   await waitFor(() => store.setting('last_sync'), 'the connector to sync');
@@ -392,6 +406,7 @@ try {
       if (roomId === controlRoom && event.event_id === review.event && encrypted && !failed) {
         assert.equal(event.type, pollStart);
         assert.deepEqual(event.content[pollStart].answers.map(answer => answer.id), [approve, reject]);
+        assert.deepEqual(event.content[pollStart].answers.map(answer => answer['org.matrix.msc1767.text']), ['✅ Accept', '❌ Decline']);
         usable = true;
       }
     });
@@ -420,7 +435,7 @@ try {
   const setupSdk = new matrix.MatrixClient(url, setup.access_token);
   const setupClient = {getRoomState: room => setupSdk.getRoomState(room), doRequest: (...args) => setupSdk.doRequest(...args),
     crypto: {encryptRoomEvent: async (room, type, content) => JSON.parse(await setupCrypto.encryptEvent(room, type, content))}};
-  const officeOptions = {client:setupClient, control:controlRoom, owner:b.user_id, guide:agent.user_id, domain:'telegram.test'};
+  const officeOptions = {client:setupClient, control:controlRoom, owner:b.user_id, guide:agent.user_id, domain:'telegram.test', bridgeControl:true};
   const officeInput = {id:'$office-fixture', action:'draft', target:'pilot', type:'direct', text:'Exact text from Office.\nSecond line.'};
   const queuedOffice = await telegramOfficeAction(officeInput, officeOptions);
   assert.equal(queuedOffice.ok, true);
@@ -432,46 +447,16 @@ try {
   assert.equal(fromOffice.state, 'awaiting_approval');
   assert.equal(store.controlRequiresDot(officeEvent), false);
   assert.equal(store.get('SELECT count(*) AS n FROM draft WHERE control_event=?', officeEvent).n, 1);
-  const officeReject = await reader.encrypted(controlRoom, 'telegram reject ' + fromOffice.id + ' 1');
-  await reader.put(controlRoom, 'fixture-owner-reject-office-draft', officeReject);
+  await castVote(reader, fromOffice, 'reject', 'fixture-owner-reject-office-draft');
   await waitFor(() => store.draft(fromOffice.id).state === 'cancelled', 'the operator decision on the Office draft');
   const syncedOwner = await reader.sync(controlCursor, 0);
   controlCursor = syncedOwner.next_batch;
   await reader.applySync(syncedOwner, async () => {});
-  const searchInput = await reader.encrypted(controlRoom, '!tg search Sample Name');
-  const searchEvent = await reader.put(controlRoom, 'fixture-search', searchInput);
-  let setupCursor = setupInitial.next_batch;
-  let searchRequests = 0;
-  await waitFor(async () => {
-    const sync = await setupCrypto.sync(setupCursor, 0);
-    setupCursor = sync.next_batch;
-    await setupCrypto.applySync(sync, async (roomId, event, encrypted, failed) => {
-      if (!encrypted || failed || event.event_id !== searchEvent) return;
-      await telegramControlSearch(roomId, event, { ...officeOptions, readKey: async () => 'fixture',
-        bridgeFetch: async (url, request) => {
-          searchRequests += 1;
-          assert.equal(new URL(url).searchParams.get('user_id'), b.user_id);
-          assert.deepEqual(JSON.parse(request.body), { query: 'Sample Name' });
-          return Response.json({ results: [{ id: '1001', name: 'Sample Person' }] });
-        } });
-    });
-    return searchRequests === 1;
-  }, 'the guide to decrypt and handle the operator search');
-  await waitFor(async () => {
-    const sync = await reader.sync(controlCursor, 0);
-    controlCursor = sync.next_batch;
-    let received = false;
-    await reader.applySync(sync, async (roomId, event, encrypted, failed) => {
-      if (roomId === controlRoom && encrypted && !failed &&
-          event.content?.['m.relates_to']?.['m.in_reply_to']?.event_id === searchEvent) {
-        assert.equal(event.sender, agent.user_id);
-        assert.match(event.content.body, /Sample Person.*1001/);
-        received = true;
-      }
-    });
-    return received;
-  }, 'the owner to decrypt the Telegram search results');
-  console.log('Telegram Control returned an encrypted user search result in reply to the operator’s command.');
+  const authInput = await reader.encrypted(controlRoom, '!tg login qr');
+  const authEvent = await reader.put(controlRoom, 'fixture-auth', authInput);
+  const beforeAuth = store.setting('last_sync');
+  await waitFor(() => store.setting('last_sync') > beforeAuth, 'a sync after the bridge authentication command');
+  assert.equal(store.get('SELECT * FROM control_request WHERE event=?', authEvent), undefined);
   setupCrypto.close();
   console.log('The Guide device encrypted one Office request into Control across retries, preserving the exact text for operator review.');
 
@@ -489,8 +474,7 @@ try {
   const delegatedEvent = decodeURIComponent(delegated.link.split('/').at(-1));
   const proposed = store.get('SELECT * FROM draft WHERE control_event=?', delegatedEvent);
   assert.equal(proposed.body, 'Synthetic Office draft.');
-  const cancel = await reader.encrypted(controlRoom, 'telegram reject ' + proposed.id + ' 1');
-  await reader.put(controlRoom, 'fixture-reject-natural-office', cancel);
+  await castVote(reader, proposed, 'reject', 'fixture-reject-natural-office');
   await waitFor(async () => (await requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, {
     ...handoff, method: 'status',
   })).status === 'blocked', 'the operator rejection to reach Office');
@@ -508,34 +492,31 @@ try {
   assert.equal(directDraft.body, 'ciao bello');
   assert.equal(directDraft.state, 'awaiting_approval');
   assert.equal(directDraft.event, null);
-  const cancelDirect = await reader.encrypted(controlRoom, 'telegram reject ' + directDraft.id + ' 1');
-  await reader.put(controlRoom, 'fixture-reject-telegram-agent', cancelDirect);
+  await castVote(reader, directDraft, 'reject', 'fixture-reject-telegram-agent');
   await waitFor(() => store.draft(directDraft.id).state === 'cancelled', 'the direct draft to be rejected');
   console.log('A private Office handoff and a direct Telegram Agent mention each completed through a scoped ACP MCP turn.');
 
-  const compose = await dotClient.encryptEvent(controlRoom, 'm.room.message', {
-    msgtype:'m.text', body:'Prepare a message to the test chat.',
-    'm.mentions': {user_ids:[agent.user_id]},
-    [telegramRequest]: {action:'compose', destination:'pilot', chat_type:'direct', text:'Exact test text from Dot'},
-  });
-  const request = await dotClient.put(controlRoom, 'fixture-dot-compose', compose);
-  assert.equal(await dotClient.put(controlRoom, 'fixture-dot-compose', compose), request);
+  const dotRequest = { id:'fixture-dot-compose', action:'compose', destination:'pilot', chat_type:'direct',
+    text:'Exact test text from Dot' };
+  const dotRooms = await fetch(url + root + '/joined_rooms', { headers:{authorization:'Bearer ' + dot.access_token} });
+  assert.ok(!(await dotRooms.json()).joined_rooms.includes(controlRoom));
+  const submitted = await requestTelegramService(sockets.TELEGRAM_DOT_SOCKET, dotRequest);
+  assert.equal(submitted.status, 'queued');
+  assert.deepEqual(await requestTelegramService(sockets.TELEGRAM_DOT_SOCKET, dotRequest), submitted);
+  assert.equal((await requestTelegramService(sockets.TELEGRAM_DOT_SOCKET, { ...dotRequest, text: 'Changed' })).status, 'conflict');
+  const request = submitted.event;
   await waitFor(() => store.get('SELECT 1 FROM draft WHERE control_event=?', request), 'the Dot draft');
   const fromDot = store.get('SELECT * FROM draft WHERE control_event=?', request);
   assert.equal(fromDot.state, 'awaiting_approval');
   assert.equal(fromDot.recipient, 'pilot (private chat)');
   assert.equal(fromDot.body, 'Exact test text from Dot');
   await waitFor(() => store.get('SELECT event FROM draft_review WHERE draft=?', fromDot.id), 'the Dot draft poll');
-  const dotVote = await dotClient.encrypted(controlRoom, 'telegram approve ' + fromDot.id + ' 1');
-  const beforeVote = store.setting('last_sync');
-  await dotClient.put(controlRoom, 'fixture-dot-unauthorized-vote', dotVote);
-  await waitFor(() => store.setting('last_sync') > beforeVote, 'a sync after the rejected Dot vote');
+  await assert.rejects(() => api('/rooms/' + encodeURIComponent(controlRoom) + '/join', {}, dot.access_token), /M_FORBIDDEN/);
   assert.equal(store.draft(fromDot.id).state, 'awaiting_approval');
   assert.equal(store.get('SELECT count(*) AS n FROM draft WHERE control_event=?', request).n, 1);
-  const ownerReject = await reader.encrypted(controlRoom, 'telegram reject ' + fromDot.id + ' 1');
-  await reader.put(controlRoom, 'fixture-owner-reject-dot-draft', ownerReject);
+  await castVote(reader, fromDot, 'reject', 'fixture-owner-reject-dot-draft');
   await waitFor(() => store.draft(fromDot.id).state === 'cancelled', 'the operator decision');
-  console.log('An encrypted Dot request produced one exact draft. Dot could not approve it.');
+  console.log('The local Dot socket produced one exact draft with no access to Telegram Bridge.');
 
   const update = await reader.encryptEvent(controlRoom, 'm.room.message', {
     msgtype:'m.text', body:'@telegram-agent, mi dai un aggiornamento per oggi sul privato pilot?',
@@ -552,14 +533,14 @@ try {
     let found = false;
     await reader.applySync(sync, async (roomId, event, encrypted, failed) => {
       if (roomId !== controlRoom || event.content?.['m.relates_to']?.event_id !== updateId || !encrypted || failed) return;
-      assert.deepEqual(event.content['m.mentions'].user_ids, [b.user_id, dot.user_id]);
+      assert.deepEqual(event.content['m.mentions'].user_ids, [b.user_id]);
       assert.match(event.content.body, /Leggo una risposta di prova/);
       assert.ok(event.content.body.includes(encodeURIComponent(portal)));
       found = true;
     });
     return found;
-  }, 'a private threaded update with both mentions and a real source link');
-  console.log('An owner update read the selected encrypted portal and returned a referenced reply with two Matrix mentions.');
+  }, 'a private threaded update with an operator mention and a real source link');
+  console.log('An owner update read the selected encrypted portal and returned a referenced reply with a Matrix mention.');
 
   const replyInThread = { rel_type:'m.thread', event_id:updateId, is_falling_back:true, 'm.in_reply_to':{event_id:updateId} };
   async function ownerFollowup(transaction, body) {
@@ -665,7 +646,6 @@ try {
   await workerExit;
   store.db.close();
   reader.close();
-  dotClient.close();
   remoteClient.close();
   guide.close();
   acp.close();

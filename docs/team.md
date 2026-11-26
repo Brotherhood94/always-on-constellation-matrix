@@ -1,8 +1,20 @@
 # The starter team
 
-The installer preselects five agents after you sign in to Element. Keep the ones you need, or start with an empty Office. Each selected agent has its own Matrix identity, provider configuration, persistent Amplifier sessions, and Persona Workshop target. The Hiring Manager, Coach, and Scouter work in Office and also have private, encrypted operator chats in the Agents Space. VPS Manager uses **Root Operations** for host approvals.
+The installer preselects six agents after you sign in to Element. Keep the ones you need, or start with an empty Office. Each selected agent has its own Matrix identity, provider configuration, persistent Amplifier sessions, and Persona Workshop target. The Hiring Manager, Coach, and Scouter work in Office and also have private, encrypted operator chats in the Agents Space. VPS Manager uses **Agents → Rooms → Root Operations** for host approvals. Helper answers the operator in **Agents → People → Helper**.
 
 On the dashboard, open **Persona and duties** next to any agent. Its page shows what it owns, how it works, its limits, whom it can contact, its verified tools, and its Workshop revision when available. Bookmark the page or open a contact’s profile from it. A remote specialist or an older profile with only a capability description also gets a page.
+
+## Ask Helper
+
+In Element, open **Agents → People → Helper** and ask a plain-language question. For example, “How do I set up Element Desktop?” or “Is Context Intelligence healthy, and when was it last checked?” Helper cites the deployed guide and identifies stale or unavailable health data.
+
+For a question that belongs in an Office task, ask **@Task Manager** to consult Helper. Task Manager is the only agent that can initiate this handoff. The answer returns to the original Office thread. Helper’s private chat uses a separate session and accepts questions from the operator.
+
+On an existing deployment, run this from the VPS checkout and complete Amplifier’s provider setup.
+
+```sh
+./constellation_matrix agent add --starter helper --configure
+```
 
 ## Team connections
 
@@ -16,14 +28,15 @@ The log shows its coverage start date. A fresh installation starts recording whe
 
 | From | Starting contacts for new Office assignments |
 | --- | --- |
-| Task Manager | Hiring Manager, Coach, Scouter, VPS Manager, and registered specialists |
+| Task Manager | Hiring Manager, Coach, Scouter, VPS Manager, Helper, and registered specialists |
 | Hiring Manager | Task Manager, Coach, Scouter |
 | Coach | Task Manager, Hiring Manager, Scouter |
 | Scouter | Task Manager, Hiring Manager |
 | VPS Manager | Task Manager |
+| Helper | Returns answers to Task Manager in the original thread |
 | New specialist | Task Manager by default, or the explicit contacts in its profile |
 
-A contact grants permission to initiate a handoff. The recipient must also own the requested capability and resource, be ready, and have joined Office. A teammate can return an assigned result in its original thread. An operator can address an agent directly through Element’s mention picker. Private decisions stay in the relevant two-person chat.
+A contact grants permission to initiate a handoff. The recipient must also own the requested capability and resource, be ready, and have joined Office. A teammate can return an assigned result in its original thread. An operator can address Office agents through Element’s mention picker and can ask Helper directly in its private chat. Private decisions stay in the relevant two-person chat.
 
 1. **Coordinate work.** In **Agents → Office**, select **@Task Manager** from the mention picker and send “Coordinate a review of the tools our team needs for release notes. Ask Scouter to research one option and give me its publisher and permissions.” Task Manager can also finish simple work itself. If you use Dot, ask the **Constellation Office** plugin to send the task to Office starting with Task Manager.
 2. **Improve collaboration.** In **Coach**, ask “Review the handoff in this Office thread and see whether the next agent received sufficient evidence.” Coach reads the task history, cites a participating agent’s event, and applies a justified working-style revision through Workshop. It can edit ordinary outbound contacts. Changes to contacts involving VPS Manager require your approval. Coach reports the change privately and follows up after later outcomes. Send `undo scouter`, substituting the affected agent ID, to restore the previous agreement.
@@ -41,7 +54,7 @@ Automatic semantic reviews run at most once every ten minutes while the desk is 
 
 ## Add your own specialists
 
-Use the optional [Coder](../agents/examples/coder.json), [Analyst](../agents/examples/analyst.json), [Reviewer](../agents/examples/reviewer.json), or [remote worker](../agents/examples/remote-worker.json) as a starting point. Set a fresh key, capabilities with resource scopes, purpose, duties, working style, and optional outbound contacts. See the [five complete profiles](../deploy/matrix/starter-team.json).
+Use the optional [Coder](../agents/examples/coder.json), [Analyst](../agents/examples/analyst.json), [Reviewer](../agents/examples/reviewer.json), or [remote worker](../agents/examples/remote-worker.json) as a starting point. Set a fresh key, capabilities with resource scopes, purpose, duties, working style, and optional outbound contacts. See the [starter profiles](../deploy/matrix/starter-team.json).
 
 ```sh
 sudo ./constellation_matrix agent add --profile /path/to/specialist.json --configure

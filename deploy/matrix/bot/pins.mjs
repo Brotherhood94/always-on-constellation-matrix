@@ -74,7 +74,7 @@ function dotGuide({ command, systemd }) {
   ]);
 }
 
-function telegramGuide(command) {
+function telegramGuide(command, legacy) {
   const operatorCommand = command.replace(/^sudo /u, '');
   return message('Set up Telegram', [
     ['1. Browser · Get your Telegram API credentials', [
@@ -86,10 +86,10 @@ function telegramGuide(command) {
       { code: '(umask 077; touch "$HOME/telegram-api.json")\nchmod 600 "$HOME/telegram-api.json"\nnano "$HOME/telegram-api.json"' },
       { code: '{"api_id": 1234567, "api_hash": "REPLACE_WITH_YOUR_API_HASH"}' },
       { code: `${command} telegram prepare "$HOME/telegram-api.json"\n${operatorCommand} telegram activate` },
-      'Enter your existing Matrix operator password if prompted. After activation, open the Telegram Space in Element to find Telegram Agent and Telegram Bridge.',
+      'Enter your existing Matrix operator password if prompted. Stay in Telegram → Rooms → Telegram Bridge for the rest of setup.',
     ]],
     ['3. Element and Telegram mobile · Link your Telegram account', [
-      'In Element, open Telegram → Telegram Bridge. Copy the line below, paste it into the message box in Telegram Bridge, and press Enter to send it.',
+      'Copy the line below, paste it into the message box in Telegram Bridge, and press Enter to send it.',
       { code: '!tg login qr' },
       'Telegram Bridge replies in that chat with a QR code. On your phone, open Telegram → Settings → Devices → Link Desktop Device and scan the code.',
       'Wait for the bridge to confirm sign-in. If the code expires, send the same command again in Telegram Bridge.',
@@ -105,7 +105,11 @@ function telegramGuide(command) {
       '@Telegram Agent, prepare a private message to Sam Example saying tomorrow works for me.',
       '@Telegram Agent, prepare a message for Project Room saying the meeting starts at 10.',
       '@Telegram Agent, summarize what I missed today in Project Room.',
+      'Find contacts and groups under Telegram → People. Enable reading and drafting for each chat you want the agent to use.',
+      'Review the verified recipient and exact text here. Only your ✅ Accept or ❌ Decline vote closes the approval poll.',
     ]],
+    ...(legacy ? [['Earlier requests', [{ label: 'Open the archived Telegram Agent history',
+      url: 'https://matrix.to/#/' + encodeURIComponent(legacy) }]]] : []),
   ]);
 }
 
@@ -198,7 +202,7 @@ export function reconcilePins(matrix, links, state, options = {}) {
   ], state);
 }
 
-export function reconcileTelegramPin(matrix, state, command) {
-  return reconcile(matrix, [{ key: 'telegram-setup', content: telegramGuide(command),
+export function reconcileTelegramPin(matrix, state, command, legacy) {
+  return reconcile(matrix, [{ key: 'telegram-setup', content: telegramGuide(command, legacy),
     entries: [['telegram-setup', 'Set up Telegram']] }], state);
 }

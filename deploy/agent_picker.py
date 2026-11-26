@@ -233,7 +233,7 @@ def select_agents(presets, initial=None):
     if not presets:
         return []
     if initial is None:
-        initial = list(presets) if set(presets) == {'task-manager', 'hiring-manager', 'vps-manager', 'coach', 'scouter'} else []
+        initial = list(presets) if {'task-manager', 'hiring-manager', 'vps-manager', 'coach', 'scouter'} <= presets.keys() else []
     selection = terminal_picker(agent_checklist, presets, initial)
     if selection is not None:
         return selection
