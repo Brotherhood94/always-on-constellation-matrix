@@ -27,7 +27,7 @@ The pins are published after you join the room and Element has registered your d
 
 On a fresh interactive install, **Agents → Office** displays a **Finish setting up Office** message. Continue in the same VPS terminal if the installer is open. After confirming Element sign-in, use the arrow keys and Enter to review the six preselected starter agents and adjust your roster. Choose **Done** to register the agents. The installer uses sudo to save the agent registrations in the protected deployment directory and start local Amplifier containers. If prompted, enter the Linux password for the VPS account shown in the sudo prompt.
 
-The installer opens Amplifier sign-in for each selected local agent. If you closed the installer or it was interrupted, run `./constellation_matrix agent configure` once your agents are registered to resume the remaining provider setup. Run `./constellation_matrix setup-guide` if you still need to choose or register your agents. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
+The installer automatically opens Amplifier’s provider and model setup for each selected local agent in the same terminal. If you closed the installer or it was interrupted, run `./constellation_matrix agent configure` once your agents are registered to resume the remaining provider setup. Run `./constellation_matrix setup-guide` if you still need to choose or register your agents. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
 
 ## 👋 Receive the welcome and send a task
 

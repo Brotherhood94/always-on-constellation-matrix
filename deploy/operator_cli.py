@@ -153,6 +153,8 @@ def configure_as_operator(data, key=None, *, current=None, selection=None):
     if key is not None:
         elevate(data, '_host', 'configure', key)
     else:
+        if pending:
+            print('Opening Amplifier provider and model setup in this terminal.', flush=True)
         for number, name in enumerate(pending, start=1):
             print(f'Configuring local agent {number} of {len(pending)}', flush=True)
             elevate(data, '_host', 'configure', name, '--pending-only')

@@ -13,11 +13,11 @@ WELCOME_INSTRUCTIONS = ('  After signing in to Element, choose and configure the
 
 
 def interactive_terminal():
-    return sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get('TERM') not in (None, '', 'dumb')
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def heading(title):
-    if sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and 'NO_COLOR' not in os.environ:
+    if sys.stdout.isatty() and os.environ.get('TERM') not in (None, '', 'dumb') and 'NO_COLOR' not in os.environ:
         return f'\x1b[1;36m{title}\x1b[0m'
     return title
 
@@ -67,12 +67,21 @@ def read_page_key(fd):
 
 
 def confirm_element(title, body):
+    page = (f'{heading(TITLE)}\n\n{heading(title)}\n{body}\n\n'
+            '  After signing in, continue here to select your agents.\n'
+            '  Amplifier will then open provider and model setup for each selected local agent.\n')
+    if os.environ.get('TERM') in (None, '', 'dumb'):
+        print(page, flush=True)
+        try:
+            input('I’m signed in. Press Enter to continue. ')
+        except (EOFError, KeyboardInterrupt):
+            return None
+        return 'next'
     fd = sys.stdin.fileno()
     original = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd, termios.TCSANOW)
-        print(f'\x1b[2J\x1b[H{heading(TITLE)}\n\n{heading(title)}\n{body}\n\n'
-              '  → I’m signed in (Enter)', flush=True)
+        print(f'\x1b[2J\x1b[H{page}\n  → I’m signed in (Enter)', flush=True)
         while True:
             key = read_page_key(fd)
             if key in (b'\r', b'\n', b'\x1b[C', b'\x1bOC'):

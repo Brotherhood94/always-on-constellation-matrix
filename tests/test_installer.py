@@ -364,7 +364,8 @@ class InstallerTest(unittest.TestCase):
 
     def test_element_page_handles_enter_right_arrow_and_pause(self):
         output = StringIO()
-        with redirect_stdout(output), patch('sys.stdin.fileno', return_value=10), \
+        with redirect_stdout(output), patch.dict('setup_guide.os.environ', {'TERM': 'xterm'}), \
+                patch('sys.stdin.fileno', return_value=10), \
                 patch('setup_guide.termios.tcgetattr'), patch('setup_guide.tty.setcbreak'), \
                 patch('setup_guide.termios.tcsetattr') as restore, \
                 patch('setup_guide.select', return_value=([10], [], [])), \
@@ -374,6 +375,15 @@ class InstallerTest(unittest.TestCase):
             self.assertIsNone(confirm_element('Element', 'Install Element.'))
         self.assertEqual(restore.call_count, 3)
         self.assertIn('→ I’m signed in (Enter)', output.getvalue())
+
+    def test_basic_terminal_continues_from_element_to_agent_setup(self):
+        with patch.dict('setup_guide.os.environ', {'TERM': 'dumb'}), \
+             patch('builtins.input', side_effect=['', EOFError]) as prompt, redirect_stdout(StringIO()) as output:
+            self.assertEqual(confirm_element('Element', 'Install Element.'), 'next')
+            self.assertIsNone(confirm_element('Element', 'Install Element.'))
+        self.assertEqual(prompt.call_count, 2)
+        self.assertIn('Amplifier will then open provider and model setup', output.getvalue())
+        self.assertNotIn('\x1b[2J', output.getvalue())
 
     def test_wizard_resumes_element_and_immediately_opens_agent_selection(self):
         settings = {**self.settings, 'agents': []}

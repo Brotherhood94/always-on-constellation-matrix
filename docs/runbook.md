@@ -18,7 +18,7 @@ The installer then uses sudo to start Docker services, write protected deploymen
 
 After the workspace boots, sign in to Element and confirm sign-in in the terminal. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
 
-The installer starts the selected local Amplifier Instances together and opens provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.
+After registration, the installer starts the selected local Amplifier Instances together and opens provider and model setup one agent at a time in the same terminal. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.
 
 ```sh
 ./constellation_matrix agent configure

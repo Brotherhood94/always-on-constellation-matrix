@@ -51,7 +51,8 @@ class OperatorCLITest(unittest.TestCase):
     def test_install_prompts_before_sudo_and_sends_passwords_only_on_stdin(self):
         output = StringIO()
         with TemporaryDirectory() as work, redirect_stdout(output), patch('operator_cli.run') as run, \
-                patch('operator_cli.interactive_terminal', return_value=True), \
+                patch('setup_guide.sys.stdin.isatty', return_value=True), patch.object(output, 'isatty', return_value=True), \
+                patch.dict('setup_guide.os.environ', {'TERM': 'dumb'}), \
                 patch('operator_cli.interactive', return_value=(self.settings, 'matrix-fixture-password')) as prompt, \
                 patch('operator_cli.prompt_graph_password', return_value='graph-fixture-password') as graph, \
                 patch('operator_cli.setup_as_operator') as guide:
@@ -79,7 +80,7 @@ class OperatorCLITest(unittest.TestCase):
     def test_element_and_agent_selection_use_the_operator_session_before_elevation(self):
         output = StringIO()
         with TemporaryDirectory() as work, redirect_stdout(output), patch('operator_cli.confirm_element', return_value='next'), \
-                patch('operator_cli.select_agents', return_value=['manager']), \
+                patch('operator_cli.select_agents', return_value=['manager', 'helper']), \
                 patch('operator_cli.request') as request, patch('operator_cli.elevate') as sudo:
             data = Path(work)
             publish_metadata(data, self.settings, {'agents': {}})
@@ -95,16 +96,20 @@ class OperatorCLITest(unittest.TestCase):
                     self.assertIn('start local Amplifier containers with Docker', notice)
                     self.assertIn('Linux password for the VPS account shown in the prompt', notice)
                     self.assertNotIn('matrix-fixture-password', notice)
-                    self.assertEqual(payload, {'selection': ['manager'], 'token': 'matrix-session-fixture'})
+                    self.assertEqual(payload, {'selection': ['manager', 'helper'], 'token': 'matrix-session-fixture'})
                     save(data / 'setup.json', {**initial, 'element_confirmed': True, 'select_agents': False,
-                                              'pending': ['manager']})
+                                              'selected': payload['selection'], 'pending': payload['selection']})
                 if action == 'configure':
-                    save(data / 'setup.json', {**load(data / 'setup.json'), 'pending': []})
+                    state = load(data / 'setup.json')
+                    state['pending'].remove(rest[0])
+                    save(data / 'setup.json', state)
 
             sudo.side_effect = mutate
             setup_as_operator(data, passphrase='matrix-fixture-password')
             self.assertEqual([item.args[2:] for item in sudo.call_args_list],
-                             [('enroll',), ('configure', 'manager', '--pending-only'), ('finish',)])
+                             [('enroll',), ('configure', 'manager', '--pending-only'),
+                              ('configure', 'helper', '--pending-only'), ('finish',)])
+            self.assertIn('Opening Amplifier provider and model setup', output.getvalue())
             self.assertEqual(request.call_args_list[0].args[:2], ('POST', CLIENT + '/login'))
             self.assertEqual(request.call_args_list[-1],
                              call('POST', CLIENT + '/logout', {}, 'matrix-session-fixture', local_port=18500))
