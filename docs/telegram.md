@@ -50,13 +50,13 @@ Enter your existing Matrix operator password to link the bridge DM. The command 
 
 Each connected Telegram conversation has its own Matrix room, called a portal. The portal appears under **Telegram** once you bind it. Your contact continues to use their existing Telegram chat. Start with one trusted contact for the first delivery test.
 
-1. **Element.** Open **Telegram → Telegram Bridge**, send `!tg list-logins`, and copy the login ID for your own Telegram account. The **peer ID** is the numeric Telegram ID of the person or group you want to connect. The Matrix room ID is collected after the bridge creates the portal.
-2. **Element or Telegram.** Find and verify the destination’s peer ID.
+1. **Element or Telegram.** Find and verify the destination’s **peer ID**, the numeric Telegram ID of the person or group you want to connect.
 
-   - **Private chat.** In Telegram Bridge, send `!tg resolve-identifier <login-id> @<telegram-username>` with your login ID and the contact’s Telegram username. If the reply is **Found 1001 / Sample Contact**, check the profile and use `user:1001`. If you only know the name, try `!tg search <name>` and verify the matching profile before copying its ID. [Bridge lookup commands](https://github.com/mautrix/go/blob/ef9b6a2833c4/bridgev2/commands/startchat.go)
+   - **Private chat.** In **Telegram → Telegram Bridge**, send `!tg resolve-identifier @<telegram-username>`. The bridge uses your default connected account. To choose another connected account, get its ID with `!tg list-logins` and use `!tg resolve-identifier <login-id> @<telegram-username>`. If the reply is **Found 1001 / Sample Contact**, check the profile and use `user:1001`. If you only know the name, try `!tg search <name>` and verify the matching profile before copying its ID. [Bridge lookup commands](https://github.com/mautrix/go/blob/ef9b6a2833c4/bridgev2/commands/startchat.go)
    - **Supergroup without topics.** In Telegram, copy a link to a message in the group. For `https://t.me/c/1234567890/42`, use `channel:1234567890`. The last number identifies the message. [Telegram message links](https://core.telegram.org/api/links#message-links)
    - **Basic group or a group without a numeric message link.** In Telegram Desktop, open the group and choose **⋯ → Export chat history → JSON**. In the resulting `result.json`, check the chat name and copy the top-level `id`. Use `chat:<peer-id>` for a basic group and `channel:<peer-id>` for a supergroup without topics. [Telegram Desktop export](https://telegram.org/blog/export-and-more) · [Export fields](https://core.telegram.org/import-export#chat)
 
+2. **Element.** In **Telegram → Telegram Bridge**, send `!tg list-logins` and copy the login ID for your own connected Telegram account.
 3. **VPS terminal.** Allow the verified peer for the connected login. Replace the sample values with the peer and login you recorded.
 
    ```bash

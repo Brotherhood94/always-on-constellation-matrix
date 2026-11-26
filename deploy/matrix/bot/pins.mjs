@@ -80,8 +80,10 @@ function telegramGuide(command) {
     ]],
     ['4. Element · Find the Telegram peer ID', [
       'The peer ID is the number Telegram assigns to the person or group you want to connect. The login ID identifies your own connected Telegram account.',
-      'Open Telegram → Telegram Bridge. Send the first line and copy your login ID. Then send the second line with your login ID and the person’s Telegram @username.',
-      { code: '!tg list-logins\n!tg resolve-identifier <login-id> @<telegram-username>' },
+      'Open Telegram → Telegram Bridge. Replace the placeholder with the person’s Telegram username and send this command. The bridge uses your default connected account.',
+      { code: '!tg resolve-identifier @<telegram-username>' },
+      'If you connected multiple accounts, send !tg list-logins to find the account you want and include its login ID before the username.',
+      { code: '!tg resolve-identifier <login-id> @<telegram-username>' },
       'In the reply, check the contact’s name and copy the number before the slash. For example, if the reply says “Found 1001 / Sample Contact”, use user:1001.',
       'If you only know the name, try !tg search <name> in Telegram Bridge. Match the result to the person’s Telegram profile before using its ID.',
       'For a supergroup without topics, copy a message link in Telegram. In https://t.me/c/1234567890/42, use channel:1234567890. The last number is the message ID.',
@@ -89,6 +91,7 @@ function telegramGuide(command) {
       { label: 'Telegram chat export instructions', url: 'https://telegram.org/blog/export-and-more' },
     ]],
     ['5. VPS terminal and Element · Allow and verify the chat', [
+      'In Telegram Bridge, send !tg list-logins and copy your own Telegram login ID for the allow command.',
       'Replace both placeholders with the verified Telegram peer and the login ID for your own account. The Matrix room ID is collected after the portal is created.',
       { code: `${command} telegram allow '<peer-type>:<peer-id>' '<login-id>'` },
       'Ask the contact or group to send a test message. Open the resulting room in Element and confirm which Telegram conversation receives your reply.',

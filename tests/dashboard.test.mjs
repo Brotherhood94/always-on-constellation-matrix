@@ -141,12 +141,15 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
   assert.match(guide.body, /peer ID is the number Telegram assigns to the person or group/u);
-  assert.match(guide.body, /!tg list-logins\n!tg resolve-identifier <login-id> @<telegram-username>/u);
+  assert.match(guide.body, /default connected account\.\n!tg resolve-identifier @<telegram-username>/u);
+  assert.match(guide.body, /multiple accounts.*\n!tg resolve-identifier <login-id> @<telegram-username>/u);
+  assert.match(guide.body, /!tg list-logins and copy your own Telegram login ID for the allow command/u);
   assert.match(guide.body, /Found 1001 \/ Sample Contact.*use user:1001/u);
   assert.match(guide.body, /!tg search <name>/u);
   assert.match(guide.body, /t\.me\/c\/1234567890\/42.*channel:1234567890/u);
   assert.match(guide.body, /Export chat history → JSON.*result\.json.*top-level id/u);
   assert.match(guide.formatted_body, /!tg resolve-identifier &lt;login-id&gt; @&lt;telegram-username&gt;/u);
+  assert.match(guide.formatted_body, /<pre><code>!tg resolve-identifier @&lt;telegram-username&gt;<\/code><\/pre>/u);
   assert.match(guide.body, /Approve and send/);
   assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
   assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram activate`));
