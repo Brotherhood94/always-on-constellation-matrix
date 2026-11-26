@@ -17,7 +17,7 @@ import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
 import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramReceipt,
-  telegramReceiptKey, telegramTaskStatus } from './telegram-office.mjs';
+  telegramReceiptKey, telegramTaskStatus, telegramTerminal } from './telegram-office.mjs';
 import { helperIdentity, supportEvidence } from './helper-support.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
@@ -357,16 +357,16 @@ async function pollTelegram(client) {
   if (!row) return;
   store.telegramProgress(row.id, row.status, Date.now());
   const result = telegramReceipt(await telegramRequest(row.id, 'status'));
-  if (!result?.link) return;
+  if (!result || (!result.link && !telegramTerminal(result.status))) return;
   const event = { id: row.id, request: row.id, thread: row.thread, number: 1 };
   const evidence = (sent, fields) => process.env.CONTEXT_INTELLIGENCE_URL && executionEvidence({
     roomId, actor: userId, event, sent, target: `@telegram-agent:${MATRIX_SERVER_NAME}`, ...fields,
   });
   const post = (status, text) => sendEncrypted(client, roomId, reactionTransaction('telegram-' + status, row.id), {
-    msgtype: 'm.text', body: text + '\n' + result.link, 'm.relates_to': threadRelation(event),
-    [telegramReceiptKey]: { status, link: result.link },
+    msgtype: 'm.text', body: [text, result.link].filter(Boolean).join('\n'), 'm.relates_to': threadRelation(event),
+    [telegramReceiptKey]: { status, ...(result.link && { link: result.link }) },
   });
-  if (!row.status) {
+  if (!row.status && !telegramTerminal(result.status)) {
     const sent = await post('pending', telegramTaskStatus.pending);
     const dispatch = evidence(sent, { flow: 'dispatch' });
     if (dispatch) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(sent, JSON.stringify(dispatch));
@@ -374,8 +374,9 @@ async function pollTelegram(client) {
   }
   if (result.status === (row.status ?? 'pending')) return;
   const sent = await post(result.status, telegramTaskStatus[result.status]);
-  if (['completed', 'blocked'].includes(result.status)) {
-    store.finishTelegram(row.id, outcomeReaction[result.status], evidence(sent, { flow: 'return', status: result.status }));
+  if (telegramTerminal(result.status)) {
+    const status = result.status === 'declined' ? 'blocked' : result.status;
+    store.finishTelegram(row.id, outcomeReaction[status], evidence(sent, { flow: 'return', status }));
   } else store.telegramProgress(row.id, result.status, Date.now());
 }
 

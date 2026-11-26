@@ -26,25 +26,36 @@ export function freshness(timestamp, now = Date.now()) {
   return `${label} ${new Date(timestamp * 1000).toLocaleString()}`;
 }
 
-export function officeCatalog(catalog, integrations) {
+export function officeCatalog(catalog, integrations, telegram) {
   const services = integrations?.services ?? {};
-  if (!catalog?.agents || catalog.agents.some(agent => agent.key === 'telegram-agent') ||
-      !['Telegram', 'Telegram guide', 'Telegram Agent'].some(name => Object.hasOwn(services, name))) return catalog;
-  const manager = ['task-manager', 'manager'].find(key =>
-    catalog.agents.some(agent => agent.key === key));
+  const connector = telegram?.services?.connector;
+  const lastCheck = Date.parse(telegram?.generatedAt) / 1000;
+  const monitored = services['Telegram Agent'] ?? services['Telegram Control'];
+  const fromTelegram = connector && Number.isFinite(lastCheck) &&
+    (lastCheck > integrations?.time || (!monitored && !Number.isFinite(integrations?.time)));
+  const enabled = fromTelegram || ['Telegram', 'Telegram guide', 'Telegram Agent', 'Telegram Control']
+    .some(name => Object.hasOwn(services, name));
+  if (!enabled || !catalog?.agents || catalog.agents.some(agent => agent.key === 'telegram-agent')) return catalog;
+  const manager = ['task-manager', 'manager'].find(key => catalog.agents.some(agent => agent.key === key));
   const agents = catalog.agents.map(agent => agent.key === manager ? {
     ...agent, contacts: [...new Set([...(agent.contacts ?? []), 'telegram-agent'])],
   } : agent);
-  const status = services['Telegram Agent'];
+  const state = fromTelegram ? (connector.health || connector.state) : monitored;
+  const engine = fromTelegram ? telegram.services['telegram-engine']?.health : services['Telegram engine'];
+  const status = state === 'healthy' || (state === 'running' && engine === 'healthy') ? 'Available'
+    : state === 'running' && engine === 'unhealthy' ? 'Unavailable'
+      : state ? state[0].toUpperCase() + state.slice(1) : services.Telegram === 'configured' ? 'Unavailable' : 'Setup required';
+  const checked = fromTelegram ? Math.floor(lastCheck) : integrations?.time;
   agents.push({ key: 'telegram-agent', name: 'Telegram Agent', role: 'worker', contacts: [], placement: 'local',
-    server: 'VPS', status: status ? status[0].toUpperCase() + status.slice(1) : 'Setup required',
-    ...(status && Number.isSafeInteger(integrations.time) ? { healthCheckedAt: integrations.time } : {}),
+    server: catalog.agents.find(agent => agent.placement === 'local')?.server ?? 'VPS', status,
+    model: telegram?.agent?.model, effort: telegram?.agent?.effort,
+    ...(state && Number.isSafeInteger(checked) ? { healthCheckedAt: checked } : {}),
     limits: 'Operates on linked Telegram chats and uses verified bindings for drafts and updates.',
     persona: {
       purpose: 'Manage the Telegram Space and take Telegram assignments in Office.',
       duties: ['Find and link Telegram chats', 'Prepare drafts and summarize verified chats',
         'Report status and a private thread link back to Office'],
-      working_style: 'Ask the operator to resolve ambiguous recipients and approve outbound messages in Telegram Agent.',
+      working_style: 'Ask the operator to resolve ambiguous recipients and approve outbound messages in Telegram Bridge.',
     },
     tools: ['Scoped Telegram MCP'],
     ...(catalog.telegramPlacement ?? {}),
@@ -198,8 +209,8 @@ function showView(metrics, catalog, connections) {
   if (route) renderConnectionDetails(details, route, connections, catalog, freshness);
 }
 
-function render(metrics, roster, links, integrationStates, connections) {
-  const catalog = officeCatalog(roster, integrationStates);
+function render(metrics, roster, links, integrationStates, connections, telegram) {
+  const catalog = officeCatalog(roster, integrationStates, telegram);
   const now = Date.now();
   const el = id => document.getElementById(id);
   const make = (tag, text, className) => Object.assign(document.createElement(tag), { textContent: text, className });
@@ -247,7 +258,7 @@ function render(metrics, roster, links, integrationStates, connections) {
     const row = document.createElement('tr');
     const status = make('td', '', '');
     status.append(statusLabel(agent.status || 'Unavailable'));
-    if (agent.healthCheckedAt) status.append(make('div', `Checked \${new Date(agent.healthCheckedAt * 1000).toLocaleTimeString()}`, 'agent-detail'));
+    if (agent.healthCheckedAt) status.append(make('div', `Checked ${new Date(agent.healthCheckedAt * 1000).toLocaleTimeString()}`, 'agent-detail'));
     if (agent.move) status.append(make('div', 'Destination ' + agent.move.to, 'agent-detail'));
     row.append(make('td', agent.name || '—', 'agent-name'), status, make('td', agent.server || '—', 'agent-detail'),
       make('td', [agent.model, agent.effort].filter(Boolean).join(' · ') || '—', 'agent-detail'));
@@ -289,7 +300,7 @@ async function fetchJson(path) {
 if (typeof document !== 'undefined') {
   let state = [];
   async function refresh() {
-    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections'].map(path => fetchJson(path + '.json')));
+    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections', 'telegram'].map(path => fetchJson(path + '.json')));
     state = reports.map(({ status, value }, index) => status === 'fulfilled' ? value : state[index]);
     render(...state);
   }
@@ -297,7 +308,7 @@ if (typeof document !== 'undefined') {
   document.getElementById('range').addEventListener('change', () => render(...state));
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render(...state));
   window.addEventListener('hashchange', () => {
-    showView(state[0], officeCatalog(state[1], state[3]), state[4]);
+    showView(state[0], officeCatalog(state[1], state[3], state[5]), state[4]);
     const heading = document.querySelector('#connection-details:not([hidden]) h2, #persona-view:not([hidden]) h2');
     if (heading) {
       heading.tabIndex = -1;

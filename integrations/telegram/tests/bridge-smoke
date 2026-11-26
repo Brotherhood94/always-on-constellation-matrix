@@ -178,6 +178,7 @@ docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gi
   -v "$src/acp.mjs:/app/acp.mjs:ro" -v "$src/control.mjs:/app/control.mjs:ro" -v "$src/service.mjs:/app/service.mjs:ro" \
   -v "$src/delegation.mjs:/app/delegation.mjs:ro" \
   -v "$src/../../agents/connector/telegram-intent.mjs:/agents/connector/telegram-intent.mjs:ro" \
+  -v "$src/../../agents/connector/telegram-office.mjs:/agents/connector/telegram-office.mjs:ro" \
   --entrypoint node "$connector_image" --input-type=module - <<'JS'
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -474,12 +475,32 @@ try {
   }, 'Task Manager to receive a private Telegram approval link');
   assert.deepEqual(Object.keys(delegated).sort(), ['link', 'status']);
   const delegatedEvent = decodeURIComponent(delegated.link.split('/').at(-1));
-  const proposed = store.get('SELECT * FROM draft WHERE control_event=?', delegatedEvent);
+  const proposed = store.get('SELECT * FROM draft WHERE control_event=?', handoff.id);
   assert.equal(proposed.body, officeMessage.text);
+  assert.equal(store.get('SELECT event FROM draft_review WHERE draft=?', proposed.id).event, delegatedEvent);
+  assert.equal(store.get('SELECT thread FROM telegram_task WHERE id=?', handoff.id).thread, null);
+  await waitFor(async () => {
+    const sync = await reader.sync(controlCursor, 0);
+    controlCursor = sync.next_batch;
+    let poll;
+    await reader.applySync(sync, async (roomId, event, encrypted, failed) => {
+      if (roomId === controlRoom && event.event_id === delegatedEvent && encrypted && !failed) poll = event;
+    });
+    if (!poll) return false;
+    assert.equal(poll.type, pollStart);
+    assert.equal(poll.content['m.relates_to'], undefined);
+    assert.deepEqual(poll.content['m.mentions'].user_ids, [b.user_id]);
+    const question = poll.content[pollStart].question['org.matrix.msc1767.text'];
+    assert.match(question, /pilot \(private chat\)/iu);
+    assert.equal(question.split('\n\n').slice(1).join('\n\n'), officeMessage.text);
+    return true;
+  }, 'the exact Office draft in a top-level encrypted poll');
   await castVote(reader, proposed, 'reject', 'fixture-reject-natural-office');
   await waitFor(async () => (await requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, {
     ...handoff, method: 'status',
-  })).status === 'blocked', 'the operator rejection to reach Office');
+  })).status === 'declined', 'the operator rejection to reach Office');
+  assert.equal(store.draft(proposed.id).event, null);
+  assert.equal(store.get('SELECT decision FROM draft_review WHERE event=?', delegatedEvent).decision, 'reject');
   assert.equal(delegatedCalls, 1);
 
   const direct = await reader.encryptEvent(controlRoom, 'm.room.message', {
@@ -627,6 +648,50 @@ try {
     return privateReceipts.size === 2;
   }, 'the operator to decrypt both status receipts in the original Office thread');
   console.log('Telegram Agent accepted a direct Office mention and returned only encrypted status receipts with a private link.');
+
+  const officeSend = await reader.put(officeRoom, 'fixture-office-decline', await reader.encryptEvent(officeRoom, 'm.room.message', {
+    msgtype: 'm.text', body: '@Telegram Agent, manda messaggio a Pilot «Draft for decline»',
+    'm.mentions': { user_ids: [agent.user_id] },
+  }));
+  let declining;
+  await waitFor(() => declining = store.get('SELECT * FROM draft WHERE control_event=?', officeSend), 'the Office send draft');
+  await castVote(reader, declining, 'reject', 'fixture-office-decline-vote');
+  await waitFor(() => store.get('SELECT status FROM telegram_office_receipt WHERE id=?', officeSend)?.status === 'declined',
+    'the Office decline receipt');
+  await waitFor(async () => {
+    const next = await reader.sync(cursor, 0);
+    cursor = next.next_batch;
+    let declined = false;
+    await reader.applySync(next, async (roomId, event, encrypted, failed) => {
+      if (roomId !== officeRoom || event.sender !== agent.user_id || !encrypted || failed ||
+          event.content?.['m.relates_to']?.event_id !== officeSend) return;
+      if (typeof event.content.body === 'string' && event.content.body.includes('The operator declined the Telegram request')) {
+        assert.doesNotMatch(event.content.body, /Pilot|Draft for decline/u);
+        declined = true;
+      }
+    });
+    return declined;
+  }, 'an encrypted decline notice in the originating Office thread');
+  assert.equal(store.draft(declining.id).event, null);
+  console.log('Decline returned to the original encrypted Office thread without posting into the Telegram portal.');
+
+  store.delivery(portal, store.draft(draft).event, 'SUCCESS', Date.now());
+  const approvedOffice = { ...handoff, id: '$office-accept' };
+  const sendOffice = method => requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, {
+    ...approvedOffice, method, ...(method === 'submit' && { telegram: officeMessage }),
+  });
+  assert.equal((await sendOffice('submit')).status, 'pending');
+  await waitFor(async () => (await sendOffice('status')).status === 'awaiting_approval', 'the Office poll to open');
+  const approved = store.get('SELECT * FROM draft WHERE control_event=?', approvedOffice.id);
+  await castVote(reader, approved, 'approve', 'fixture-office-accept-vote');
+  await waitFor(() => store.draft(approved.id).state === 'matrix_accepted', 'the approved Office message in its bound portal');
+  const sent = store.draft(approved.id);
+  assert.equal(sent.room, portal);
+  assert.equal(sent.attempts, 1);
+  assert.equal(sent.body, officeMessage.text);
+  store.delivery(portal, sent.event, 'SUCCESS', Date.now());
+  await waitFor(async () => (await sendOffice('status')).status === 'completed', 'the confirmed delivery receipt for Office');
+  console.log('Accept sent the exact approved draft once to its verified portal and returned completion to Office.');
 
   await spaceClient.doRequest('PUT', childRoute, null, {});
   const removed = await reader.put(controlRoom, 'fixture-removed-room-draft',

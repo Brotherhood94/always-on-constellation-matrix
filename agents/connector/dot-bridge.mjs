@@ -60,7 +60,7 @@ const readReplies = db.prepare('SELECT number, agent, body, next_agent, reply_ki
 const readTelegram = db.prepare('SELECT status, link FROM telegram_progress WHERE task_id=?');
 const saveTelegram = db.prepare(`INSERT INTO telegram_progress VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET
   status=excluded.status, link=excluded.link, observed_at=excluded.observed_at
-  WHERE telegram_progress.status NOT IN ('completed','blocked') AND excluded.observed_at >= telegram_progress.observed_at`);
+  WHERE telegram_progress.status NOT IN ('completed','blocked','declined') AND excluded.observed_at >= telegram_progress.observed_at`);
 let client;
 let publishing = false;
 
@@ -141,7 +141,9 @@ function status(job) {
   if (telegram) {
     taskStatus = telegram.status === 'completed' ? 'thread_finished' : telegram.status;
     if (telegram.status === 'completed') outcome = { status: 'completed', result: telegramTaskStatus.completed };
-    if (telegram.status === 'blocked') outcome = { status: 'blocked', blocker: telegram.link ? telegramTaskStatus.blocked : 'Telegram Agent is unavailable.' };
+    if (telegram.status === 'blocked' || telegram.status === 'declined') {
+      outcome = { status: 'blocked', blocker: telegramTaskStatus[telegram.status] };
+    }
   }
   return {
     task_id: job.task_id,

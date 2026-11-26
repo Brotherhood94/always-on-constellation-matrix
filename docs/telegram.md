@@ -15,7 +15,7 @@ In **Telegram → Rooms → Telegram Bridge**, select **@Telegram Agent** from E
 - `@Telegram Agent, manda messaggio a Sam "ciao bello".`
 - “@Telegram Agent, summarize what I missed today in Project Room.”
 
-The agent uses the linked Telegram account to resolve contacts and groups. When several chats match, reply to the agent’s private thread with `telegram choose 2`, using the number it displayed. Opening a chat links it under **Telegram → People**. To remove the link, ask the agent to unlink the chat from Telegram. Drafts and updates require a [verified chat binding](#bind-verified-chats-to-the-telegram-space). When you ask to send a message, review the draft and choose **✅ Accept** in the private thread.
+The agent uses the linked Telegram account to resolve contacts and groups. When several chats match, reply to the agent’s private thread with `telegram choose 2`, using the number it displayed. Opening a chat links it under **Telegram → People**. To remove the link, ask the agent to unlink the chat from Telegram. Drafts and updates require a [verified chat binding](#bind-verified-chats-to-the-telegram-space). When you ask to send a message, review the recipient and exact text in the **Telegram Bridge** poll.
 
 The bridge and pinned guide can be active while the agent is still being set up. If the Telegram status lists only the guide and bridge, [finish setting up and starting the agent](#start-the-drafting-agent) before trying an example.
 
@@ -33,7 +33,7 @@ Choose **@Task Manager** when you want the coordinator to hand off the request o
 
 You can also write “Find Sam Example on Telegram and prepare a private message saying tomorrow works for me.” Task Manager delegates to Telegram Agent and posts status and a link to the private thread in Office. Contact matches, summaries, and draft text appear in **Telegram → Rooms → Telegram Bridge**. The drafting connector must be configured for natural-language requests. The exact commands below remain available.
 
-From ChatGPT with **Constellation Office**, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example with the exact text «Hello».” Dot uses `publish_telegram_task` to pass the exact recipient, chat type, and text to Task Manager. Open the private approval thread linked from the Office reply or Dot’s task status. Check the recipient and message, then vote **✅ Accept** or **❌ Decline** in Element.
+From ChatGPT with **Constellation Office**, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example with the exact text «Hello».” Dot uses `publish_telegram_task` to pass the exact recipient, chat type, and text to Task Manager. Open the poll linked from the Office reply or Dot’s task status. The poll shows the verified chat and exact message. **✅ Accept** sends to that chat after a final check. **❌ Decline** cancels the draft and reports the decision in the original Office thread.
 
 | Action | Text after the mention |
 | --- | --- |
@@ -177,7 +177,7 @@ Keep the connector running while binding. It completes a Matrix sync after joini
 ### Review and manage drafts
 
 - To request a draft for a group, send `telegram draft <binding-id> <source-event-id>` as a fresh message in Telegram Bridge. Use the latest admitted remote text from the intended portal.
-- Telegram Bridge mentions you in a preview with the verified recipient, exact text, source link, and expiry. Vote **✅ Accept** or **❌ Decline** in the matching poll. The first valid operator vote closes the poll. New messages, changes to the binding or room membership, and expiry can make a draft stale.
+- Telegram Bridge mentions you in the approval poll for a new draft. It shows the verified recipient, exact text, and expiry. Follow-ups stay in the conversation they continue. Vote **✅ Accept** or **❌ Decline**. The first valid operator vote closes the poll. New messages, changes to the binding or room membership, and expiry can make a draft stale.
 - `telegram pause <binding-id>` in Telegram Bridge pauses an individual binding. `telegram pause` there pauses all bindings. If Matrix is unavailable, use `telegram pause` from the VPS root console. The pause applies before a send enters the in-flight boundary.
 
 ### Dot and chat updates

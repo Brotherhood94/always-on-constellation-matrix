@@ -101,6 +101,9 @@ export class TelegramStore {
       CREATE INDEX IF NOT EXISTS control_request_status ON control_request(status, requested);
     `);
     this.atomic(() => {
+      if (!this.all('PRAGMA table_info(draft_review)').some(({ name }) => name === 'decision')) {
+        this.db.exec('ALTER TABLE draft_review ADD COLUMN decision TEXT');
+      }
       const columns = new Set(this.all('PRAGMA table_info(draft)').map(({ name }) => name));
       for (const [name, type] of [
         ['operator_approval', 'INTEGER NOT NULL DEFAULT 0'], ['control_event', 'TEXT'],
@@ -362,6 +365,7 @@ export class TelegramStore {
           context: draft.context, expiry: draft.until, at: now });
         this.run(`UPDATE draft SET state='ready', approval=? WHERE id=?`, approval, draft.id);
       } else return false;
+      this.run('UPDATE draft_review SET decision=? WHERE event=?', decision, review.event);
       return true;
     });
   }

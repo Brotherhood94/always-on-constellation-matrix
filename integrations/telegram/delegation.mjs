@@ -2,9 +2,9 @@ import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { chmod, unlink } from 'node:fs/promises';
 import { digest } from './policy.mjs';
-import { controlThread, matrixLink } from './control.mjs';
+import { controlThread, matrixLink, operatorNotice } from './control.mjs';
 import { matchTelegramName, telegramIntent, telegramMention, telegramSendPayload } from '../../agents/connector/telegram-intent.mjs';
-import { telegramTaskStatus } from '../../agents/connector/telegram-office.mjs';
+import { telegramTaskStatus, telegramTerminal } from '../../agents/connector/telegram-office.mjs';
 
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
 const peerId = /^(?:user|chat|channel):[1-9][0-9]{0,18}$/u;
@@ -13,9 +13,9 @@ const toolFor = { list: 'list_rooms', lookup: 'resolve_chat', open: 'open_room',
   draft: 'prepare_draft', send: 'prepare_draft', read: 'read_recent' };
 const status = { completed: { status: 'completed' }, blocked: { status: 'blocked' } };
 
-export function draftReceipt(draft, review, action) {
+export function draftReceipt(draft, review) {
   if (!draft) return null;
-  if (action === 'draft' && review) return 'completed';
+  if (draft.state === 'cancelled' && review?.decision === 'reject') return 'declined';
   if (draft.state === 'bridge_confirmed') return 'completed';
   if (['failed', 'cancelled', 'stale'].includes(draft.state)) return 'blocked';
   if (draft.state === 'unknown') return 'unconfirmed';
@@ -83,6 +83,9 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
   store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_office_receipt (
     id TEXT PRIMARY KEY REFERENCES telegram_task(id), status TEXT, activity TEXT
   );`);
+  if (!store.all('PRAGMA table_info(telegram_task)').some(({ name }) => name === 'control_event')) {
+    store.db.exec('ALTER TABLE telegram_task ADD COLUMN control_event TEXT');
+  }
   const grants = new Map();
   const load = id => store.get('SELECT * FROM telegram_task WHERE id=?', id);
   const queued = () => store.get("SELECT * FROM telegram_task WHERE phase IN ('queued','feedback') ORDER BY created LIMIT 1");
@@ -94,17 +97,25 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     if (row.fingerprint !== fingerprint || Boolean(row.office) !== office) return { status: 'conflict' };
     return receipt(row);
   };
+  function outcome(row) {
+    let state = row.phase === 'done' ? row.outcome : row.phase === 'choosing' ? 'needs_input' : 'pending';
+    let event = row.control_event && row.phase !== 'choosing' ? row.final_event ?? row.thread : row.thread ?? row.final_event;
+    if (row.phase === 'control') {
+      const control = row.control_event ?? row.thread;
+      const draft = store.get('SELECT id,state,version FROM draft WHERE control_event=?', control);
+      const review = draft && store.get('SELECT event,decision FROM draft_review WHERE draft=? AND version=?', draft.id, draft.version);
+      const stopped = !draft && store.get("SELECT 1 FROM control_request WHERE event=? AND status IN ('expired','cancelled')", control);
+      state = stopped ? 'blocked' : draftReceipt(draft, review) ?? state;
+      event = review?.event ?? event;
+    }
+    return { state, event };
+  }
   function receipt(row) {
     if (!row) return { status: 'missing' };
-    let state = row.phase === 'done' ? row.outcome : row.phase === 'choosing' ? 'needs_input' : 'pending';
-    if (row.phase === 'control') {
-      const draft = store.get('SELECT id,state,version FROM draft WHERE control_event=?', row.thread);
-      const review = draft && store.get('SELECT event FROM draft_review WHERE draft=? AND version=?', draft.id, draft.version);
-      const stopped = !draft && store.get("SELECT 1 FROM control_request WHERE event=? AND status IN ('expired','cancelled')", row.thread);
-      state = stopped ? 'blocked' : draftReceipt(draft, review, JSON.parse(row.intent).action) ?? state;
-    }
-    return { status: state, ...(row.thread && { link: matrixLink(settings.controlRoom, row.thread) }) };
+    const { state, event } = outcome(row);
+    return { status: state, ...(event && { link: matrixLink(settings.controlRoom, event) }) };
   }
+  const standaloneApproval = event => Boolean(event && store.get('SELECT 1 FROM telegram_task WHERE office=1 AND control_event=id AND id=?', event));
   async function office(input) {
     if (!input || !eventId.test(input.id ?? '') || !settings.officeRoom || input.room !== settings.officeRoom ||
         ![settings.owner, `@dot:${settings.domain}`].includes(input.sender) ||
@@ -136,17 +147,17 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
   }
   async function publishOffice() {
     const rows = store.all(`SELECT id, status, activity FROM telegram_office_receipt
-      WHERE status IS NULL OR status NOT IN ('completed', 'blocked') ORDER BY rowid`);
+      WHERE status IS NULL OR status NOT IN ('completed', 'blocked', 'declined') ORDER BY rowid`);
     for (const row of rows) {
       const result = receipt(load(row.id));
-      if (!result.link || result.status === row.status || !Object.hasOwn(telegramTaskStatus, result.status)) continue;
+      const state = result.status;
+      if (state === row.status || !Object.hasOwn(telegramTaskStatus, state) || (!result.link && !telegramTerminal(state))) continue;
       if (!await checkOffice()) return;
-      const state = row.status === null ? 'pending' : result.status;
       const transaction = action => 'telegram-office-' + digest([row.id, action]);
       const activity = row.activity ?? await reactOffice(transaction('activity'), row.id, '👀');
-      await postOffice(transaction(state), { msgtype: 'm.text', body: telegramTaskStatus[state] + '\n' + result.link,
+      await postOffice(transaction(state), { msgtype: 'm.text', body: [telegramTaskStatus[state], result.link].filter(Boolean).join('\n'),
         'm.relates_to': controlThread(row.id) });
-      if (state === 'completed' || state === 'blocked') {
+      if (telegramTerminal(state)) {
         await reactOffice(transaction('outcome'), row.id, state === 'completed' ? '✅' : '❌');
         await clearOfficeReaction(transaction('clear'), activity);
       }
@@ -227,11 +238,11 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       const input = { action: tool === 'read_recent' ? 'update' : 'compose', destination: binding.id,
         verifiedBinding: { id: binding.id, room: binding.room, generation: binding.generation, revision: binding.revision },
         chatType: destination.type, ...(tool === 'read_recent' ? { question: scope.question } : { text: scope.text }) };
-      if (!store.queueControl(row.thread, input, now(), { requireDot: false, atomic: false })) {
+      const control = row.office && ['send', 'draft'].includes(scope.action) ? row.id : row.thread;
+      if (!store.queueControl(control, input, now(), { requireDot: false, atomic: false })) {
         return feedback(row, 'The Telegram request could not be queued. Try again later.', 'blocked');
       }
-      store.run("UPDATE telegram_task SET phase='control',selection=NULL,intent=? WHERE id=?",
-        JSON.stringify({ action: scope.action }), row.id);
+      store.run("UPDATE telegram_task SET phase='control',selection=NULL,control_event=?,intent=NULL WHERE id=?", control, row.id);
     });
   }
   async function tool(input) {
@@ -261,21 +272,22 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       outcome='blocked',selection=NULL WHERE phase IN ('queued','choosing') AND created<?`, now() - jobAge);
     const row = queued();
     if (!row || !await checkRoom()) return;
-    if (!row.thread) {
-      row.thread = await post('telegram-task-' + digest(row.id), { msgtype: 'm.text', body: 'Telegram request from Office.' });
-      store.run('UPDATE telegram_task SET thread=? WHERE id=?', row.thread, row.id);
-    }
+    const scope = JSON.parse(row.intent);
     if (row.phase === 'feedback') {
-      const id = await post('telegram-task-result-' + digest([row.id, row.outcome]), {
-        msgtype: 'm.text', body: row.feedback, 'm.relates_to': controlThread(row.thread, row.thread),
-      });
-      store.run('UPDATE telegram_task SET phase=?,feedback=NULL,final_event=?,intent=? WHERE id=?',
-        row.outcome === 'needs_input' ? 'choosing' : 'done', id, row.outcome === 'needs_input' ? row.intent : null, row.id);
+      const onlyOffice = row.office && scope.action === 'clarify';
+      const id = onlyOffice ? null : await post('telegram-task-result-' + digest([row.id, row.outcome]), row.thread
+        ? { msgtype: 'm.text', body: row.feedback, 'm.relates_to': controlThread(row.thread) }
+        : operatorNotice(settings.owner, row.feedback));
+      store.run('UPDATE telegram_task SET phase=?,feedback=NULL,thread=COALESCE(thread,?),final_event=?,intent=? WHERE id=?',
+        row.outcome === 'needs_input' ? 'choosing' : 'done', id, id, row.outcome === 'needs_input' ? row.intent : null, row.id);
       if (row.outcome !== 'needs_input') store.run('UPDATE telegram_task SET selection=NULL WHERE id=?', row.id);
       return;
     }
-    const scope = JSON.parse(row.intent);
     if (scope.action === 'clarify') return feedback(row, 'Send one request at a time. For example, say “Send a private message to Sample Contact saying ‘Hello’.” I’ll show a preview and ask for your approval here. You can also ask to find a chat, open or unlink a room, or read an update.', 'blocked');
+    if (!row.thread && !['send', 'draft'].includes(scope.action)) {
+      row.thread = await post('telegram-task-' + digest(row.id), { msgtype: 'm.text', body: 'Telegram request from Office.' });
+      store.run('UPDATE telegram_task SET thread=? WHERE id=?', row.thread, row.id);
+    }
     const grant = randomBytes(32).toString('hex');
     grants.set(grant, { id: row.id, until: Math.min(row.created + jobAge, now() + 120_000) });
     try {
@@ -285,18 +297,17 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     } finally { grants.delete(grant); }
     if (load(row.id).phase === 'queued') feedback(row, 'Telegram Agent could not complete the tool call. Check the Telegram agent service and retry.', 'blocked');
   }
-  function controlDelivered(event, success) {
-    store.run("UPDATE telegram_task SET phase='done',outcome=?,intent=NULL WHERE thread=? AND phase='control'",
-      success ? 'completed' : 'blocked', event);
+  function controlDelivered(event, success, reply) {
+    store.run("UPDATE telegram_task SET phase='done',outcome=?,final_event=?,intent=NULL WHERE COALESCE(control_event,thread)=? AND phase='control'",
+      success ? 'completed' : 'blocked', reply, event);
   }
   function settleDrafts() {
-    const rows = store.all("SELECT id FROM telegram_task WHERE phase='control'");
-    for (const { id } of rows) {
-      const state = receipt(load(id)).status;
-      if (['completed', 'blocked'].includes(state)) {
-        store.run("UPDATE telegram_task SET phase='done',outcome=?,intent=NULL WHERE id=?", state, id);
+    for (const row of store.all("SELECT * FROM telegram_task WHERE phase='control'")) {
+      const { state, event } = outcome(row);
+      if (telegramTerminal(state)) {
+        store.run("UPDATE telegram_task SET phase='done',outcome=?,final_event=?,intent=NULL WHERE id=?", state, event, row.id);
       }
     }
   }
-  return { office, direct, directOffice, publishOffice, tool, tick, controlDelivered, settleDrafts };
+  return { office, direct, directOffice, publishOffice, tool, tick, controlDelivered, settleDrafts, standaloneApproval };
 }

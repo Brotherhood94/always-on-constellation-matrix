@@ -44,7 +44,9 @@ for name, content in {
     'metrics': {'time': now, 'history': rows},
     'links': {'context': 'https://fixture.test:8444/browser/?connectURL=bolt%2Bs%3A%2F%2Ffixture.test%3A17687'},
     'agents': {'time': now - 600, 'agents': agents, 'contactPolicy':True, 'dynamicHandoffs':True,'policyRevision':'a'*32},
-    'integrations': {'time': now, 'services': {'Context Intelligence': 'healthy', 'Telegram guide': 'running'}},
+    'integrations': {'time': now, 'services': {'Context Intelligence': 'healthy', 'Telegram guide': 'running',
+                    'Telegram Control': 'running', 'Telegram engine': 'healthy'}},
+    'telegram': {'agent': {'model': 'fixture-telegram-model', 'effort': 'low'}},
     'connections': {'version':1, 'time':now, 'room':'!office:fixture.test','coverage':'2026-11-24T15:00:00Z',
                     'changes':[change],'handoffs':[handoff,reverse],'unclassified':True},
 }.items():

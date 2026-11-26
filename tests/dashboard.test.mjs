@@ -13,6 +13,14 @@ test('the dashboard shows the Telegram specialist and its managed route when Tel
   assert.deepEqual(connectionGraph(setup).edges, [['task-manager', 'telegram-agent']]);
   assert.equal(setup.agents.at(-1).status, 'Setup required');
   assert.equal(officeCatalog(catalog, { services: { 'Telegram Agent': 'running' } }).agents.at(-1).status, 'Running');
+  const deployed = officeCatalog(catalog, { time: 1810000000, services: { 'Telegram Control': 'running',
+    'Telegram guide': 'running', 'Telegram engine': 'healthy' } }, {
+    generatedAt: '2026-11-26T18:25:20Z', agent: { model: 'fixture-model', effort: 'low' },
+    services: { connector: { state: 'running' } },
+  });
+  assert.equal(deployed.agents.at(-1).status, 'Available');
+  assert.equal(deployed.agents.at(-1).model, 'fixture-model');
+  assert.equal(deployed.agents.at(-1).healthCheckedAt, 1810000000);
   assert.deepEqual(catalog.agents[0].contacts, []);
 });
 

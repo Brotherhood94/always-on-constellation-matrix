@@ -159,8 +159,9 @@ def integration_status():
                  "telegram-engine": "Telegram engine", "telegram-guide": "Telegram guide"}
     status = {}
     for item in json.loads(command("docker", "inspect", *ids)):
-        name = item["Config"]["Labels"].get("com.docker.compose.service")
-        if name in monitored:
+        labels = item["Config"]["Labels"] or {}
+        name = labels.get("com.docker.compose.service")
+        if name in monitored and labels.get("com.docker.compose.oneoff", "false").lower() != "true":
             state = item["State"]
             status[monitored[name]] = state.get("Health", {}).get("Status") or state["Status"]
     return status

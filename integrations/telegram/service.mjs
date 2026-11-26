@@ -426,13 +426,15 @@ async function run() {
       }
     }
     if (!(await matrix.verifyControl({ requireDot }))) return;
-    const encrypted = await matrix.encryptEvent(settings.controlRoom, 'm.room.message',
-      updateReply(requireDot ? settings : { ...settings, dot: undefined }, request.event, body, sources, request.thread_root ?? request.event));
+    const standalone = delegation?.standaloneApproval(request.event);
+    const message = standalone ? operatorNotice(settings.owner, body) :
+      updateReply(requireDot ? settings : { ...settings, dot: undefined }, request.event, body, sources, request.thread_root ?? request.event);
+    const encrypted = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', message);
     if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot }))) return;
-    await matrix.put(settings.controlRoom, `control-${digest(request.event)}`, encrypted);
+    const reply = await matrix.put(settings.controlRoom, `control-${digest(request.event)}`, encrypted);
     store.atomic(() => {
       store.controlDelivered(request.event);
-      delegation?.controlDelivered(request.event, success);
+      delegation?.controlDelivered(request.event, success, reply);
     });
     if (process.env.TELEGRAM_CONTEXT_ENABLED === 'true') {
       try {
@@ -454,6 +456,11 @@ async function run() {
 
   async function notify(draft) {
     const awaiting = draft.state === 'awaiting_approval';
+    const office = delegation?.standaloneApproval(draft.control_event);
+    if (office && !awaiting) {
+      store.notified(draft.id, draft.state);
+      return;
+    }
     const title = `Draft for ${draft.binding} · ${draft.id.slice(0, 8)}`;
     const target = JSON.parse(draft.target);
     if (awaiting && await liveBinding(draft.room, target) !== target.audience) {
@@ -461,22 +468,28 @@ async function run() {
       return;
     }
     const destination = awaiting && (draft.recipient || (await matrix.liveState(draft.room)).name || draft.binding);
-    const reference = draft.control_event
-      ? [`Request: ${matrixLink(settings.controlRoom, draft.control_event)}`,
-        ...(draft.reply_event ? [`Reply to: ${matrixLink(draft.room, draft.reply_event)}`] : [])]
-      : [`Source: ${matrixLink(draft.room, draft.source)}`];
-    const relation = draft.control_event && controlThread(store.controlThread(draft.control_event), draft.control_event);
-    const message = awaiting ? operatorNotice(settings.owner, [title, `To: ${destination}`, ...reference].join('\n'), {
-      text: draft.body, footer: `Expires: ${date.format(draft.until)}. Use the poll to approve or decline.`,
-    }) : { msgtype: 'm.text', body: `${draft.binding}: ${draft.state.replaceAll('_', ' ')}. Draft ${draft.id}.` };
-    const prepared = await matrix.encryptEvent(settings.controlRoom, 'm.room.message',
-      { ...message, ...(relation && { 'm.relates_to': relation }) });
-    if (!(await matrix.verifyControl())) throw new Error('Control room changed.');
-    await matrix.put(settings.controlRoom, `notice-${digest([draft.id, draft.version, draft.state])}`, prepared);
+    const thread = draft.control_event && store.controlThread(draft.control_event);
+    const standalone = settings.bridgeControl && (office || !thread || thread === draft.control_event);
+    const relation = thread && !standalone ? controlThread(thread, draft.control_event) : undefined;
+    if (!standalone || !awaiting) {
+      const reference = draft.control_event
+        ? [`Request: ${matrixLink(settings.controlRoom, draft.control_event)}`,
+          ...(draft.reply_event ? [`Reply to: ${matrixLink(draft.room, draft.reply_event)}`] : [])]
+        : [`Source: ${matrixLink(draft.room, draft.source)}`];
+      const message = awaiting ? operatorNotice(settings.owner, [title, `To: ${destination}`, ...reference].join('\n'), {
+        text: draft.body, footer: `Expires: ${date.format(draft.until)}. Use the poll to approve or decline.`,
+      }) : { msgtype: 'm.text', body: `${draft.binding}: ${draft.state.replaceAll('_', ' ')}. Draft ${draft.id}.` };
+      const prepared = await matrix.encryptEvent(settings.controlRoom, 'm.room.message',
+        { ...message, ...(relation && { 'm.relates_to': relation }) });
+      if (!(await matrix.verifyControl())) throw new Error('Control room changed.');
+      await matrix.put(settings.controlRoom, `notice-${digest([draft.id, draft.version, draft.state])}`, prepared);
+    }
     if (awaiting && store.draft(draft.id).state === 'awaiting_approval') {
-      const question = `${title}\nReview the draft above before sending.`;
+      const question = standalone ? `Send this Telegram message to ${destination}?\nExpires ${date.format(draft.until)}.\n\n${draft.body}`
+        : `${title}\nReview the draft above before sending.`;
       const poll = await matrix.encryptEvent(settings.controlRoom, pollStart, {
         ...(relation && { 'm.relates_to': relation }),
+        'm.mentions': { user_ids: [settings.owner] },
         [pollText]: question,
         [pollStart]: {
           kind: 'org.matrix.msc3381.poll.disclosed',

@@ -1448,6 +1448,11 @@ def main():
                 commit_registry(data / 'agents.json', registry)
             publish_dashboard(settings, data)
         publish_inventory(settings, data, registry)
+        if settings['telegram']:
+            try:
+                run_telegram(data, 'metrics')
+            except subprocess.CalledProcessError:
+                print('Could not refresh Telegram telemetry. The previous snapshot is retained.', file=sys.stderr)
         refresh_connections(data)
         compose(data, '--profile', 'agents', 'ps')
     if args.command in {'install', 'setup-guide', 'agent'} or args.command == 'remote' and args.action == 'confirm':

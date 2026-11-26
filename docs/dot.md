@@ -25,4 +25,4 @@ sudo ./constellation_matrix dot-connect tunnel_REPLACE_WITH_YOUR_ID
 
 If you enable Telegram Agent access for Dot later, refresh the app’s tool list to use the draft and update tools. The operator approves outbound messages in Element. [Telegram Agent](telegram.md#dot-and-chat-updates)
 
-To route a Telegram task through Office, ask “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Dot uses `publish_telegram_task` to pass the exact recipient and text to Task Manager. It reports progress and links to the private approval thread. After an upgrade, refresh the app’s tool list if the new tool is missing. [Telegram from Office](telegram.md#use-telegram-from-office)
+To route a Telegram task through Office, ask “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Dot uses `publish_telegram_task` to pass the exact recipient and text to Task Manager. It reports progress and links directly to the private Telegram Bridge poll. After an upgrade, refresh the app’s tool list if the new tool is missing. [Telegram from Office](telegram.md#use-telegram-from-office)

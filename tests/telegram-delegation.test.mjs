@@ -180,7 +180,10 @@ test('Task Manager can relay a Dot assignment to queue one operator-approved Tel
   assert.equal((await f.broker().office({ ...request, method: 'status' })).status, 'pending');
   assert.equal(f.effects.length, 0);
   const receipt = await f.broker().office({ ...request, method: 'status' });
-  assert.deepEqual(telegramReceipt(receipt), receipt);
+  assert.deepEqual(receipt, { status: 'pending' });
+  assert.equal(telegramReceipt(receipt), null);
+  const poll = { status: 'awaiting_approval', link: 'https://matrix.to/#/!telegram%3Asample.test/%24poll' };
+  assert.deepEqual(telegramReceipt(poll), poll);
   assert.equal(telegramReceipt({ ...receipt, link: 'https://example.test/private' }), null);
   assert.equal(telegramReceipt({ status: 'completed' }), null);
 });
@@ -204,6 +207,7 @@ test('a structured Dot send survives multiline Office prose and preserves the ex
   assert.equal((await f.broker().office(input)).status, 'pending');
   assert.equal((await f.broker().office(input)).status, 'pending');
   await f.broker().tick();
+  assert.equal(f.messages.size, 0, 'A verified Office send should queue a draft without a Bridge placeholder');
   const drafts = f.store.all('SELECT payload FROM control_request');
   assert.deepEqual(drafts.map(({ payload }) => JSON.parse(payload)), [{ action: 'compose', destination: 'sam',
     verifiedBinding: binding, chatType: 'direct', text: telegram.text }]);
@@ -255,7 +259,7 @@ test('a list request keeps linked-room links private and does not append a missi
   assert.deepEqual(Object.keys(await f.broker().office(request)).sort(), ['link', 'status']);
 });
 
-test('requests require a binding and draft-only and send tasks wait for different receipts', async () => {
+test('requests require a binding and remain pending until the poll and delivery reach a terminal outcome', async () => {
   const f = fixture();
   const postDraft = id => f.broker().direct(direct(id, 'prepare a private message to Sam Example saying tomorrow works.'));
   await postDraft('$unbound');
@@ -271,11 +275,28 @@ test('requests require a binding and draft-only and send tasks wait for differen
   assert.deepEqual(JSON.parse(work.payload), { action: 'compose', destination: 'sam', verifiedBinding: binding,
     chatType: 'direct', text: 'tomorrow works.' });
   assert.equal(draftReceipt({ state: 'awaiting_approval' }, null, 'draft'), null);
-  assert.equal(draftReceipt({ state: 'awaiting_approval' }, {}, 'draft'), 'completed');
+  assert.equal(draftReceipt({ state: 'awaiting_approval' }, {}), 'awaiting_approval');
+  assert.equal(draftReceipt({ state: 'cancelled' }, { decision: 'reject' }), 'declined');
   assert.equal(draftReceipt({ state: 'matrix_accepted' }, {}, 'send'), 'sending');
   assert.equal(draftReceipt({ state: 'cancelled' }, {}, 'send'), 'blocked');
   assert.equal(draftReceipt({ state: 'unknown' }, {}, 'send'), 'unconfirmed');
   assert.equal(draftReceipt({ state: 'bridge_confirmed' }, {}, 'send'), 'completed');
+});
+
+test('an unclear Office mention gets one actionable reply in Office and no Bridge thread', async () => {
+  const f = fixture();
+  const event = direct('$unclear-office', 'Do these two unrelated things.');
+  assert.equal(await f.broker().directOffice(event), true);
+  await f.broker().tick();
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  await f.broker().publishOffice();
+  assert.equal(f.messages.size, 0);
+  assert.equal(f.officeMessages.size, 1);
+  const [reply] = f.officeMessages.values();
+  assert.equal(reply['m.relates_to'].event_id, event.event_id);
+  assert.match(reply.body, /one Telegram chat and one action/u);
+  assert.deepEqual([...f.officeReactions.values()], [{ event: event.event_id, key: '❌' }]);
 });
 
 test('a short Italian send request queues one approval draft and does not deliver it', async () => {

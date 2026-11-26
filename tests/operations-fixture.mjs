@@ -354,7 +354,18 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     assert.equal(changed.result.isError, true);
     telegramStatus = 'completed';
     await eventually(async () => (await telegramTaskStatus())?.outcome?.status === 'completed');
-    console.log('Dot routed an encrypted Telegram task through Manager and observed approval and completion in its own thread.');
+    telegramStatus = 'awaiting_approval';
+    const declineTask = { ...telegramTask, task_id: 'fixture-dot-telegram-decline' };
+    const declineStatus = async () => (await tool('get_task', { task_id: declineTask.task_id })).result.structuredContent;
+    assert.notEqual((await tool('publish_telegram_task', declineTask)).result.isError, true);
+    await eventually(async () => (await declineStatus())?.status === 'awaiting_approval');
+    telegramStatus = 'declined';
+    const declined = await eventually(async () => {
+      const status = await declineStatus();
+      return status?.status === 'declined' && status;
+    });
+    assert.match(declined.outcome.blocker, /operator declined/u);
+    console.log('Dot routed encrypted Telegram tasks through Manager and observed completion or decline in its own threads.');
     const unverified = await sendEncrypted(reader, office, 'fixture-unverified',
       mentionMessage('Unverified fixture. Draft a three-step checklist.', manager));
     const progress = await eventually(() => findMessage(item => item.content['m.relates_to']?.event_id === unverified &&

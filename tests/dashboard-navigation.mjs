@@ -66,6 +66,9 @@ try {
     await enter('.graph-node[href="#/agents/telegram-agent"]');
     await waitFor(() => evaluate("document.querySelector('#persona-view h2')?.textContent === 'Telegram Agent'"));
     assert.match(await evaluate("document.getElementById('persona-view').textContent"), /Manage the Telegram Space/);
+    const telegramRow = await evaluate("[...document.querySelectorAll('#agents tr')].find(row => row.cells[0].textContent === 'Telegram Agent').textContent");
+    assert.match(telegramRow, /Available/);
+    assert.match(telegramRow, /fixture-telegram-model/);
     await enter('#persona-view a');
     await waitFor(() => evaluate("!document.getElementById('overview').hidden"));
     assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true);

@@ -60,7 +60,7 @@ Task Manager is the entry point for coordinated Office tasks. Open **Agents → 
 
 If you enabled Dot, open a ChatGPT conversation with the **Constellation Office** plugin and ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” [Dot setup](docs/dot.md)
 
-With Dot and Telegram configured, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Open the private **Telegram Bridge** thread from Dot’s task status or the Office reply. Review the recipient and exact text, then vote **✅ Accept** or **❌ Decline** in Element. [Telegram from Office](docs/telegram.md#use-telegram-from-office)
+With Dot and Telegram configured, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Open the **Telegram Bridge** poll from Dot’s task status or the Office reply. Review the recipient and exact text, then vote **✅ Accept** or **❌ Decline** in Element. [Telegram from Office](docs/telegram.md#use-telegram-from-office)
 
 If you skipped Task Manager, use the Office agent named in your welcome. If you skipped the Office roster, add a worker first. [Add a worker](docs/runbook.md#add-a-worker)
 

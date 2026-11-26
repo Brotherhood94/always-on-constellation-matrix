@@ -1015,8 +1015,10 @@ class InstallerTest(unittest.TestCase):
             command = ['constellation_matrix', '--data-dir', work, 'status', '--refresh']
             with patch('sys.argv', command), patch('installer.os.geteuid', return_value=0), \
                  patch('installer.open_existing', return_value=(self.settings, {'connection_history': {}})), \
-                 patch('installer.publish_inventory'), patch('installer.refresh_connections'), patch('installer.compose'):
+                 patch('installer.publish_inventory'), patch('installer.refresh_connections'), patch('installer.compose'), \
+                 patch('installer.run_telegram') as telegram:
                 main()
+            telegram.assert_called_once_with(data.resolve(), 'metrics')
             self.assertIn('connection-focus', (data / 'dashboard/index.html').read_text())
             self.assertEqual(load(data / 'dashboard/links.json')['context'], self.settings['context_url'])
 

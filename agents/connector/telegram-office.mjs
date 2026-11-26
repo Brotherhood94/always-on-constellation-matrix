@@ -43,9 +43,12 @@ export const telegramTaskStatus = {
   awaiting_approval: 'The Telegram draft is ready for your approval.',
   sending: 'Telegram Agent is waiting for a delivery receipt.',
   completed: 'Telegram Agent completed the request.',
-  blocked: 'Telegram Agent could not complete the request. Open the private thread for the next step.',
+  blocked: 'Telegram Agent could not complete the request. Specify one Telegram chat and one action. Check the private link for details when available.',
+  declined: 'The operator declined the Telegram request. No message was sent.',
   unconfirmed: 'Telegram delivery is unconfirmed. Check the private receipt before retrying.',
 };
+
+export const telegramTerminal = status => ['completed', 'blocked', 'declined'].includes(status);
 
 export const telegramReceiptKey = 'org.matrixconstellation.telegram.receipt';
 const privateTelegramLink = /^https:\/\/matrix\.to\/#\/(?:%21|!)[A-Za-z0-9_.:%-]+\/(?:%24|\$)[A-Za-z0-9_:%.-]+$/iu;
