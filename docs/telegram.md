@@ -50,7 +50,7 @@ The bridge uses the operator's linked Telegram account. Open the result from the
 
 If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. If you only know the name, use [Telegram Agent search](#search-for-a-telegram-user) to find the numeric ID. The bridge can open a numeric ID when it knows the contact through your linked Telegram account. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
 
-Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office draft command opens a private Telegram Bridge thread. Only the operator can approve and send the exact text there. To keep your request private from the start, open **Telegram → Rooms → Telegram Bridge** and mention the agent there. The exact draft command also works in that room without a mention. Dot is optional for both paths.
+After you open and join a verified chat, your first draft or send request to Telegram Agent in Office or Telegram Bridge sets up the chat automatically. The [drafting connector](#start-the-drafting-agent) must be running. An Office draft command opens a private Telegram Bridge thread. Only the operator can approve and send the exact text there. To keep your request private from the start, open **Telegram → Rooms → Telegram Bridge** and mention the agent there. The exact draft command also works in that room without a mention. Dot is optional for both paths.
 
 ## Get the Telegram API credentials
 
@@ -152,7 +152,11 @@ sudo ./constellation_matrix telegram start-agent
 
 ## Bind verified chats to the Telegram Space
 
-**Element.** Telegram Agent automatically joins eligible chats after you open and join them. In the verified portal, enable the operator’s Telegram login as its relay with `!tg set-relay <login-id>`. Configure a per-chat binding to enable reading and drafting. Dot submits private requests to the connector through a local socket. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
+**Element.** Open the verified contact or group under **Telegram → People** and join if prompted. Mention **@Telegram Agent** or **@Task Manager** and request a draft or a send to that chat. Telegram Agent verifies the room and its participants, uses your linked Telegram login as the relay, and creates a request-only binding. Review the recipient and exact text in the **Telegram Bridge** poll. For Dot, ask it to send the task through Task Manager.
+
+### Manual bindings and recovery
+
+For inbound-triggered drafts or to recover a paused binding, configure it explicitly. In the verified portal, enable your Telegram login as its relay with `!tg set-relay <login-id>`. Check a paused binding with `sudo ./constellation_matrix telegram report` before revalidating it. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
 To let the drafting agent or Dot use a room, keep a private binding file for that chat. Use `mode: draft` and `trigger: inbound` for the first DM. Use `mode: draft` and `trigger: request` for an eligible group. A basic group and a supergroup without topics are supported by the admission policy. A forum or broadcast channel needs its own mapping and acceptance.
 

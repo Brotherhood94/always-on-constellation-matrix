@@ -119,7 +119,7 @@ export async function telegramControlSearch(room, event, options) {
 export async function telegramOfficeAction(input, options) {
   const { client, database, space, control, domain, owner, key, bridgeFetch = fetch } = options;
   if (!input || typeof input.id !== 'string' || !eventId.test(input.id) ||
-      !['add', 'remove', 'draft', 'resolve', 'list'].includes(input.action) ||
+      !['add', 'remove', 'draft', 'resolve', 'list', 'prepare-binding'].includes(input.action) ||
       (input.action !== 'list' && (!bounded(input.target, 120) || /[\x00-\x1f]/u.test(input.target)))) {
     return fail('Use a Telegram username, group ID, room ID, or exact chat name.');
   }
@@ -150,6 +150,24 @@ export async function telegramOfficeAction(input, options) {
     event.content?.via?.length).map(event => event.state_key));
   const { rows } = await database.query('SELECT room, peer, name FROM telegram_space_sent_portal WHERE owner = $1', [owner]);
   const eligible = rows.filter(({ room }) => matrixRoom.test(room) && room !== control && room !== space);
+  if (input.action === 'prepare-binding') {
+    const peer = input.peer;
+    if (!matrixRoom.test(target) || !(userPeer.test(peer) || groupId.test(peer)) ||
+        !linked.has(target) || !eligible.some(row => row.room === target && row.peer === peer) ||
+        !await privateTelegramControl(client, options)) {
+      return fail('Open and join the verified chat under Telegram → People before requesting a draft.');
+    }
+    if (!key) return fail('Connect your Telegram account in Telegram Bridge and retry.');
+    const response = await bridgeFetch(bridgeProvisioning + 'constellation_membership/' + encodeURIComponent(peer) +
+      '?' + new URLSearchParams({ user_id: owner, room_id: target, prepare_relay: 'true' }), {
+      method: 'POST', redirect: 'error', headers: { authorization: 'Bearer ' + key }, signal: AbortSignal.timeout(10_000),
+    }).catch(() => null);
+    const relay = response?.ok && await response.json().catch(() => null);
+    if (relay?.room !== target || typeof relay.login !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(relay.login)) {
+      return fail('Telegram Bridge could not verify the chat relay. Check that you are signed in and have joined the linked chat.');
+    }
+    return { ok: true, room: target, peer, login: relay.login };
+  }
   if (input.action === 'list') return { ok: true, rooms: eligible.filter(({ room }) => linked.has(room)).slice(0, 31)
     .map(room => ({ ...room, name: room.name?.slice(0, 120) })) };
   if (input.action === 'resolve') {
@@ -248,7 +266,7 @@ export async function listenTelegramOffice(path, options, { privateLookups = fal
         }
         const input = JSON.parse(Buffer.concat(chunks).toString());
         const task = pending.then(async () => {
-          if (!privateLookups && ['resolve', 'list'].includes(input?.action)) {
+          if (!privateLookups && ['resolve', 'list', 'prepare-binding'].includes(input?.action)) {
             return fail('Chat lookup is available in the private Telegram Agent room.');
           }
           return telegramOfficeAction(input, await options());

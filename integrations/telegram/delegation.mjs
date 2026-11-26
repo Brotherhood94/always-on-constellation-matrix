@@ -74,7 +74,7 @@ function candidates(rooms, scope) {
 }
 
 export function createTelegramDelegation({ store, settings, checkRoom, checkOffice, guide, post, postOffice,
-  reactOffice, clearOfficeReaction, runAgent, getBinding, now = Date.now }) {
+  reactOffice, clearOfficeReaction, runAgent, getBinding, prepareBinding, now = Date.now }) {
   store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_task (
     id TEXT PRIMARY KEY, office INTEGER NOT NULL, created INTEGER NOT NULL, fingerprint TEXT NOT NULL,
     thread TEXT, intent TEXT, phase TEXT NOT NULL DEFAULT 'queued', selection TEXT, feedback TEXT,
@@ -230,8 +230,15 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
         target: remove ? destination.room : destination.peer, ...(remove && { retryByRoom: true }) });
       return feedback(row, result?.message ?? 'Telegram Bridge is unavailable.', result?.ok ? 'completed' : 'blocked');
     }
-    const binding = destination.room && await getBinding(destination.room, destination.peer);
-    if (!binding) return feedback(row, 'This chat needs an active, verified binding. Follow the binding steps and then retry.\n' +
+    let binding = destination.room && await getBinding(destination.room, destination.peer);
+    if (!binding && destination.room && tool === 'prepare_draft') {
+      // Pin the exact destination before changing its relay or binding.
+      store.run("UPDATE telegram_task SET selection=? WHERE id=? AND phase='queued'", JSON.stringify(destination), row.id);
+      const prepared = await prepareBinding(destination, row.id);
+      if (!prepared.binding) return feedback(row, prepared.error, 'blocked');
+      binding = prepared.binding;
+    }
+    if (!binding) return feedback(row, 'This chat needs an active, verified binding. Request a draft for a linked chat to set it up, or check an existing binding in the Telegram guide.\n' +
       'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#bind-verified-chats-to-the-telegram-space', 'blocked');
     if (!await checkRoom()) return;
     store.atomic(() => {

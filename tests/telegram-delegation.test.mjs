@@ -75,12 +75,18 @@ function fixture() {
   const officeReactions = new Map();
   let broker;
   let binding;
+  let prepareError;
   let clock = 1_000;
   const resolved = [{ peer: 'user:1001', name: 'Sam Example', room: '!sam:sample.test' }];
   const settings = { domain, owner, agent, officeRoom, controlRoom };
   const options = { store, settings, now: () => clock, checkRoom: async () => true,
     checkOffice: async () => true,
     getBinding: async () => binding,
+    prepareBinding: async (destination, id) => {
+      effects.push({ action: 'prepare-binding', destination, id });
+      if (prepareError) return { error: prepareError };
+      return { binding: { id: 'sam', room: destination.room, generation: 1, revision: 1 } };
+    },
     guide: async input => {
       if (input.action === 'resolve' || input.action === 'list') return { ok: true, rooms: resolved };
       effects.push(input);
@@ -106,7 +112,7 @@ function fixture() {
   broker = createTelegramDelegation(options);
   return { store, effects, messages, officeMessages, officeReactions, resolved, broker: () => broker,
     restart: () => { broker = createTelegramDelegation(options); },
-    setBinding: value => { binding = value; }, advance: amount => { clock += amount; } };
+    setBinding: value => { binding = value; }, failPreparation: error => { prepareError = error; }, advance: amount => { clock += amount; } };
 }
 
 test('an Office handoff is private, idempotent and selects one verified group', async () => {
@@ -317,10 +323,12 @@ test('a list request keeps linked-room links private and does not append a missi
 test('requests require a binding and remain pending until the poll and delivery reach a terminal outcome', async () => {
   const f = fixture();
   const postDraft = id => f.broker().direct(direct(id, 'prepare a private message to Sam Example saying tomorrow works.'));
+  f.failPreparation('This chat already has a paused binding.');
   await postDraft('$unbound');
   await f.broker().tick();
   await f.broker().tick();
-  assert.match([...f.messages.values()][0].content.body, /verified binding/u);
+  assert.match([...f.messages.values()][0].content.body, /paused binding/u);
+  assert.equal(f.store.all('SELECT event FROM control_request').length, 0);
   const binding = { id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 };
   f.setBinding(binding);
   await postDraft('$draft');
@@ -352,6 +360,37 @@ test('an unclear Office mention gets one actionable reply in Office and no Bridg
   assert.equal(reply['m.relates_to'].event_id, event.event_id);
   assert.match(reply.body, /one Telegram chat and one action/u);
   assert.deepEqual([...f.officeReactions.values()], [{ event: event.event_id, key: '❌' }]);
+});
+
+test('the first Office send to a linked chat prepares its binding and queues a single approval draft', async () => {
+  const f = fixture();
+  const request = { ...caller, id: '$new-binding', method: 'submit', text: 'Telegram: send a private message to Sam Example saying Hello.' };
+  await f.broker().office(request);
+  await f.broker().tick();
+  f.restart();
+  await f.broker().office(request);
+  await f.broker().tick();
+  const rows = f.store.all('SELECT payload FROM control_request');
+  assert.equal(rows.length, 1, [...f.messages.values()].at(-1)?.content.body);
+  assert.deepEqual(f.effects, [{ action: 'prepare-binding', id: request.id,
+    destination: { peer: 'user:1001', name: 'Sam Example', room: '!sam:sample.test', type: 'direct' } }]);
+  assert.deepEqual(JSON.parse(rows[0].payload), { action: 'compose', destination: 'sam',
+    verifiedBinding: { id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 }, chatType: 'direct', text: 'Hello.' });
+});
+
+test('ambiguous recipients and updates do not prepare a relay', async () => {
+  const f = fixture();
+  await f.broker().direct(direct('$read-unbound', 'summarize what I missed today in Sam Example.'));
+  await f.broker().tick();
+  await f.broker().tick();
+  assert.deepEqual(f.effects, []);
+  f.resolved.push({ peer: 'user:1002', name: 'Sam Example', room: '!second:sample.test' });
+  await f.broker().direct(direct('$ambiguous', 'send a private message to Sam Example saying Hello.'));
+  await f.broker().tick();
+  await f.broker().tick();
+  assert.deepEqual(f.effects, []);
+  assert.equal(f.store.all('SELECT event FROM control_request').length, 0);
+  assert.match([...f.messages.values()].at(-1).content.body, /telegram choose/u);
 });
 
 test('a short Italian send request queues one approval draft and does not deliver it', async () => {

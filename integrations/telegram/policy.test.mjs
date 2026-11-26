@@ -53,6 +53,23 @@ test('manual never queues, forum topics and group chatter are excluded, and scop
   assert.deepEqual(store.history(work).map(row => row.event), ['$group']);
 });
 
+test('first-draft binding creation preserves existing bindings and operator pauses', () => {
+  const store = fixture({ bindings: [] });
+  const request = { createOnly: true };
+  const first = { ...dm, trigger: 'request' };
+  assert.equal(store.bind(first, config.controlRoom, now, request), true);
+  assert.equal(store.record(input(first), now + 2), true);
+  assert.equal(store.nextWork(now + 3), undefined);
+  store.pause(first.id);
+  assert.equal(store.bind(first, config.controlRoom, now + 4, request), false);
+  assert.equal(store.bind({ ...first, id: 'different' }, config.controlRoom, now + 5, request), false);
+  assert.equal(store.binding(first.id).active, 0);
+  assert.equal(store.setting('pause_reason:' + first.id), 'operator_paused');
+  store.pause();
+  assert.equal(store.bind(group, config.controlRoom, now + 6, request), false);
+  assert.equal(store.binding(group.id), undefined);
+});
+
 test('owner echo is context, old activity and repeated Matrix events do not trigger duplicates', () => {
   const store = fixture();
   assert.equal(store.record({ ...input(dm, '$older'), ts: now - 5 }, now + 2), false);

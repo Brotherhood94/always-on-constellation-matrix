@@ -110,7 +110,7 @@ function telegramGuide(command, legacy) {
       '@Telegram Agent, prepare a private message to Sam Example saying tomorrow works for me.',
       '@Telegram Agent, prepare a message for Project Room saying the meeting starts at 10.',
       '@Telegram Agent, summarize what I missed today in Project Room.',
-      'Find contacts and groups under Telegram → People. Enable reading and drafting for each chat you want the agent to use.',
+      'Open and join the verified contact or group under Telegram → People. Your first draft or send request sets up that chat automatically.',
       'Review the verified recipient and exact text here. Only your ✅ Accept or ❌ Decline vote closes the approval poll.',
     ]],
     ...(legacy ? [['Earlier requests', [{ label: 'Open the archived Telegram Agent history',

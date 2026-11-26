@@ -144,12 +144,13 @@ export class TelegramStore {
   set(key, value) { this.run('INSERT OR REPLACE INTO settings VALUES (?, ?)', key, String(value)); }
   paused() { return this.setting('paused') === 'true'; }
 
-  bind(binding, controlRoom, now) {
+  bind(binding, controlRoom, now, { createOnly = false } = {}) {
     validateBinding(binding, controlRoom);
     const target = JSON.stringify({ peer: binding.peer, login: binding.login, receiver: binding.receiver,
       operator: binding.operator, audience: binding.audience });
-    this.atomic(() => {
+    return this.atomic(() => {
       const before = this.binding(binding.id);
+      if (createOnly && (before || this.inRoom(binding.room) || this.paused())) return false;
       if (before && (before.room !== binding.room || before.target !== target)) {
         throw new Error('A changed destination or audience requires an explicit new binding generation.');
       }
@@ -164,6 +165,7 @@ export class TelegramStore {
           binding.mode, binding.trigger, now, binding.id);
       }
       this.run('DELETE FROM settings WHERE key=?', 'pause_reason:' + binding.id);
+      return true;
     });
   }
 

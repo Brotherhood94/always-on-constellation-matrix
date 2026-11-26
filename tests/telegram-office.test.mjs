@@ -88,6 +88,7 @@ test('the private action socket is restricted and refuses malformed requests', a
     assert.equal((await requestTelegramOffice(socket, '$test', { action: 'remove', target: '\nother' })).ok, false);
     assert.equal((await requestTelegramOffice(socket, '$test', { action: 'approve', target: 'Sample' })).ok, false);
     assert.match((await requestTelegramOffice(socket, '$test', { action: 'list' })).message, /private Telegram Agent room/);
+    assert.equal((await requestTelegramOffice(socket, '$test', { action: 'prepare-binding', target: '!portal:sample.test', peer: 'user:1001' })).ok, false);
   } finally {
     if (server) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     await rm(folder, { recursive: true, force: true });
@@ -130,6 +131,49 @@ test('a short contact name resolves only linked direct chats for drafting and pr
   assert.deepEqual((await telegramOfficeAction({ ...request, target: sam.name }, options)).rooms, [sam]);
   assert.deepEqual((await telegramOfficeAction({ ...request, type: 'group' }, options)).rooms, []);
   assert.deepEqual((await telegramOfficeAction({ ...request, allowGivenName: false }, options)).rooms, []);
+});
+
+test('only a linked, operator-owned chat can use the private binding route', async () => {
+  const space = '!telegram:sample.test';
+  const control = '!bridge:sample.test';
+  const room = '!portal:sample.test';
+  const peer = 'user:1001';
+  const state = (type, content, state_key = '') => ({ type, content, state_key });
+  const members = [owner, agent].map(user => state('m.room.member', { membership: 'join' }, user));
+  let linked = true;
+  let audience = members;
+  let calls = 0;
+  let relayRoom = room;
+  const options = { space, control, owner, guide: agent, domain: 'sample.test', bridgeControl: true, key: 'fixture',
+    database: { query: async (_sql, args) => (assert.deepEqual(args, [owner]), { rows: [{ room, peer }] }) },
+    client: { getRoomState: async target => [
+      state('m.room.create', { type: target === space ? 'm.space' : undefined, 'm.federate': false }),
+      state('m.room.join_rules', { join_rule: 'invite' }),
+      ...(target === space ? [...members, state('m.space.child', { via: linked ? ['sample.test'] : [] }, room)] :
+        [...audience, state('m.room.encryption', { algorithm: 'm.megolm.v1.aes-sha2' })]),
+    ] },
+    bridgeFetch: async (url, request) => {
+      calls++;
+      const parsed = new URL(url);
+      assert.equal(parsed.pathname, '/_matrix/provision/v3/constellation_membership/user%3A1001');
+      assert.deepEqual(Object.fromEntries(parsed.searchParams), { user_id: owner, room_id: room, prepare_relay: 'true' });
+      assert.equal(request.method, 'POST');
+      return Response.json({ room: relayRoom, login: '2002' });
+    },
+  };
+  const request = { id: '$first-draft', action: 'prepare-binding', target: room, peer };
+  assert.equal((await telegramOfficeAction({ ...request, peer: 'user:1002' }, options)).ok, false);
+  linked = false;
+  assert.equal((await telegramOfficeAction(request, options)).ok, false);
+  linked = true;
+  audience = [...members, state('m.room.member', { membership: 'invite' }, id)];
+  assert.equal((await telegramOfficeAction(request, options)).ok, false);
+  assert.equal(calls, 0);
+  audience = members;
+  assert.deepEqual(await telegramOfficeAction(request, options), { ok: true, room, peer, login: '2002' });
+  relayRoom = '!other:sample.test';
+  assert.equal((await telegramOfficeAction(request, options)).ok, false);
+  assert.equal(calls, 2);
 });
 
 test('Telegram Control publishes an encrypted, bounded reply to an operator search', async () => {

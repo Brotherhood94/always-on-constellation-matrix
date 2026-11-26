@@ -143,8 +143,33 @@ async function run() {
     return state?.encrypted && state.private && !state.tombstone &&
       members.get(settings.owner) === 'join' && members.get(settings.agent) === 'join';
   }
+  const guide = input => requestTelegramService(TELEGRAM_GUIDE_SOCKET, input);
+  async function getBinding(room, peer) {
+    const binding = store.inRoom(room);
+    const target = binding?.active && JSON.parse(binding.target);
+    return target?.peer === peer && await liveBinding(room, target) === target.audience ? binding : null;
+  }
+  async function prepareBinding({ room, peer }, id) {
+    const paused = { error: 'This chat already has a paused or changed binding. Review its status before starting a new request.' };
+    if (store.inRoom(room)) return paused;
+    if (!await checkRoom()) return { error: 'Telegram Bridge is unavailable or paused.' };
+    const relay = await guide({ id, action: 'prepare-binding', target: room, peer });
+    if (!relay?.ok) return { error: relay?.message ?? 'Telegram Bridge is unavailable.' };
+    if (relay.room !== room || relay.peer !== peer || typeof relay.login !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(relay.login)) {
+      return { error: 'Telegram Bridge could not verify the selected chat and login.' };
+    }
+    await matrix.joinPortal(room);
+    await waitForMatrixSync();
+    const target = { peer, login: relay.login, receiver: relay.login };
+    const audience = await liveBinding(room, target);
+    if (!audience || !await checkRoom()) return { error: 'Telegram Bridge could not verify the selected chat, relay, and private room membership.' };
+    const bindingId = 'auto-' + digest([room, peer, relay.login]).slice(0, 32);
+    const created = store.bind({ id: bindingId, room, ...target, audience, operator: settings.owner, mode: 'draft',
+      trigger: 'request' }, settings.controlRoom, Date.now(), { createOnly: true });
+    return created ? { binding: store.binding(bindingId) } : paused;
+  }
   const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom }, checkRoom, checkOffice,
-    guide: input => requestTelegramService(TELEGRAM_GUIDE_SOCKET, input),
+    guide,
     post: async (transaction, content) => {
       const ciphertext = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', content);
       if (!await checkRoom()) throw new Error('Telegram Agent room changed');
@@ -158,11 +183,7 @@ async function run() {
     reactOffice: (...args) => matrix.react(officeRoom, ...args),
     clearOfficeReaction: (...args) => matrix.redact(officeRoom, ...args),
     runAgent: (grant, tool) => runDelegatedWithInstance(settings.engine, grant, tool),
-    getBinding: async (room, peer) => {
-      const binding = store.inRoom(room);
-      const target = binding?.active && JSON.parse(binding.target);
-      return target?.peer === peer && await liveBinding(room, target) === target.audience ? binding : null;
-    },
+    getBinding, prepareBinding,
   });
   const sockets = delegation ? [await listenTelegramSocket(TELEGRAM_MCP_SOCKET, delegation.tool)] : [];
   if (delegation && TELEGRAM_HANDOFF_SOCKET) sockets.push(await listenTelegramSocket(TELEGRAM_HANDOFF_SOCKET, delegation.office));

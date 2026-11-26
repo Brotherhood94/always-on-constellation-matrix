@@ -7,7 +7,7 @@
 +		if strings.HasPrefix(secret, "constellation-office-") && exstrings.ConstantTimeEqual(auth, secret) {
 +			path := strings.TrimPrefix(r.URL.Path, "/_matrix/provision")
 +			if !(r.Method == http.MethodGet && strings.HasPrefix(path, "/v3/resolve_identifier/")) && (r.Method != http.MethodPost || (path != "/v3/search_users" && !strings.HasPrefix(path, "/v3/create_dm/") && !strings.HasPrefix(path, "/v3/constellation_group/") && !strings.HasPrefix(path, "/v3/constellation_membership/"))) {
-+				mautrix.MForbidden.WithMessage("Constellation credentials only search, open chats and invite Telegram Agent to verified chats").Write(w)
++				mautrix.MForbidden.WithMessage("Constellation credentials only search, open chats and prepare Telegram Agent access to verified chats").Write(w)
 +				return
 +			}
 +		}
@@ -34,14 +34,35 @@
 +	exhttp.WriteJSONResponse(w, http.StatusOK, map[string]any{"room": portal.MXID, "name": portal.Name})
 +}
 +
-@@ -570,0 +602,60 @@
+@@ -570,0 +602,93 @@
 +// PostConstellationMembership invites only this deployment's Telegram Agent to
 +// an existing split portal of the authenticated operator's logged-in account.
++// A draft request may also reserve that same portal receiver as its relay.
 +func (prov *ProvisioningAPI) PostConstellationMembership(w http.ResponseWriter, r *http.Request) {
 +	ctx := r.Context()
-+	login := prov.GetLoginForRequest(w, r)
-+	if login == nil {
-+		return
++	relay := r.URL.Query().Get("prepare_relay") == "true"
++	var login *bridgev2.UserLogin
++	if relay {
++		user := prov.GetUser(r)
++		room := id.RoomID(r.URL.Query().Get("room_id"))
++		portal, err := prov.br.Bridge.GetPortalByMXID(ctx, room)
++		if err != nil {
++			RespondWithError(w, err, "Could not read the Telegram portal")
++			return
++		}
++		if portal != nil {
++			login = prov.br.Bridge.GetCachedUserLoginByID(portal.Receiver)
++		}
++		if !user.Permissions.Admin || !prov.br.Bridge.Config.Relay.Enabled ||
++			login == nil || login.UserMXID != user.MXID {
++			mautrix.MForbidden.WithMessage("Only the portal operator can enable its own Telegram relay").Write(w)
++			return
++		}
++	} else {
++		login = prov.GetLoginForRequest(w, r)
++		if login == nil {
++			return
++		}
 +	}
 +	portal, err := provisionutil.ResolveTelegramPortal(ctx, login, r.PathValue("peer"), false)
 +	if err != nil {
@@ -50,6 +71,10 @@
 +	}
 +	if portal.MXID == "" || portal.MXID.String() != r.URL.Query().Get("room_id") {
 +		mautrix.MForbidden.WithMessage("Telegram portal room changed").Write(w)
++		return
++	}
++	if relay && portal.RelayLoginID != "" && portal.RelayLoginID != login.ID {
++		mautrix.MForbidden.WithMessage("Telegram portal already has a different relay").Write(w)
 +		return
 +	}
 +	var create, rules, encryption map[string]any
@@ -91,6 +116,14 @@
 +			RespondWithError(w, err, "Could not invite Telegram Agent")
 +			return
 +		}
++	}
++	if relay {
++		if err = portal.SetRelay(ctx, login); err != nil {
++			RespondWithError(w, err, "Could not enable the Telegram portal relay")
++			return
++		}
++		exhttp.WriteJSONResponse(w, http.StatusOK, map[string]any{"room": portal.MXID, "login": login.ID})
++		return
 +	}
 +	exhttp.WriteJSONResponse(w, http.StatusOK, map[string]any{"room": portal.MXID})
 +}

@@ -150,9 +150,10 @@ for method, route, secret, body, code in [
     ('POST', 'create_dm/%40sample', key, None, 'FI.MAU.NOT_LOGGED_IN'),
     ('POST', 'create_dm/%40sample', 'invalid-key', None, 'M_UNKNOWN_TOKEN'),
     ('POST', 'constellation_membership/user%3A123', key, None, 'FI.MAU.NOT_LOGGED_IN'),
+    ('POST', 'constellation_membership/user%3A123?prepare_relay=true', key, None, 'M_FORBIDDEN'),
     ('PUT', 'constellation_membership/user%3A123', key, None, 'M_FORBIDDEN'),
 ]:
-    endpoint = 'http://telegram-bridge:29317/_matrix/provision/v3/' + route + '?user_id=%40operator%3Atelegram.test'
+    endpoint = 'http://telegram-bridge:29317/_matrix/provision/v3/' + route + ('&' if '?' in route else '?') + 'user_id=%40operator%3Atelegram.test'
     try:
         urlopen(Request(endpoint, method=method, data=body,
                         headers={'Authorization': 'Bearer ' + secret, 'Content-Type': 'application/json'}), timeout=5)
@@ -268,6 +269,11 @@ const childRoute = root + '/rooms/' + encodeURIComponent(space) + '/state/m.spac
 await spaceClient.doRequest('PUT', childRoute, null, {via:['telegram.test']});
 await api(portalRoute + '/join', {}, b.access_token);
 await api(portalRoute + '/join', {}, remote.access_token);
+const autoPortal = await privateRoom(botToken, [agent.user_id, b.user_id, remote.user_id], bridgeBot);
+await spaceClient.doRequest('PUT', childRoute.replace(encodeURIComponent(portal), encodeURIComponent(autoPortal)),
+  null, {via:['telegram.test']});
+await api('/join/' + encodeURIComponent(autoPortal), {}, b.access_token);
+await api('/join/' + encodeURIComponent(autoPortal), {}, remote.access_token);
 const remoteClient = await connect(remote, 'remote');
 await remoteClient.applySync(await remoteClient.sync(null, 0), async () => {});
 const portalState = await fetch(url + root + portalRoute + '/state', {
@@ -286,6 +292,8 @@ try {
   await pool.query('CREATE TABLE telegram_audit_message (room text, peer text, receiver text, event text, sender_id text, sender_mxid text, ts_ms bigint)');
   await pool.query('INSERT INTO telegram_audit_portal VALUES ($1, $2, $3, $3, $4, $3, $5, false, false, false)',
     [portal, 'user:1001', '2002', b.user_id, 'dm']);
+  await pool.query('INSERT INTO telegram_audit_portal VALUES ($1, $2, $3, $3, $4, NULL, $5, false, false, false)',
+    [autoPortal, 'user:1002', '2002', b.user_id, 'dm']);
 } finally {
   await pool.end();
 }
@@ -294,7 +302,24 @@ const acp = new WebSocketServer({ server: https, path: '/api/v1/acp' });
 let prompt, draftPrompt;
 const sockets = { TELEGRAM_HANDOFF_SOCKET: '/tmp/handoffs.sock', TELEGRAM_MCP_SOCKET: '/tmp/tools.sock',
   TELEGRAM_GUIDE_SOCKET: '/tmp/guide.sock', TELEGRAM_DOT_SOCKET: '/tmp/dot-requests.sock' };
+let relayPreparations = 0;
 const guide = await listenTelegramSocket(sockets.TELEGRAM_GUIDE_SOCKET, async input => {
+  if (input.action === 'prepare-binding') {
+    assert.equal(input.target, autoPortal);
+    assert.equal(input.peer, 'user:1002');
+    relayPreparations++;
+    const database = new pg.Pool({ connectionString:auditDatabase });
+    try {
+      assert.equal((await database.query('UPDATE telegram_audit_portal SET relay=login WHERE room=$1 AND peer=$2',
+        [autoPortal, input.peer])).rowCount, 1);
+    } finally {
+      await database.end();
+    }
+    return { ok: true, room: autoPortal, peer: input.peer, login: '2002' };
+  }
+  if (input.action === 'resolve' && input.target === 'Auto Pilot') {
+    return { ok: true, rooms: [{ peer: 'user:1002', room: autoPortal, name: 'Auto Pilot' }] };
+  }
   if (input.action === 'list') return { ok: true, rooms: [{ peer: 'user:1001', room: portal, name: 'Pilot' }] };
   assert.equal(input.action, 'resolve');
   assert.equal(input.target, 'Pilot');
@@ -680,11 +705,15 @@ try {
   console.log('Telegram Agent accepted a direct Office mention and returned only encrypted status receipts with a private link.');
 
   const officeSend = await reader.put(officeRoom, 'fixture-office-decline', await reader.encryptEvent(officeRoom, 'm.room.message', {
-    msgtype: 'm.text', body: '@Telegram Agent, manda messaggio a Pilot «Draft for decline»',
+    msgtype: 'm.text', body: '@Telegram Agent, manda messaggio a Auto Pilot «Draft for decline»',
     'm.mentions': { user_ids: [agent.user_id] },
   }));
   let declining;
   await waitFor(() => declining = store.get('SELECT * FROM draft WHERE control_event=?', officeSend), 'the Office send draft');
+  assert.equal(declining.room, autoPortal);
+  assert.equal(store.inRoom(autoPortal).trigger, 'request');
+  assert.equal(relayPreparations, 1);
+  assert.equal(declining.event, null);
   await castVote(reader, declining, 'reject', 'fixture-office-decline-vote');
   await waitFor(() => store.get('SELECT status FROM telegram_office_receipt WHERE id=?', officeSend)?.status === 'declined',
     'the Office decline receipt');
@@ -703,7 +732,7 @@ try {
     return declined;
   }, 'an encrypted decline notice in the originating Office thread');
   assert.equal(store.draft(declining.id).event, null);
-  console.log('Decline returned to the original encrypted Office thread without posting into the Telegram portal.');
+  console.log('The first draft provisioned a linked portal automatically. Decline returned to Office without posting into that portal.');
 
   store.delivery(portal, store.draft(draft).event, 'SUCCESS', Date.now());
   const approvedOffice = { ...handoff, id: '$office-accept' };
