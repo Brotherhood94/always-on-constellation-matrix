@@ -137,6 +137,8 @@ def setup_as_operator(data, *, passphrase=None):
                 elevate(data, '_host', 'enroll', payload=payload)
             current = metadata(data)
         configure_as_operator(data, current=current, selection=current['selected'])
+        if settings['telegram'] and interactive_terminal():
+            telegram_setup_as_operator(data)
     except KeyboardInterrupt:
         print(f'\nResume setup with {command} setup-guide')
     except SubprocessError:
@@ -160,9 +162,16 @@ def configure_as_operator(data, key=None, *, current=None, selection=None):
             elevate(data, '_host', 'configure', name, '--pending-only')
     current = metadata(data)
     if current['welcomed']:
-        print('Setup complete.')
+        print('Office setup complete.')
     elif current['element_confirmed'] and not current['select_agents'] and not set(current['selected']).intersection(current['pending']):
         elevate(data, '_host', 'finish')
+
+
+def telegram_setup_as_operator(data, options=()):
+    if not interactive_terminal():
+        raise ValueError(f'Run {workspace_command(data, elevated=False)} telegram setup from an interactive terminal')
+    print('Telegram setup uses sudo to check the bridge and start Telegram Agent in Docker.', flush=True)
+    elevate(data, 'telegram', 'setup', *options)
 
 
 def telegram_as_operator(data, args):

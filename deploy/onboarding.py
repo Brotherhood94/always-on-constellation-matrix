@@ -14,7 +14,7 @@ from installer import (CLIENT, CONNECTOR, PRESETS, RUNTIME_UID, SOURCE, agent_si
 from layout import room_route
 from provision import MatrixError
 from roster import enable_management
-from setup_guide import confirm_element, element_page
+from setup_guide import confirm_element, element_page, interactive_terminal
 
 
 CHOOSE_AGENTS = object()
@@ -66,6 +66,9 @@ def guide(data, settings, command, passphrase):
         print(f'Resume setup with {command} setup-guide')
         return
     deliver_welcome(data, command)
+    if settings['telegram'] and interactive_terminal():
+        from telegram_setup import setup
+        setup(data)
 
 
 def confirm_sign_in(data):

@@ -28,7 +28,8 @@ def element_locations(settings):
     if settings['dot']:
         lines.append('  • Agents → VPS Alerts → Pinned messages → Connect Dot has the tunnel setup.')
     if settings['telegram']:
-        lines.append('  • Open Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.')
+        lines.append('  • Telegram setup continues in this terminal after Office agent setup.\n'
+                     '    In Element, see Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.')
     return '\n'.join(lines)
 
 
@@ -54,6 +55,8 @@ def show_printable(settings, command):
     print(f'\n{heading(title)}\n{body}')
     print(f'\n{heading(WELCOME_TITLE)}\n{WELCOME_INSTRUCTIONS}')
     print(f'\n  • Resume the guided setup from an interactive terminal.\n    {command} setup-guide\n')
+    if settings['telegram']:
+        print(f'  • Start or resume Telegram setup on its own.\n    {command} telegram setup\n')
 
 
 def read_page_key(fd):

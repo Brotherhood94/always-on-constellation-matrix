@@ -19,7 +19,7 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 - **Agents → VPS Alerts → Pinned messages → Workspace shortcuts.** Open the dashboard to see resources and agent readiness. Open Context Intelligence to launch Neo4j Browser and sign in as `neo4j` with the dedicated password. The pin includes the command to retrieve the password privately on your VPS.
 - **Agents → VPS Alerts → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. An empty list is expected before you activate any Office agents. [Dot setup](dot.md)
-- **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Use the pin to activate the bridge, scan the login QR code, verify a chat, and test draft approvals. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
+- **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Follow the QR sign-in steps when the terminal asks you to link Telegram. After setup, use this room for requests and approvals. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
 
 The pins are published after you join the room and Element has registered your device’s encryption keys. You can finish these steps while the agents are being configured.
 
@@ -28,6 +28,18 @@ The pins are published after you join the room and Element has registered your d
 On a fresh interactive install, **Agents → Office** displays a **Finish setting up Office** message. Continue in the same VPS terminal if the installer is open. After confirming Element sign-in, use the arrow keys and Enter to review the six preselected starter agents and adjust your roster. Choose **Done** to register the agents. The installer uses sudo to save the agent registrations in the protected deployment directory and start local Amplifier containers. If prompted, enter the Linux password for the VPS account shown in the sudo prompt.
 
 The installer automatically opens Amplifier’s provider and model setup for each selected local agent in the same terminal. If you closed the installer or it was interrupted, run `./constellation_matrix setup-guide` to resume from the first unfinished step. If your agents are already registered, `./constellation_matrix agent configure` goes straight to Amplifier provider setup. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
+
+## 📨 Configure Telegram Agent
+
+If you selected Telegram, the terminal opens the Telegram setup after the Office agents. Prepare your private API credentials file. Follow the terminal’s instructions to activate the bridge, scan the QR code in Element, and sign in to the dedicated Telegram Agent provider. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.
+
+If you closed the installer, resume the Telegram step on its own.
+
+```sh
+./constellation_matrix telegram setup
+```
+
+[Telegram credentials and setup](telegram.md)
 
 ## 👋 Receive the welcome and send a task
 

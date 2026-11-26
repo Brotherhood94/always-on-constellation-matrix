@@ -116,6 +116,28 @@ class OperatorCLITest(unittest.TestCase):
             self.assertEqual(request.call_args_list[-1],
                              call('POST', CLIENT + '/logout', {}, 'matrix-session-fixture', local_port=18500))
 
+    def test_telegram_setup_follows_office_provider_setup_and_resumes_after_welcome(self):
+        for enabled, welcomed in ((True, False), (True, True), (False, True)):
+            with self.subTest(enabled=enabled, welcomed=welcomed), TemporaryDirectory() as work, \
+                    redirect_stdout(StringIO()), patch('operator_cli.interactive_terminal', return_value=True), \
+                    patch('operator_cli.elevate') as sudo:
+                data = Path(work)
+                publish_metadata(data, {**self.settings, 'telegram': enabled}, {'agents': {}})
+                state = {**load(data / 'setup.json'), 'element_confirmed': True, 'welcomed': welcomed,
+                         'pending': [] if welcomed else ['manager']}
+                save(data / 'setup.json', state)
+
+                def activate(_, group, action, *args):
+                    if group == '_host' and action == 'configure':
+                        save(data / 'setup.json', {**state, 'pending': []})
+
+                sudo.side_effect = activate
+                setup_as_operator(data)
+                expected = [] if welcomed else [('_host', 'configure'), ('_host', 'finish')]
+                if enabled:
+                    expected.append(('telegram', 'setup'))
+                self.assertEqual([item.args[1:3] for item in sudo.call_args_list], expected)
+
     def test_empty_selection_explains_why_saving_setup_progress_needs_sudo(self):
         output = StringIO()
         with TemporaryDirectory() as work, redirect_stdout(output), \

@@ -178,6 +178,8 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(guide.body, /message box in Telegram Bridge.*\n!tg login qr\nTelegram Bridge replies.*QR code/u);
   assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
+  assert.match(guide.body, /!tg <your Telegram two-step verification password>/u);
+  assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram setup`));
   assert.match(guide.body, /4\. Element · Ask Telegram Agent/u);
   assert.match(guide.body, /mention Telegram Agent in Agents → Office/u);
   assert.match(guide.formatted_body, /docs\/telegram\.md#start-the-drafting-agent">Finish Telegram Agent setup/u);
@@ -188,7 +190,6 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.doesNotMatch(guide.body, /5\. Element|6\. Element|!tg (pm|search|resolve-identifier|create-portal)|telegram bind/u);
   assert.equal(guide['m.mentions'], undefined);
   assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
-  assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram activate`));
   await reconcileTelegramPin(matrix, telegramState, command);
   assert.equal(messages.size, 3);
   assert.deepEqual(pinned, ['$telegram-operator', telegramState.entries['telegram-setup'].event]);

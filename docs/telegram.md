@@ -74,15 +74,13 @@ nano "$HOME/telegram-api.json"
 
 ## Install the bridge
 
-**VPS terminal.** Use the path to the private JSON file. Activation briefly restarts Synapse and starts mautrix with an empty portal allowlist.
+**VPS terminal.** The installer starts the Telegram step after Office agent setup. If the installer is closed, run this from the VPS checkout to start or resume Telegram setup.
 
-```bash
-sudo ./constellation_matrix telegram prepare "$HOME/telegram-api.json"
-./constellation_matrix telegram activate
-./constellation_matrix telegram status
+```sh
+./constellation_matrix telegram setup
 ```
 
-Enter your existing Matrix operator password to link the bridge DM. The command asks for sudo when it needs to update Synapse or Docker. For unattended activation, pass a private `--owner-password-file`. If more than one verified private bridge DM exists, select the room you already use.
+Press Enter to use `~/telegram-api.json` or enter the path to your private file. To specify it upfront, use `telegram setup --api-file /path/to/telegram-api.json`. When activating the bridge, use your existing Matrix operator password to link the room. Activation briefly restarts Synapse and starts mautrix with an empty portal allowlist. If multiple private bridge rooms match, select the one you already use. The wizard skips completed steps.
 
 1. **Element.** In the top-level **Telegram** Space, open **Telegram Bridge**, the private chat with `@telegrambot:<SERVER_NAME>`. Copy this line, paste it into that chat’s message box, and press Enter. The bridge replies in the same chat with a QR code.
 
@@ -90,7 +88,15 @@ Enter your existing Matrix operator password to link the bridge DM. The command 
    !tg login qr
    ```
 
-2. **Telegram mobile.** The operator opens **Settings → Devices → Link Desktop Device** and scans the code shown in Element. Wait for the bridge to confirm sign-in. If the code expires, request a new one in the same DM. [Bridge sign-in](https://docs.mau.fi/bridges/go/telegram/authentication.html)
+2. **Telegram mobile.** Open **Settings → Devices → Link Desktop Device** and scan the QR code shown in Element. [Bridge sign-in](https://docs.mau.fi/bridges/go/telegram/authentication.html)
+3. **Element.** If the bot asks for a password after the scan, send a new message in Telegram Bridge beginning with `!tg `. Replace the entire placeholder, including the brackets, with your Telegram two-step verification password.
+
+   ```text
+   !tg <your Telegram two-step verification password>
+   ```
+
+   If the login expires, send `!tg cancel`, then `!tg login qr` for a fresh code. Wait for the bot to confirm that you are logged in.
+4. **VPS terminal.** Press Enter in the wizard after Telegram Bridge confirms sign-in. The terminal checks the saved login and continues to Telegram Agent provider setup.
 
 ## Add a Telegram contact or group
 
@@ -119,7 +125,7 @@ sudo ./constellation_matrix telegram allow 'user:1001' '2002'
 
 The dedicated Constellation Instance runs Amplifier ACP with the Amplifier ChatGPT provider in `chatgpt_codex` mode. It uses the Codex subscription through device sign-in. The default model is `gpt-6.2-sol` with low reasoning effort for drafting. On first provisioning, set `TELEGRAM_MODEL` if the subscription needs a different supported model. [Amplifier ChatGPT provider](https://github.com/microsoft/amplifier-module-provider-openai-chatgpt)
 
-**VPS terminal.** Run the commands in order, using an interactive session for `sign-in`.
+**VPS terminal.** The wizard registers Telegram Agent, starts its dedicated Instance, and opens Codex device sign-in in the same terminal. It verifies the provider with a synthetic draft and starts the agent. For manual recovery, run the following commands in order using an interactive session for `sign-in`.
 
 ```bash
 sudo ./constellation_matrix telegram prepare-agent

@@ -49,6 +49,16 @@ If agent sign-in was interrupted, resume it from the same checkout.
 
 Run `./constellation_matrix setup-guide` to resume onboarding or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md)
 
+### Finish Telegram setup
+
+If you selected Telegram, the installer opens its setup in the same VPS terminal after the Office agents. Have your private `telegram-api.json` ready. The terminal guides you through activating the bridge, linking your Telegram account in Element, and signing in to Telegram Agent’s dedicated Amplifier Instance. If interrupted, resume just that step.
+
+```sh
+./constellation_matrix telegram setup
+```
+
+[Telegram credentials and QR sign-in](docs/telegram.md#install-the-bridge)
+
 ### Finish in Element
 
 - **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.

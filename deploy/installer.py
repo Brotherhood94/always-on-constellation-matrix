@@ -1050,9 +1050,9 @@ def agent_activate(data, key, *, pending_only=False):
         publish_inventory(settings, data, registry)
 
 
-def run_telegram(data, *args):
+def run_telegram(data, *args, **options):
     env = {**os.environ, 'TELEGRAM_STACK_DIR': str(data), 'PYTHONPATH': str(SOURCE / 'deploy/matrix')}
-    run('bash', str(SOURCE / 'integrations/telegram/telegram'), *args, env=env)
+    return run('bash', str(SOURCE / 'integrations/telegram/telegram'), *args, env=env, **options)
 
 
 def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *, unattended=False):
@@ -1150,6 +1150,10 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
         raise ValueError('Select Telegram in the installer first')
     if not args:
         raise ValueError('Specify a Telegram command. See docs/telegram.md.')
+    if args[0] == 'setup':
+        from telegram_setup import setup
+        setup(data, args[1:])
+        return
     if args == ['status', '--refresh']:
         run_telegram(data, 'metrics')
         show_telegram_status(data)
@@ -1244,7 +1248,8 @@ def service_units(settings, data, broker=False):
 
 def main():
     from operator_cli import (HOST_ACTIONS, add_helper_as_operator, configure_as_operator, execute_host, install_as_operator, print_guide,
-                              layout_as_operator, publish_metadata, setup_as_operator, telegram_as_operator)
+                              layout_as_operator, publish_metadata, setup_as_operator, telegram_as_operator,
+                              telegram_setup_as_operator)
     from setup_guide import interactive_terminal
 
     parser = argparse.ArgumentParser(prog='constellation_matrix', description=__doc__, allow_abbrev=False)
@@ -1354,6 +1359,9 @@ def main():
             return
         if args.command == 'layout':
             layout_as_operator(data, args)
+            return
+        if args.command == 'telegram' and args.arguments[:1] == ['setup']:
+            telegram_setup_as_operator(data, args.arguments[1:])
             return
         if args.command == 'telegram' and args.arguments[:1] in (['activate'], ['layout']):
             telegram_as_operator(data, args.arguments)

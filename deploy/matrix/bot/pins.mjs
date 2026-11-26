@@ -81,18 +81,22 @@ function telegramGuide(command, legacy) {
       'Sign in with your phone number and Telegram confirmation code. Open or create an API application and copy App api_id and App api_hash.',
       { label: 'Open Telegram API development tools', url: 'https://my.telegram.org/apps' },
     ]],
-    ['2. VPS terminal · Prepare and activate the bridge', [
+    ['2. VPS terminal · Open the Telegram setup wizard', [
       'Reuse a private telegram-api.json or create one outside the checkout. In the private editor, enter a numeric api_id and a quoted api_hash.',
       { code: '(umask 077; touch "$HOME/telegram-api.json")\nchmod 600 "$HOME/telegram-api.json"\nnano "$HOME/telegram-api.json"' },
       { code: '{"api_id": 1234567, "api_hash": "REPLACE_WITH_YOUR_API_HASH"}' },
-      { code: `${command} telegram prepare "$HOME/telegram-api.json"\n${operatorCommand} telegram activate` },
-      'Enter your existing Matrix operator password if prompted. Stay in Telegram → Rooms → Telegram Bridge for the rest of setup.',
+      'The installer opens this step after setting up Office. If you closed the installer, resume here from the VPS checkout.',
+      { code: `${operatorCommand} telegram setup` },
+      'Use your existing Matrix operator password if the wizard prompts you while activating the bridge.',
     ]],
     ['3. Element and Telegram mobile · Link your Telegram account', [
       'Copy the line below, paste it into the message box in Telegram Bridge, and press Enter to send it.',
       { code: '!tg login qr' },
       'Telegram Bridge replies in that chat with a QR code. On your phone, open Telegram → Settings → Devices → Link Desktop Device and scan the code.',
-      'Wait for the bridge to confirm sign-in. If the code expires, send the same command again in Telegram Bridge.',
+      'If the bot asks for your Telegram two-step verification password, send a new message in this room. Keep the !tg prefix and replace the placeholder, including the brackets.',
+      { code: '!tg <your Telegram two-step verification password>' },
+      'If the login expires, send !tg cancel and then !tg login qr for a fresh code.',
+      'After the bot confirms sign-in, return to the VPS terminal and press Enter. The wizard registers Telegram Agent, opens Codex sign-in, verifies the connection, and starts the agent.',
       { label: 'Finish Telegram Agent setup', url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#start-the-drafting-agent' },
     ]],
     ['4. Element · Ask Telegram Agent', [

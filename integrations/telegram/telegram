@@ -48,6 +48,38 @@ configure_office_bridge() {
 }
 
 case ${1:-} in
+  setup-state)
+    if [[ -e "$TELEGRAM_DATA/connector/relocation-drain" || -e "$TELEGRAM_DATA/engine-moved" ]]; then
+      echo managed
+    elif [[ ! -s "$TELEGRAM_DATA/bridge/registration.yaml" ]]; then
+      echo credentials
+    else
+      running=$("${compose[@]}" --profile agent ps --status running --services)
+      if ! grep -Fxq telegram-bridge <<< "$running" || [[ ! -s "$TELEGRAM_DATA/guide/space-db" ]]; then
+        echo bridge
+      else
+        resolve_matrix_owner
+        logged_in=$("${stack[@]}" exec -T postgres psql -AtqX --set ON_ERROR_STOP=1 \
+          --set "owner=$MATRIX_OWNER" -U synapse -d matrix_telegram <<'SQL'
+SELECT EXISTS (SELECT 1 FROM user_login WHERE user_mxid = :'owner');
+SQL
+        )
+        if [[ $logged_in != t ]]; then
+          echo login
+        elif [[ ! -s "$TELEGRAM_DATA/connector/config.json" ||
+                ! -s "$TELEGRAM_DATA/connector/engine-token" || ! -s "$TELEGRAM_DATA/connector/engine-ca.pem" ]] ||
+             ! grep -Fxq telegram-engine <<< "$running"; then
+          echo engine
+        elif [[ ! -s "$TELEGRAM_DATA/connector/backend-verified" ]]; then
+          echo provider
+        elif ! grep -Fxq connector <<< "$running"; then
+          echo start
+        else
+          echo ready
+        fi
+      fi
+    fi
+    ;;
   quiesce-layout)
     if [[ -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
       "${compose[@]}" --profile agent stop connector
@@ -160,7 +192,7 @@ case ${1:-} in
     ;;
   start-agent)
     [[ -s "$TELEGRAM_DATA/connector/backend-verified" ]] || { echo 'Run telegram probe first.' >&2; exit 1; }
-    "${compose[@]}" --profile agent up -d --no-deps --build connector
+    "${compose[@]}" --profile agent up -d --no-deps --build --wait --wait-timeout 60 connector
     ;;
   restart-connector)
     "${compose[@]}" --profile agent up -d --no-deps --build --force-recreate connector
