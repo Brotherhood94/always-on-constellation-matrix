@@ -247,7 +247,9 @@ export function threadReply(event, reply, peers = [], requesterName, outcomeReci
   }
   const target = event.replyTo ? { id: event.replyTo, name: requesterName || event.replyTo.slice(1).split(':', 1)[0] } :
     outcome ? outcomeRecipients : number < replyLimit ? peer : null;
-  const message = outcomeReplyText(body, outcome, delivery.issues);
+  const returnedStep = decision?.returnTo && declared ? (declared.status === 'blocked' ?
+    ['Delegated step blocked', declared.blocker, declared.action] : ['Delegated result', declared.result, declared.verification]) : [];
+  const message = outcomeReplyText([body, ...returnedStep].filter(Boolean).join('\n'), outcome, delivery.issues);
   return {
     ...mentionMessage(message.plain, target, message.rich),
     [turnKey]: { request: event.request ?? event.id, number, ...(peer && decision?.requirement && { handoff: decision.requirement }),

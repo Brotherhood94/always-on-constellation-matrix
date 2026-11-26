@@ -39,6 +39,11 @@ test('a return to the actual assigner can cross a removed contact without author
   const complete = threadReply({...task,id:'$step',number:2,delegator:coach},'Here is the evidence.',[],null,[],{},
     {returnTo:{id:coach,name:'Coach'}});
   assert.deepEqual(complete['m.mentions'].user_ids,[coach]);
+  const blocked = threadReply({...task,id:'$step',number:2},'TASK_OUTCOME: ' + JSON.stringify({
+    status:'blocked',blocker:'Need the source file',unblocker:'Requester',action:'Attach the file.'}),[],null,[],{},
+    {returnTo:{id:coach,name:'Coach'}});
+  assert.match(blocked.body,/Need the source file/);
+  assert.equal(blocked['net.matrix_agents.task_outcome'],undefined);
   const envelope = {sender:actor,content:complete};
   const policy = {snapshot:{contactPolicy:true,agents:[]},fresh:true};
   assert.equal(acceptsContact(policy,envelope,coach),true);

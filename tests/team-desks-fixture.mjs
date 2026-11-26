@@ -88,12 +88,20 @@ try {
         await eventually(async()=>{await desk.sync(); await service.tick(); return db.prepare('SELECT poll FROM roster_requests WHERE request=?').get(turn)?.poll;});
         approval={run:async()=>{await desk.sync(); await service.tick();}};
       } else {
+        const revision = 'a'.repeat(64);
+        const observed = [];
         const service=createRosterApproval({db,client:desk.client,room,owner,actor,checkDestination:async()=>{},
-          currentAgents:()=>[],apply:async payload=>{records.push(payload);return {status:kind==='tool'?'enabled':'applied'};}});
+          currentAgents:()=>[],onApplied:(op,id)=>observed.push([op,id]),
+          apply:async payload=>{records.push(payload);return {status:kind==='tool'?'enabled':'applied',change:revision};}});
         turn=await sendEncrypted(desk.client,room,'proposal-origin',mentionMessage('Review this exact change for Coder.'));
         service.enqueue(turn,operation,'Cited Office evidence','agent');
         await service.tick();
-        approval={run:async(id)=>{await desk.sync(); await service.accept(await desk.client.getEvent(room,id),await desk.client.getRawEvent(room,id)); await service.tick();}};
+        approval={run:async(id)=>{
+          await desk.sync();
+          await service.accept(await desk.client.getEvent(room,id),await desk.client.getRawEvent(room,id));
+          await service.tick();
+          if (records.some(r=>r.request===turn) && kind==='coach') assert.deepEqual(observed,[[operation,revision]]);
+        }};
       }
       const row=db.prepare('SELECT proposal,poll FROM roster_requests WHERE request=?').get(turn);
       const poll=await eventually(async()=>{await operator.sync();try{return await operator.client.getEvent(room,row.poll);}catch{return null;}});

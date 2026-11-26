@@ -85,7 +85,15 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
       return e ? [{...e,status:row.status,at:row.at}] : [];
     });
   }
-  const approvals = createRosterApproval({db,client,room,owner,actor,checkDestination:audience,
+  function scheduleFollowup(op, change) {
+    if (op.kind === 'coach' && /^[a-f0-9]{64}$/u.test(change)) {
+      db.prepare('INSERT OR IGNORE INTO desk_followups(id,agent,evidence,since) VALUES (?,?,?,?)')
+        .run(change,'@'+op.agent+':'+process.env.MATRIX_SERVER_NAME,op.evidence,new Date().toISOString());
+    } else if (op.kind === 'undo') {
+      db.prepare('UPDATE desk_followups SET done=1 WHERE id=?').run(op.change);
+    }
+  }
+  const approvals = createRosterApproval({db,client,room,owner,actor,checkDestination:audience,onApplied:scheduleFollowup,
     currentAgents:() => catalog.fresh() ? catalog.current().agents : null,
     configureCommand:process.env.ROSTER_CONFIGURE_COMMAND,
     describeRetirement: async target => {
@@ -213,9 +221,7 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
         const reply = await submit({actor,routine:true,operation:op});
         if (reply.status === 'retry') throw new Error('Workshop busy');
         if (reply.status === 'applied') {
-          const change = reply.change;
-          if (change && op.kind === 'coach') db.prepare('INSERT OR IGNORE INTO desk_followups(id,agent,evidence,since) VALUES (?,?,?,?)')
-            .run(change,'@'+op.agent+':'+process.env.MATRIX_SERVER_NAME,op.evidence,new Date().toISOString());
+          scheduleFollowup(op,reply.change);
           await say(row.id, result.message + '\nApplied to ' + op.agent + '. Evidence: ' + link(office,op.evidence) +
             '\n' + (op.kind === 'undo' ? 'Previous working agreement restored.' : 'Undo in this chat: undo ' + op.agent));
         } else if (reply.status === 'needs_approval') {

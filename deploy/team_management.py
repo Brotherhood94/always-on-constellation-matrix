@@ -93,6 +93,10 @@ def apply_tool(data, settings, registry, operation, change):
     return receipts[change]
 
 
+def coaching_id(operation):
+    return sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
+
+
 def coach_change(data, settings, registry, operation, *, approved=False):
     key = operation['agent']
     entry = registry['agents'].get(key)
@@ -104,7 +108,7 @@ def coach_change(data, settings, registry, operation, *, approved=False):
         raise ValueError('Cite an Office evidence event')
     if kind not in {'coach', 'undo'}:
         raise ValueError('Unknown Coach operation')
-    operation_id = sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
+    operation_id = coaching_id(operation)
     journal = data / 'team-changes'
     directory(journal)
     path = journal / (operation_id + '.json')

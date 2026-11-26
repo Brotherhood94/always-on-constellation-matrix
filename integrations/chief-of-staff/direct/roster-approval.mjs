@@ -117,7 +117,7 @@ export async function submit(payload) {
 }
 
 export function createRosterApproval({ db, client, room, owner, checkDestination, currentAgents,
-  actor = 'chief-of-staff', describeRetirement, draft = draftWorker, apply = submit, configureCommand = 'sudo ./constellation_matrix agent configure', now = Date.now }) {
+  actor = 'chief-of-staff', describeRetirement, onApplied, draft = draftWorker, apply = submit, configureCommand = 'sudo ./constellation_matrix agent configure', now = Date.now }) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS roster_requests (
       request TEXT PRIMARY KEY, operation TEXT NOT NULL, proposal TEXT, proposed INTEGER, poll TEXT UNIQUE,
@@ -223,6 +223,7 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       const result = await apply({ request: row.request, proposal: row.proposal, poll: row.poll, vote: row.vote,
         decided: row.decided, choice: row.choice, operation: row.operation, ...(actor !== 'chief-of-staff' && {actor, initiated:row.initiated}) });
       status = result.status;
+      if (status === 'applied') onApplied?.(operation, result.change);
     }
     const notifications = {
       declined: target + ' was declined.', expired: target + ' approval expired.',
@@ -234,7 +235,8 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       enabled: 'The target verified the tool. It is enabled for ' + operation.agent + '.',
       failed: 'The target could not verify this tool. Its previous tools remain available.',
       credentials: 'The target needs its private tool credential. Reconnect it on that host and retry.',
-      applied: 'The approved persona and contact list are active.',
+      applied: operation.kind === 'undo' ? 'The previous persona and contact list are active.' :
+        'The approved persona and contact list are active. To restore the previous agreement, send: undo ' + operation.agent,
       retry: 'The VPS could not finish ' + target.toLowerCase() + ' yet. The approved operation will retry.',
     };
     if (!Object.hasOwn(notifications, status)) throw new Error('Unexpected roster result');

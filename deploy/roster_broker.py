@@ -16,7 +16,7 @@ from installer import RUNTIME_UID, directory, load, operator_lock, open_existing
 from layout import room_route
 from provision import MatrixError
 from agent_catalog import STARTER_ROLES
-from team_management import apply_tool, coach_change, tool_spec
+from team_management import apply_tool, coach_change, coaching_id, tool_spec
 from roster import local_worker, reconcile_retirements, retire_locked
 
 WINDOW = 15 * 60_000
@@ -26,6 +26,15 @@ EVENT_ID = re.compile(r'\$[^\s\x00-\x1f]{1,254}')
 
 def digest(value):
     return sha256(value.encode()).hexdigest()
+
+
+def authorized_actor(settings, registry, actor):
+    entry = registry['agents'].get(actor, {})
+    if not settings.get('roster_management') or not entry.get('active') or entry.get('retirement'):
+        return False
+    if actor == 'chief-of-staff':
+        return 'hiring-manager' not in registry['agents'] and registry.get('team_version') != 2
+    return registry.get('team_version') == 2 and entry.get('starter_role') == actor
 
 
 def validate(payload, key, now):
@@ -114,17 +123,17 @@ def handle(data, payload, *, now=None):
             raise ValueError('Invalid Coach credential')
         with operator_lock(data):
             settings, registry = open_existing(data)
-            if not settings.get('roster_management') or not registry['agents'].get(actor, {}).get('active') or registry['agents'][actor].get('retirement'):
+            if not authorized_actor(settings, registry, actor):
                 raise ValueError('Coach is unavailable')
             operation = payload['operation']
             status = coach_change(data, settings, registry, operation)
-            return {'status': status, 'change': registry['agents'][operation['agent']].get('last_coaching')}
+            return {'status': status, 'change': coaching_id(operation)}
     identifier, operation = validate(payload, secret, now)
     key = operation['agent']
     receipt = {field: payload[field] for field in ('request', 'proposal', 'poll', 'vote', 'decided', 'operation')}
     with operator_lock(data):
         settings, registry = open_existing(data)
-        if not settings.get('roster_management') or not registry['agents'].get(actor, {}).get('active') or registry['agents'][actor].get('retirement') or (actor == 'chief-of-staff' and 'hiring-manager' in registry['agents']):
+        if not authorized_actor(settings, registry, actor):
             raise ValueError('Roster management is disabled')
         records = root / 'requests'
         directory(records)
@@ -134,7 +143,7 @@ def handle(data, payload, *, now=None):
             if record['receipt'] != receipt:
                 raise ValueError('This request already has a different approval receipt')
             if record['status'] != 'pending':
-                return {'status': record['status'], 'agent': key}
+                return {'status': record['status'], 'agent': key, **({'change':coaching_id(operation)} if actor == 'coach' else {})}
         else:
             verify(data, settings, payload, now)
             if operation['kind'] == 'retire':
@@ -157,7 +166,7 @@ def handle(data, payload, *, now=None):
         else:
             status = retire_locked(data, settings, registry, key)
         save(path, {'status': 'pending' if status in {'draining', 'checking'} else status, 'receipt': receipt})
-        return {'status': status, 'agent': key}
+        return {'status': status, 'agent': key, **({'change':coaching_id(operation)} if actor == 'coach' else {})}
 
 
 def serve(data, peer):

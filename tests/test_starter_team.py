@@ -10,6 +10,18 @@ from agent_catalog import document
 
 
 class StarterTeamTests(unittest.TestCase):
+    def test_management_authority_belongs_to_the_installed_role(self):
+        from roster_broker import authorized_actor
+        settings = {'roster_management': True}
+        registry = {'team_version':2, 'agents':{'coach':{'active':True}}}
+        self.assertFalse(authorized_actor(settings,registry,'coach'))
+        registry['agents']['coach']['starter_role'] = 'coach'
+        self.assertTrue(authorized_actor(settings,registry,'coach'))
+        registry['agents']['coach']['retirement'] = 'draining'
+        self.assertFalse(authorized_actor(settings,registry,'coach'))
+        registry['agents']['chief-of-staff'] = {'active':True}
+        self.assertFalse(authorized_actor(settings,registry,'chief-of-staff'))
+
     def test_new_operator_can_confirm_five_and_see_each_persona(self):
         presets = installer.starter_profiles()
         self.assertEqual(set(presets), {'task-manager', 'hiring-manager', 'coach', 'scouter', 'vps-manager'})
