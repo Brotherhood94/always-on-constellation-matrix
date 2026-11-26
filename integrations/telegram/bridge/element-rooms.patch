@@ -1,0 +1,5 @@
+--- a/bridgev2/portal.go
++++ b/bridgev2/portal.go
+@@ -5569 +5569 @@
+-		IsDirect:           portal.RoomType == database.RoomTypeDM,
++		IsDirect:           false, // Show Telegram portals under Rooms in Element.

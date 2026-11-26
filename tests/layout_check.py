@@ -14,7 +14,7 @@ from operator_cli import matrix_session
 from provision import MatrixError, request
 from roster import deactivate_worker, invitation_ready, office_inviter, prepare_management
 from roster_broker import verify
-from telegram_provision import reconcile_layout
+from telegram_provision import classify_telegram_rooms, reconcile_layout
 from vps_migration import revoke_legacy
 
 
@@ -96,6 +96,13 @@ class LayoutTest(unittest.TestCase):
             self.assertEqual(children(space), {control, bridge, portal})
             self.assertFalse({space, control, bridge, portal} & children(agents))
             self.assertTrue({rooms['office'], rooms['alerts'], other} <= children(agents))
+            account_data = f"{CLIENT}/user/{encoded(owner['user_id'])}/account_data/m.direct"
+            existing = {bot['user_id']: [bridge, other], '@telegram_1001:' + domain: [portal, unrelated]}
+            request('PUT', account_data, existing, token)
+            classify_telegram_rooms(space, owner['user_id'], token, [portal, unrelated])
+            classify_telegram_rooms(space, owner['user_id'], token, [portal, unrelated])
+            self.assertEqual(request('GET', account_data, token=token),
+                             {bot['user_id']: [bridge, other], '@telegram_1001:' + domain: [unrelated]})
             self.assertEqual(request('GET', room_route(bridge) + '/event/' + encoded(event), token=token)
                              ['content']['body'], 'Fixture history')
             self.assertEqual(set(request('GET', room_route(control) + '/joined_members', token=token)['joined']),

@@ -64,6 +64,7 @@ def generate(root, private):
     config['bridge']['relay'].update(enabled=True, admin_only=True, default_relays=[])
     config['database'].update(type='postgres', uri=database_uri(root, 'matrix_telegram_bridge'))
     config['matrix'].update(federate_rooms=False, message_error_notices=False, message_status_events=True,
+                            sync_direct_chat_list=False,
                             delivery_receipts=False, max_download_size=5_000_000)
     config['double_puppet'].update(servers={}, secrets={}, allow_discovery=False)
     config['encryption'].update(allow=True, default=True, require=True)
@@ -91,9 +92,11 @@ def office_provisioning(root):
     if not isinstance(key, str) or not re.fullmatch(r'constellation-office-[0-9a-f]{64}', key):
         key = 'constellation-office-' + secrets.token_hex(32)
     desired = {'shared_secret': key, 'allow_matrix_auth': False, 'debug_endpoints': False}
-    changed = any(provision.get(name) != value for name, value in desired.items())
+    matrix = config['matrix']
+    changed = any(provision.get(name) != value for name, value in desired.items()) or matrix.get('sync_direct_chat_list') is not False
     if changed:
         provision.update(desired)
+        matrix['sync_direct_chat_list'] = False
         write(root / 'bridge/config.yaml', config, uid=991)
     key_file = root / 'guide/office-bridge-key'
     expected = (key + '\n').encode()

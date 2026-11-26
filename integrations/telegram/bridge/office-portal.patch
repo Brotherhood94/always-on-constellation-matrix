@@ -1,22 +1,21 @@
 --- a/bridgev2/matrix/provisioning.go
 +++ b/bridgev2/matrix/provisioning.go
-@@ -16,0 +17 @@
-+	"strconv"
-@@ -137,0 +139 @@
+@@ -137,0 +138 @@
 +	prov.Router.HandleFunc("POST /v3/constellation_group/{peer}", prov.PostConstellationGroup)
-@@ -272,0 +275,7 @@
-+		}
+@@ -273,0 +275,7 @@
 +		if strings.HasPrefix(secret, "constellation-office-") && exstrings.ConstantTimeEqual(auth, secret) {
 +			path := strings.TrimPrefix(r.URL.Path, "/_matrix/provision")
 +			if r.Method != http.MethodPost || (path != "/v3/search_users" && !strings.HasPrefix(path, "/v3/create_dm/") && !strings.HasPrefix(path, "/v3/constellation_group/")) {
 +				mautrix.MForbidden.WithMessage("Constellation credentials only search Telegram users and open chats").Write(w)
 +				return
 +			}
-@@ -529,0 +539,58 @@
++		}
+@@ -527,0 +536,22 @@
++}
++
 +func (prov *ProvisioningAPI) PostConstellationGroup(w http.ResponseWriter, r *http.Request) {
 +	peer := r.PathValue("peer")
-+	kind, value, _ := strings.Cut(peer, ":")
-+	if number, err := strconv.ParseInt(value, 10, 64); err != nil || number <= 0 || (kind != "chat" && kind != "channel") {
++	if !provisionutil.IsTelegramGroupID(peer) {
 +		mautrix.MNotFound.WithMessage("Use an existing Telegram group ID").Write(w)
 +		return
 +	}
@@ -24,50 +23,13 @@
 +	if login == nil {
 +		return
 +	}
-+	if !login.Client.IsLoggedIn() {
++	if login.Client == nil || !login.Client.IsLoggedIn() {
 +		ErrNotLoggedIn.Write(w)
 +		return
 +	}
-+	ctx := r.Context()
-+	portal, err := prov.br.Bridge.GetExistingPortalByKey(ctx, networkid.PortalKey{ID: networkid.PortalID(peer), Receiver: login.ID})
++	portal, err := provisionutil.ResolveTelegramGroup(r.Context(), login, peer, true)
 +	if err != nil {
-+		RespondWithError(w, err, "Could not read the Telegram group")
++		RespondWithError(w, err, "Could not open the Telegram group")
 +		return
-+	}
-+	if portal == nil {
-+		mautrix.MNotFound.WithMessage("Group not found. Run sync-chats in Telegram Bridge and retry").Write(w)
-+		return
-+	}
-+	if portal.ParentKey.ID != "" || portal.UserBlocked || portal.MessageRequest {
-+		mautrix.MForbidden.WithMessage("This Telegram group cannot be opened from Office").Write(w)
-+		return
-+	}
-+	if kind == "channel" {
-+		var flags struct {
-+			Supergroup   bool `json:"is_supergroup"`
-+			ForumGeneral bool `json:"is_forum_general"`
-+		}
-+		metadata, err := json.Marshal(portal.Metadata)
-+		if err != nil || json.Unmarshal(metadata, &flags) != nil || !flags.Supergroup || flags.ForumGeneral {
-+			mautrix.MForbidden.WithMessage("Only Telegram groups without topics can be opened from Office").Write(w)
-+			return
-+		}
-+	}
-+	if portal.MXID == "" {
-+		info, err := login.Client.GetChatInfo(ctx, portal)
-+		if err != nil {
-+			RespondWithError(w, err, "Could not verify the Telegram group")
-+			return
-+		}
-+		if info == nil {
-+			mautrix.MNotFound.WithMessage("Telegram group information is unavailable").Write(w)
-+			return
-+		}
-+		if err = portal.CreateMatrixRoom(ctx, login, info); err != nil {
-+			RespondWithError(w, err, "Could not open the Telegram group")
-+			return
-+		}
 +	}
 +	exhttp.WriteJSONResponse(w, http.StatusOK, map[string]any{"room": portal.MXID, "name": portal.Name})
-+}
-+

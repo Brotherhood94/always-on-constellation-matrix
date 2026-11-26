@@ -77,11 +77,12 @@ Enter your existing Matrix operator password to link the bridge DM. The command 
 
 1. **Element.** Open **Telegram → Telegram Bridge** and send the command for the conversation you want to open. [Bridge room commands](https://github.com/mautrix/go/blob/v0.33.0/bridgev2/commands/startchat.go)
 
+   - **Look up before opening.** Send `!tg resolve-identifier @username` for a person or `!tg resolve-identifier channel:1234567890` for a known group. If the reply shows a command with `--open`, copy it into Telegram Bridge and send it to open the room. An existing room appears as a clickable link in the lookup reply.
    - **Private chat.** Send `!tg pm @username` or `!tg pm 1001`, replacing `1001` with the person's numeric Telegram user ID. If you only know their name, send `!tg search <name>` and check the matching profile first.
    - **Group without topics.** In Telegram, copy a link to a message in the group. For `https://t.me/c/1234567890/42`, send `!tg create-portal channel:1234567890` in Telegram Bridge. Use the first number from the link. [Telegram message links](https://core.telegram.org/api/links#message-links)
    - **Basic group or group with a public link.** In Telegram Desktop, open the group and choose **⋯ → Export chat history → JSON**. Check the chat name in `result.json` and use the top-level `id`. Send `!tg create-portal chat:<id>` for a basic group or `!tg create-portal channel:<id>` for a supergroup without topics. [Telegram Desktop export](https://telegram.org/blog/export-and-more) · [Export fields](https://core.telegram.org/import-export#chat)
 
-2. **Element.** Click the chat name in the bridge’s reply and join if prompted. Find the chat under **Telegram → Rooms**, check the recipient, and send your message there. Your contact receives it in their existing Telegram conversation.
+2. **Element.** Click the chat name in the bridge’s reply and join if prompted. Find the chat under **Telegram → Rooms**. Check the recipient before sending a message. For a chat you previously unlinked from the Space, use the [Office add command](#use-telegram-from-office) to link it again.
 
 If the bridge has not found the group yet, send `!tg sync-chats`, wait for it to finish, then retry `!tg create-portal`. If you use multiple Telegram accounts, send `!tg list-logins` to find your own account ID and put it before the username or group ID in the command. [Telegram bridge group sync](https://github.com/mautrix/telegram/blob/8d85e547208fcdeae47b08f57bca0a7c8cf910af/pkg/connector/commands.go)
 
@@ -89,7 +90,7 @@ If Element also lists the room in **Home**, open **Settings → Sidebar** and tu
 
 ### Open a room on an incoming message
 
-To let a new incoming message open a room, allow that specific chat. In Telegram Bridge, `!tg resolve-identifier @username` looks up the recipient ID. If the reply shows `Found 1001 / Sample Contact`, use `user:1001`. Use `!tg list-logins` to find your own Telegram account ID. Run this on the VPS with those two values, then open the room when a new message arrives.
+To let a new incoming message open a room, allow that specific chat. In Telegram Bridge, `!tg resolve-identifier @username` looks up the recipient ID. If the reply shows `Found Sample Contact (1001)`, use `user:1001`. Use `!tg list-logins` to find your own Telegram account ID. Run this on the VPS with those two values, then open the room when a new message arrives.
 
 ```bash
 sudo ./constellation_matrix telegram allow 'user:1001' '2002'
@@ -176,7 +177,7 @@ A Telegram relay uses the selected Telegram login with bridge attribution. Matri
 
 ## Repair an existing Telegram layout
 
-Run this from the updated checkout to repair the top-level **Telegram** Space, refresh the guide, and enable Telegram actions for the installed Task Manager. It reconciles the Office connection credentials and reloads the running bridge. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
+Run this from the updated checkout to repair the top-level **Telegram** Space, refresh the guide, and enable Telegram actions for the installed Task Manager. It also moves verified bridged chats already linked in Telegram into the **Rooms** category. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
 
 ```sh
 ./constellation_matrix telegram layout

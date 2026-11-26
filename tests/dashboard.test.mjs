@@ -163,11 +163,12 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(guide.formatted_body, /<pre><code>!tg pm 1001<\/code><\/pre>/u);
   assert.match(guide.body, /!tg search <name>/u);
   assert.match(guide.body, /send this in Telegram Control.*\n!tg search Sample Name/u);
+  assert.match(guide.body, /--open command.*\n!tg resolve-identifier @username\n!tg resolve-identifier channel:1234567890/u);
   assert.match(guide.body, /telegram add user:1001/u);
   assert.match(guide.body, /Click the chat name in the bridge’s reply/u);
   assert.match(guide.body, /Find the chat under Telegram → Rooms.*before sending a message/u);
   assert.match(guide.body, /Optional · Set up drafts and approvals in Telegram Control/u);
-  assert.doesNotMatch(guide.body, /resolve-identifier|login-id|telegram allow|telegram bind/u);
+  assert.doesNotMatch(guide.body, /login-id|telegram allow|telegram bind/u);
   assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
   assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram activate`));
   await reconcileTelegramPin(matrix, telegramState, command);

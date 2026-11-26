@@ -1,24 +1,84 @@
 --- a/bridgev2/commands/startchat.go
 +++ b/bridgev2/commands/startchat.go
-@@ -114 +113,0 @@
+@@ -33,2 +33,2 @@
+-		Description: "Check if a given identifier is on the remote network",
+-		Args:        "[_login ID_] <_identifier_>",
++		Description: "Find a Telegram user or group and optionally open its Matrix room",
++		Args:        "[--open] [_login ID_] <_identifier_>",
+@@ -91,0 +92,6 @@
++	resolve := ce.Command == "resolve-identifier"
++	createChat := ce.Command == "start-chat" || ce.Command == "pm"
++	if resolve && len(ce.Args) > 0 && ce.Args[0] == "--open" {
++		ce.Args = ce.Args[1:]
++		createChat = true
++	}
+@@ -93 +99,5 @@
+-		ce.Reply("Usage: `$cmdprefix %s <identifier>`", ce.Command)
++		if resolve {
++			ce.Reply("Usage: `$cmdprefix resolve-identifier [--open] <username or group ID>`")
++		} else {
++			ce.Reply("Usage: `$cmdprefix %s <identifier>`", ce.Command)
++		}
+@@ -99,0 +110,15 @@
++	identifier := strings.Join(identifierParts, " ")
++	prefix := ce.Bridge.Config.CommandPrefix
++	if resolve && provisionutil.IsTelegramGroupID(identifier) {
++		portal, err := provisionutil.ResolveTelegramGroup(ce.Ctx, login, identifier, createChat)
++		if err != nil {
++			ce.Reply("Could not resolve Telegram group: %v", err)
++			return
++		}
++		if portal.MXID != "" {
++			ce.ReplyAdvanced(formatResolvedRoomLink(portal.Name, identifier, portal.MXID, createChat), false, true)
++		} else {
++			ce.ReplyAdvanced(formatResolvedTelegramTarget(portal.Name, identifier, prefix, identifier), false, true)
++		}
++		return
++	}
+@@ -101,2 +125,0 @@
+-	createChat := ce.Command == "start-chat" || ce.Command == "pm"
+-	identifier := strings.Join(identifierParts, " ")
+@@ -114,8 +137,7 @@
 -	formattedName := formatResolveIdentifierResult(resp)
-@@ -116,12 +115,15 @@
+-	if createChat {
 -		name := resp.Portal.Name
 -		if name == "" {
 -			name = resp.Portal.MXID.String()
 -		}
 -		if !resp.JustCreated {
 -			ce.Reply("You already have a direct chat with %s at [%s](%s)", formattedName, name, resp.Portal.MXID.URI().MatrixToURL())
--		} else {
++	if resp.DMRoomID != "" {
++		name := resp.Name
++		if resp.Portal != nil && resp.Portal.Name != "" {
++			name = resp.Portal.Name
++		}
++		if resolve && !createChat {
++			ce.ReplyAdvanced(formatResolvedRoomLink(name, string(resp.ID), resp.DMRoomID, false), false, true)
+@@ -123 +145 @@
 -			ce.Reply("Created chat with %s: [%s](%s)", formattedName, name, resp.Portal.MXID.URI().MatrixToURL())
--		}
--	} else {
++			ce.ReplyAdvanced(formatOpenedChatLink(name, resp.DMRoomID, resp.JustCreated), false, true)
+@@ -126,2 +148,30 @@
 -		ce.Reply("Found %s", formattedName)
 -	}
-+		ce.ReplyAdvanced(formatOpenedChatLink(resp.Portal.Name, resp.Portal.MXID, resp.JustCreated), false, true)
-+	} else {
-+		ce.Reply("Found %s", formatResolveIdentifierResult(resp))
++		ce.ReplyAdvanced(formatResolvedTelegramTarget(resp.Name, string(resp.ID), prefix, string(resp.ID)), false, true)
 +	}
++}
++
++func formatResolvedTelegramTarget(name, id, prefix, target string) string {
++	label := "<code>" + html.EscapeString(id) + "</code>"
++	if name != "" {
++		label = "<strong>" + html.EscapeString(name) + "</strong> (" + label + ")"
++	}
++	command := prefix + " resolve-identifier --open " + target
++	return "Found " + label + ". To add the chat to Telegram → Rooms, send <code>" + html.EscapeString(command) + "</code>."
++}
++
++func formatResolvedRoomLink(name, identifier string, room id.RoomID, open bool) string {
++	link := formatOpenedChatLink(name, room, false)
++	if !open {
++		return link + " (<code>" + html.EscapeString(identifier) + "</code>)"
++	}
++	return link
 +}
 +
 +func formatOpenedChatLink(name string, room id.RoomID, created bool) string {

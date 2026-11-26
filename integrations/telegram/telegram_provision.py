@@ -176,6 +176,29 @@ def clear_space_link(room, kind, target, token):
         request('PUT', route, {}, token)
 
 
+def classify_telegram_rooms(space, owner, token, portals):
+    if not portals:
+        return
+    state = read_room_state(room_route(space), token)
+    linked = {room for (kind, room), event in state.items()
+              if kind == 'm.space.child' and event['content'].get('via')}
+    managed = linked.intersection(portals)
+    if not managed:
+        return
+    route = f'{CLIENT}/user/{encoded(owner)}/account_data/m.direct'
+    current = missing(route, token) or {}
+    updated = {}
+    for peer, rooms in current.items():
+        if not isinstance(rooms, list):
+            updated[peer] = rooms
+            continue
+        remaining = [room for room in rooms if not isinstance(room, str) or room not in managed]
+        if remaining or remaining == rooms:
+            updated[peer] = remaining
+    if updated != current:
+        request('PUT', route, updated, token)
+
+
 def binding_rooms(root):
     database = root / 'connector/telegram.sqlite3'
     if not database.is_file():

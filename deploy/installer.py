@@ -968,7 +968,7 @@ def run_telegram(data, *args):
 def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *, unattended=False):
     sys.path.insert(0, str(SOURCE / 'integrations/telegram'))
     try:
-        from telegram_provision import reconcile_layout
+        from telegram_provision import classify_telegram_rooms, reconcile_layout
     finally:
         sys.path.pop(0)
     root = data / 'telegram'
@@ -990,8 +990,16 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
                              + ', '.join(candidates))
         return choose_option('✈️ Choose the Telegram Bridge chat to keep', {room: room for room in candidates})
 
-    return reconcile_layout(root, settings['server_name'], rooms['owner'], token, rooms['space'],
-                            bridge_active=active, select=select)
+    owner = rooms['owner']
+    layout = reconcile_layout(root, settings['server_name'], owner, token, rooms['space'],
+                              bridge_active=active, select=select)
+    if active and (root / 'guide/space-db').is_file():
+        portals = compose(data, 'exec', '-T', 'postgres', 'psql', '-qXAt', '--set', 'ON_ERROR_STOP=1',
+                          '-U', 'synapse', '-d', 'matrix_telegram', '--set', f'owner={owner}',
+                          input="SELECT room FROM telegram_space_sent_portal WHERE owner = :'owner';\n",
+                          capture_output=True, text=True).stdout.splitlines()
+        classify_telegram_rooms(layout['space'], owner, token, portals)
+    return layout
 
 
 def verify_operator(rooms, token):

@@ -97,6 +97,8 @@ function telegramGuide(command) {
     ['4. Element · Open a chat from Telegram Bridge', [
       'To look up a person, send this in Telegram Control. Replace Sample Name with the name or Telegram username. The reply lists matching names and numeric Telegram user IDs.',
       { code: '!tg search Sample Name' },
+      'In Telegram Bridge, look up a person or known group. If the bridge offers an --open command, copy it back into Telegram Bridge. The bridge then replies with a room link.',
+      { code: '!tg resolve-identifier @username\n!tg resolve-identifier channel:1234567890' },
       'For a person, replace the example with their Telegram username and send the command in Telegram Bridge.',
       { code: '!tg pm @username' },
       'If you have the person’s numeric Telegram user ID, replace 1001 with that ID. To find it by name, send !tg search <name> in Telegram Bridge and check the matching profile.',
