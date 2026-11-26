@@ -14,6 +14,8 @@ The workspace and integrations checklist opens with **Done** highlighted. On a f
 
 Enter a Matrix operator password of at least 12 characters, then re-enter it on the confirmation screen. Both fields mask what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
 
+The installer then uses sudo to start Docker services, write protected deployment files, and enable startup at boot. If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt.
+
 After the workspace boots, sign in to Element and confirm sign-in in the terminal. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
 
 The installer starts the selected local Amplifier Instances together and opens provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.

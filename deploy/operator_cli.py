@@ -65,6 +65,14 @@ def install_as_operator(data, args):
     current = metadata(data, refresh_legacy=True) if (data / 'settings.json').is_file() else {}
     settings, passphrase = interactive(available_profiles(), current.get('settings', {}))
     graph = None if current.get('graph_password_configured') else prompt_graph_password()
+    print(
+        '\n🔐 Authorize workspace installation\n'
+        'The installer uses sudo to start Docker services, write protected deployment files, '
+        'and enable startup at boot.\n'
+        'If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt.\n'
+        'Use the Matrix password for Element and the Context Intelligence password for Neo4j Browser.\n',
+        flush=True,
+    )
     elevate(data, '_host', 'install', payload={'settings': settings, 'password': passphrase, 'graph_password': graph})
     if interactive_terminal():
         setup_as_operator(data, passphrase=passphrase)

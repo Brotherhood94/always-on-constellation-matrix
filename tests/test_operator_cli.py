@@ -49,7 +49,8 @@ class OperatorCLITest(unittest.TestCase):
             sudo.assert_not_called()
 
     def test_install_prompts_before_sudo_and_sends_passwords_only_on_stdin(self):
-        with TemporaryDirectory() as work, patch('operator_cli.run') as run, \
+        output = StringIO()
+        with TemporaryDirectory() as work, redirect_stdout(output), patch('operator_cli.run') as run, \
                 patch('operator_cli.interactive_terminal', return_value=True), \
                 patch('operator_cli.interactive', return_value=(self.settings, 'matrix-fixture-password')) as prompt, \
                 patch('operator_cli.prompt_graph_password', return_value='graph-fixture-password') as graph, \
@@ -58,6 +59,15 @@ class OperatorCLITest(unittest.TestCase):
             order = Mock()
             for name, mock in (('prompt', prompt), ('graph', graph), ('sudo', run), ('guide', guide)):
                 order.attach_mock(mock, name)
+
+            def check_notice(*args, **kwargs):
+                notice = output.getvalue()
+                self.assertIn('Linux password for the VPS account shown in the prompt', notice)
+                self.assertIn('start Docker services, write protected deployment files', notice)
+                self.assertIn('enable startup at boot', notice)
+                self.assertNotIn('fixture-password', notice)
+
+            run.side_effect = check_notice
             install_as_operator(data, SimpleNamespace(config=None))
             self.assertEqual([item[0] for item in order.mock_calls], ['prompt', 'graph', 'sudo', 'guide'])
             self.assertEqual(run.call_args.args[-2:], ('_host', 'install'))
