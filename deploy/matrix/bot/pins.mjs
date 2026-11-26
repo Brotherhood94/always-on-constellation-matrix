@@ -104,7 +104,7 @@ function telegramGuide(command) {
         url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#add-a-telegram-contact-or-group' },
     ]],
     ['5. Element · Open the room from Telegram → Rooms', [
-      'Click the room link in the bridge’s reply and join if prompted. If the contact name is linked twice, the second link opens the room.',
+      'Click the chat name in the bridge’s reply and join if prompted.',
       'Find the chat under Telegram → Rooms. Check the recipient there before sending a message.',
       { label: 'Optional · Set up drafts and approvals in Telegram Control',
         url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#start-the-drafting-agent' },

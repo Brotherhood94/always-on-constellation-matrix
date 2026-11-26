@@ -54,7 +54,7 @@ Enter your existing Matrix operator password to link the bridge DM. The command 
    - **Group without topics.** In Telegram, copy a link to a message in the group. For `https://t.me/c/1234567890/42`, send `!tg create-portal channel:1234567890` in Telegram Bridge. Use the first number from the link. [Telegram message links](https://core.telegram.org/api/links#message-links)
    - **Basic group or group with a public link.** In Telegram Desktop, open the group and choose **⋯ → Export chat history → JSON**. Check the chat name in `result.json` and use the top-level `id`. Send `!tg create-portal chat:<id>` for a basic group or `!tg create-portal channel:<id>` for a supergroup without topics. [Telegram Desktop export](https://telegram.org/blog/export-and-more) · [Export fields](https://core.telegram.org/import-export#chat)
 
-2. **Element.** Click the room link in the bridge’s reply and join if prompted. If the contact name is linked twice, the second link opens the room. Find the chat under **Telegram → Rooms**, check the recipient, and send your message there. Your contact receives it in their existing Telegram conversation.
+2. **Element.** Click the chat name in the bridge’s reply and join if prompted. Find the chat under **Telegram → Rooms**, check the recipient, and send your message there. Your contact receives it in their existing Telegram conversation.
 
 If the bridge has not found the group yet, send `!tg sync-chats`, wait for it to finish, then retry `!tg create-portal`. If you use multiple Telegram accounts, send `!tg list-logins` to find your own account ID and put it before the username or group ID in the command. [Telegram bridge group sync](https://github.com/mautrix/telegram/blob/8d85e547208fcdeae47b08f57bca0a7c8cf910af/pkg/connector/commands.go)
 
@@ -85,7 +85,7 @@ sudo ./constellation_matrix telegram start-agent
 
 If an earlier setup stopped with `HTTP 400 M_UNKNOWN` while creating a Matrix v12 room, rerun `prepare-agent` with the updated installer. It reuses the connector identity and initialized rooms. If a failed request left an alias on an empty room owned by the connector, it recreates the room and assigns that alias to it.
 
-The release pins mautrix Telegram `v26.11`, Constellation Instance `0.22.17`, Amplifier ACP `0.1.7` at `3da5681942d9e9b4c51376e47ec85e69a001623a`, and the Amplifier ChatGPT provider at `cae3eaa32e16b139b8e889b8cc477c3f2d9dee31`.
+The release pins mautrix Telegram `v26.11` with a small patch that displays a single chat link in `!tg pm` replies. It also pins Constellation Instance `0.22.17`, Amplifier ACP `0.1.7` at `3da5681942d9e9b4c51376e47ec85e69a001623a`, and the Amplifier ChatGPT provider at `cae3eaa32e16b139b8e889b8cc477c3f2d9dee31`.
 
 The Telegram model uses a standalone Amplifier bundle. The connector records scoped delivery metadata in Context Intelligence. Dependencies are prepared when the engine image is built. If an older engine failed to activate `hook-context-intelligence`, rerun `prepare-agent` with the updated release and then rerun `probe`. A completed Codex sign-in is reused.
 
@@ -149,7 +149,7 @@ A Telegram relay uses the selected Telegram login with bridge attribution. Matri
 
 ## Repair an existing Telegram layout
 
-Run this from the updated checkout to move the existing Space, Control room, bridge DM, and verified chats to the top-level **Telegram** Space. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
+Run this from the updated checkout to repair the top-level **Telegram** Space and refresh the guide. It also updates the running bridge when its image changes. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
 
 ```sh
 ./constellation_matrix telegram layout

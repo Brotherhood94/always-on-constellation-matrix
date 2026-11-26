@@ -142,7 +142,7 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
   assert.match(guide.body, /t\.me\/c\/1234567890\/42.*\n!tg create-portal channel:1234567890/u);
   assert.match(guide.formatted_body, /<pre><code>!tg pm @username<\/code><\/pre>/u);
-  assert.match(guide.body, /Click the room link.*the second link opens the room/u);
+  assert.match(guide.body, /Click the chat name in the bridge’s reply/u);
   assert.match(guide.body, /Find the chat under Telegram → Rooms.*before sending a message/u);
   assert.match(guide.body, /Optional · Set up drafts and approvals in Telegram Control/u);
   assert.doesNotMatch(guide.body, /resolve-identifier|login-id|telegram allow|telegram bind/u);

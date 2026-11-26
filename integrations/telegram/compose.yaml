@@ -27,7 +27,9 @@ services:
       - ${TELEGRAM_DATA:?}/guide:/state
   telegram-bridge:
     <<: *worker
-    image: dock.mau.dev/mautrix/telegram:v26.11@sha256:fe78dbce96dca82f077371f429776ab1fee3b65ddc83924a257279b142160945
+    image: constellation-telegram-bridge:26.11-chat-link
+    build: ./bridge
+    pull_policy: never
     entrypoint: [/usr/bin/mautrix-telegram, -n, -c, /data/config.yaml]
     working_dir: /data
     volumes:

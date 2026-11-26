@@ -481,7 +481,7 @@ try {
   assert.match(telegramInstructions.body, /REPLACE_WITH_YOUR_API_HASH/u);
   assert.match(telegramInstructions.body, /Telegram Control and Telegram Bridge/u);
   assert.match(telegramInstructions.formatted_body, /<pre><code>!tg pm @username<\/code><\/pre>/u);
-  assert.match(telegramInstructions.body, /Click the room link.*the second link opens the room/u);
+  assert.match(telegramInstructions.body, /Click the chat name in the bridge’s reply/u);
   assert.match(telegramInstructions.body, /Find the chat under Telegram → Rooms.*before sending a message/u);
   console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');
   const officeSetup = await eventually(async () => {

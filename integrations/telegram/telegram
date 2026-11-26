@@ -38,6 +38,7 @@ case ${1:-} in
         "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d postgres
       "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/space.sql"
       "${config[@]}" space-reader "$TELEGRAM_DATA"
+      "${compose[@]}" up -d --no-deps --build --wait --wait-timeout 120 telegram-bridge
     fi
     "${compose[@]}" up -d --no-deps --build telegram-guide
     ;;
@@ -64,6 +65,7 @@ case ${1:-} in
     ;;
   activate)
     [[ $# == 1 && -s "$TELEGRAM_DATA/bridge/registration.yaml" ]]
+    "${compose[@]}" build telegram-bridge
     previous=$(mktemp "$TELEGRAM_DATA/.synapse-config.XXXXXXXX")
     cp -p "$MATRIX_DATA/synapse/homeserver.yaml" "$previous"
     "${config[@]}" enable "$TELEGRAM_DATA"

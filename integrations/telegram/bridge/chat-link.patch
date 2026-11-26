@@ -1,0 +1,32 @@
+--- a/bridgev2/commands/startchat.go
++++ b/bridgev2/commands/startchat.go
+@@ -114 +113,0 @@
+-	formattedName := formatResolveIdentifierResult(resp)
+@@ -116,12 +115,15 @@
+-		name := resp.Portal.Name
+-		if name == "" {
+-			name = resp.Portal.MXID.String()
+-		}
+-		if !resp.JustCreated {
+-			ce.Reply("You already have a direct chat with %s at [%s](%s)", formattedName, name, resp.Portal.MXID.URI().MatrixToURL())
+-		} else {
+-			ce.Reply("Created chat with %s: [%s](%s)", formattedName, name, resp.Portal.MXID.URI().MatrixToURL())
+-		}
+-	} else {
+-		ce.Reply("Found %s", formattedName)
+-	}
++		ce.ReplyAdvanced(formatOpenedChatLink(resp.Portal.Name, resp.Portal.MXID, resp.JustCreated), false, true)
++	} else {
++		ce.Reply("Found %s", formatResolveIdentifierResult(resp))
++	}
++}
++
++func formatOpenedChatLink(name string, room id.RoomID, created bool) string {
++	if name == "" {
++		name = room.String()
++	}
++	action := "Open chat"
++	if created {
++		action = "Created chat"
++	}
++	return fmt.Sprintf(`%s: <a href="%s">%s</a>`, action, html.EscapeString(room.URI().MatrixToURL()), html.EscapeString(name))
