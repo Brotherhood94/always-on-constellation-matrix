@@ -22,6 +22,10 @@ Start with five roles and add specialists as your work grows. Use the record of 
 
 Open the dashboard from **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. **Team connections** shows the permitted directions. Follow an arrow to review that route’s changes and recent Office handoffs, or select **View connection changes** for the workspace log. [Team connections and history](docs/team.md#team-connections) · [Starting contact permissions and role examples](docs/team.md#first-interactions)
 
+![Constellation dashboard with CPU, memory and disk charts, Task Manager's contact routes, and the five-agent roster](assets/screenshots/dashboard.webp)
+
+*Demo dashboard with sample VPS metrics and Task Manager’s incoming and outgoing routes highlighted.*
+
 ## Quick start
 
 From this checkout on an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Start setup as your regular user. The installer invokes sudo for Docker, protected deployment files, and host services. Tailscale Serve gives authorized devices private HTTPS access to Element’s homeserver, the dashboard, and the graph browser. [VPS prerequisites](docs/runbook.md#initial-setup) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
@@ -61,6 +65,10 @@ If you skipped Task Manager, use the Office agent named in your welcome. If you 
 
 Mention **Task Manager** when you want several agents to work on a request. Task Manager sets the acceptance criteria, delegates by capability, and verifies the evidence before closing the task.
 
+![English Office thread in Element showing Alex Morgan’s request, Task Manager’s handoff to Scouter, a GitHub Docs link, and a verified result](assets/screenshots/element-office.webp)
+
+*In this scripted demo, Scouter checks GitHub’s release-notes workflow and Task Manager recommends editing the generated notes before publication.*
+
 ```mermaid
 ---
 config:
@@ -94,6 +102,10 @@ An agent adds 👀 when it accepts an assignment and clears it after delivery. A
 ### Improve the team from its work
 
 Context Intelligence records who handed off an assignment, whether the recipient accepted it, and whether the original task finished or was blocked. During a stalled release task, Scouter can propose narrowly scoped GitHub access for a Coder who already owns repository work. Coach can revise the working agreement if the handoff omitted acceptance criteria. Hiring Manager can propose a release editor if the team repeatedly has nobody responsible for release notes. [Execution timelines](integrations/context-execution/README.md)
+
+![Context Intelligence execution graph in Neo4j Browser showing the release-notes task, Scouter’s handoff, and the verified outcome](assets/screenshots/context-intelligence.webp)
+
+*The same demo task in Neo4j Browser. The graph links Task Manager’s dispatch to Scouter’s acceptance and return, and records the verified outcome.*
 
 On a systemd deployment, these management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving VPS Manager in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
 
