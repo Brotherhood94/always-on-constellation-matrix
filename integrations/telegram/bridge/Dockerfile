@@ -6,12 +6,13 @@ WORKDIR /bridge
 RUN git init -q \
     && git fetch -q --depth=1 https://github.com/mautrix/telegram.git 8d85e547208fcdeae47b08f57bca0a7c8cf910af \
     && git checkout -q --detach FETCH_HEAD
-COPY chat-link.patch chat-link_test.go /tmp/
+COPY chat-link.patch chat-link_test.go office-portal.patch /tmp/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go mod download maunium.net/go/mautrix \
     && cp -r "$(go env GOMODCACHE)/maunium.net/go/mautrix@v0.33.0" /mautrix \
     && chmod -R u+w /mautrix \
     && patch -d /mautrix -p1 < /tmp/chat-link.patch \
+    && patch -d /mautrix -p1 < /tmp/office-portal.patch \
     && cp /tmp/chat-link_test.go /mautrix/bridgev2/commands/ \
     && go mod edit -replace=maunium.net/go/mautrix=/mautrix \
     && go test maunium.net/go/mautrix/bridgev2/commands -run '^TestOpenedChatLink$' \

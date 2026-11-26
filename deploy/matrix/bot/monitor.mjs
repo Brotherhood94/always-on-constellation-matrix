@@ -3,8 +3,9 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import matrix from '@vector-im/matrix-bot-sdk';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
-import { officeSetupNotice, reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from './pins.mjs';
+import { officeSetupNotice, reconcilePins, reconcileTelegramPin, shortcutRecipientDevices, shortcutRecipientKey } from './pins.mjs';
 import { reconcileTelegramRooms } from './telegram-space.mjs';
+import { listenTelegramOffice, privateTelegramControl } from './telegram-office.mjs';
 
 const {
   LogService, LogLevel, MatrixClient, RustSdkCryptoStorageProvider,
@@ -127,14 +128,8 @@ async function shortcuts({ client, roomId }) {
   const pinRoom = {
     recipientKey: async () => {
       if (!(await client.getJoinedRoomMembers(roomId)).includes(MATRIX_OWNER)) return null;
-      if (telegram) {
-        const state = await client.getRoomState(roomId);
-        const allowed = new Set([MATRIX_OWNER, userId, `@dot:${MATRIX_SERVER_NAME}`]);
-        const find = type => state.find(event => event.type === type && event.state_key === '')?.content;
-        if (find('m.room.join_rules')?.join_rule !== 'invite' || find('m.room.create')?.['m.federate'] !== false ||
-            find('m.room.tombstone') || state.some(event => event.type === 'm.room.member' &&
-              ['join', 'invite'].includes(event.content?.membership) && !allowed.has(event.state_key))) return null;
-      }
+      if (telegram && !(await privateTelegramControl(client, { control: roomId, domain: MATRIX_SERVER_NAME,
+        owner: MATRIX_OWNER, guide: userId }))) return null;
       return operatorDeviceKey(client);
     },
     getPinned: async () => {
@@ -168,7 +163,8 @@ async function operatorDeviceKey(client) {
   const result = await client.doRequest('POST', '/_matrix/client/v3/keys/query', null, JSON.parse(query.body), 15000);
   // The device may have uploaded its keys before the monitor's next sync.
   await machine.markRequestAsSent(query.id, query.type, JSON.stringify(result));
-  return shortcutRecipientKey(MATRIX_OWNER, result.device_keys?.[MATRIX_OWNER]);
+  const recipients = telegram ? shortcutRecipientDevices : shortcutRecipientKey;
+  return recipients(MATRIX_OWNER, result.device_keys?.[MATRIX_OWNER]);
 }
 
 async function remindOffice({ client }) {
@@ -199,6 +195,7 @@ async function remindOffice({ client }) {
 
 let spaceDatabase;
 let spaceConnection;
+let officeSocket;
 async function telegramRooms({ client, roomId }) {
   const connection = (await readOptional(join(STATE_DIR, 'space-db')))?.trim();
   if (connection !== spaceConnection) {
@@ -212,11 +209,17 @@ async function telegramRooms({ client, roomId }) {
     }
     spaceConnection = connection;
   }
-  if (!spaceDatabase) return;
   const space = (await readFile(join(STATE_DIR, 'space-id'), 'utf8')).trim();
-  await reconcileTelegramRooms(client, spaceDatabase, {
+  const options = {
     space, domain: MATRIX_SERVER_NAME, owner: MATRIX_OWNER, guide: userId, control: roomId,
-  });
+  };
+  if (!officeSocket && process.env.TELEGRAM_OFFICE_SOCKET) {
+    officeSocket = await listenTelegramOffice(process.env.TELEGRAM_OFFICE_SOCKET, async () => ({
+      ...options, client, database: spaceDatabase,
+      key: (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim(),
+    }));
+  }
+  if (spaceDatabase) await reconcileTelegramRooms(client, spaceDatabase, options);
 }
 
 let sender;
@@ -225,9 +228,9 @@ while (true) {
   try {
     sender ??= await initialize();
     if (!telegram) await deliver(sender);
-    await shortcuts(sender);
     if (telegram) await telegramRooms(sender);
-    else await remindOffice(sender);
+    await shortcuts(sender);
+    if (!telegram) await remindOffice(sender);
     wait = 5000;
   } catch (error) {
     console.error('Matrix alert delivery retry:', error.body?.errcode || error.code || error.message);

@@ -19,7 +19,7 @@ import time
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
 from agent_picker import choose_option, placement as agent_placement, prompt_text, select_integrations
-from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition
+from compose import BASE, CONNECTOR, ENGINE, SOURCE, definition, telegram_office_agent
 
 sys.path.insert(0, str(SOURCE / 'deploy/matrix'))
 from agent_catalog import KEY, PRIVATE_ROLES, profile
@@ -507,6 +507,9 @@ def provision_layout(settings, data, registry, passphrase, *, unattended=False, 
 def compose_config(settings, data, registry):
     if 'root' in registry['agents']:
         raise ValueError('Run agent migrate-root to replace the legacy Root agent before changing the deployment.')
+    if settings['telegram']:
+        directory(data / 'telegram', 0o711)
+        directory(data / 'telegram/office', uid=RUNTIME_UID)
     environment = base_environment(settings, data)
     env_write(data, environment)
     context_config(settings, data, registry)
@@ -1033,6 +1036,11 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
                     run_telegram(data, action)
                 rooms = provision_telegram_layout(settings, data, workspace, token, options.bridge_room)
                 run_telegram(data, 'start-guide')
+                coordinator = telegram_office_agent(registry)
+                if registry['agents'].get(coordinator, {}).get('active') and 'root' not in registry['agents']:
+                    compose_config(settings, data, registry)
+                    docker_build(CONNECTOR, SOURCE / 'agents/connector')
+                    up(data, coordinator)
             finally:
                 if operator_token is None:
                     request('POST', CLIENT + '/logout', {}, token)

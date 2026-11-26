@@ -26,7 +26,7 @@ chmod 0755 "$fixture"
 chmod 0644 "$fixture/key.pem"
 docker network create --internal "$network" >/dev/null
 docker volume create "$state" >/dev/null
-docker run --rm --network none -v "$state:/state" --entrypoint sh "$py" -c 'umask 077; mkdir /state/bridge /state/synapse; chown 991:991 /state/bridge; echo "{\"api_id\":42,\"api_hash\":\"0123456789abcdef0123456789abcdef\"}" >/state/dummy.json'
+docker run --rm --network none -v "$state:/state" --entrypoint sh "$py" -c 'umask 077; mkdir /state/bridge /state/synapse /state/guide; chown 991:991 /state/bridge; echo "{\"api_id\":42,\"api_hash\":\"0123456789abcdef0123456789abcdef\"}" >/state/dummy.json'
 docker run --rm --network none --entrypoint /usr/bin/mautrix-telegram "$images" -e -c - |
   docker run --rm -i --network none --entrypoint yq "$images" -o=json . - |
   docker run --rm -i --network none -v "$state:/state" -v "$src:/src:ro" -e MATRIX_SERVER_NAME=telegram.test -e MATRIX_OWNER=@operator:telegram.test \
@@ -52,6 +52,9 @@ update_portal disallow
 [[ $(bridge_config_json | shasum -a 256) == "$config_before" ]]
 echo 'The generated YAML supports idempotent allow and disallow and preserves the rest of the configuration.'
 
+bridge_config_json |
+  docker run --rm -i --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" \
+    -B /src/bridge_config.py office-provisioning /state
 docker run --rm --network none -v "$state:/state" --entrypoint /bin/sh "$syn" -c 'python -m synapse.app.homeserver --server-name telegram.test --config-path /state/synapse/homeserver.yaml --generate-config --report-stats=no --data-directory /state/synapse'
 docker run --rm -i --network none -v "$state:/state" --entrypoint python "$syn" - <<'PY'
 from pathlib import Path
@@ -101,7 +104,11 @@ if docker logs "$bridge" 2>&1 | rg -qi 'config validation failed|failed to start
 fi
 echo 'Pinned mautrix started against Synapse, migrated PostgreSQL, and exposed no portal with the empty allowlist.'
 docker exec -i -e MATRIX_LOCAL_PORT=8008 -e PYTHONPATH=/telegram:/matrix "$synapse" python -B - <<'PY'
+import json
+from pathlib import Path
 from time import sleep
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from layout import CLIENT, membership
 from provision import request
@@ -119,16 +126,36 @@ else:
     raise AssertionError('mautrix did not join the encrypted management DM')
 assert bridge_dm('telegram.test', owner['user_id'], token, room, select=lambda _: None) == room
 print('Pinned mautrix joined the installer-created encrypted Telegram Bridge DM.')
+
+key = Path('/state/guide/office-bridge-key').read_text().strip()
+for method, route, secret, code in [
+    ('GET', 'logins', key, 'M_FORBIDDEN'),
+    ('POST', 'constellation_group/user%3A123', key, 'M_NOT_FOUND'),
+    ('POST', 'constellation_group/chat%3A123', key, 'FI.MAU.NOT_LOGGED_IN'),
+    ('POST', 'create_dm/%40sample', key, 'FI.MAU.NOT_LOGGED_IN'),
+    ('POST', 'create_dm/%40sample', 'invalid-key', 'M_UNKNOWN_TOKEN'),
+]:
+    endpoint = 'http://telegram-bridge:29317/_matrix/provision/v3/' + route + '?user_id=%40operator%3Atelegram.test'
+    try:
+        urlopen(Request(endpoint, method=method, headers={'Authorization': 'Bearer ' + secret}), timeout=5)
+    except HTTPError as error:
+        assert json.load(error)['errcode'] == code, (route, error.code)
+    else:
+        raise AssertionError('Provisioning unexpectedly succeeded without an operator Telegram login')
+print('Bridge Office provisioning is scoped to opening chats and requires the operator Telegram login.')
 PY
 # Leave the AppService identity available, but isolate the following synthetic room from bridge automation.
 docker stop --timeout 3 "$bridge" >/dev/null
 docker run --rm --network "$network" --user 0:0 -v "$state:/fixture:ro" \
   -v "$src/../../deploy/matrix/bot/telegram-space.mjs:/app/telegram-space.mjs:ro" \
+  -v "$src/../../deploy/matrix/bot/telegram-office.mjs:/app/telegram-office.mjs:ro" \
   -v "$src/tests/space-fixture.mjs:/app/space-fixture.mjs:ro" \
   --entrypoint node "$connector_image" /app/space-fixture.mjs
 docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gid=991,mode=0700 \
   -v "$state:/fixture:ro" -v "$fixture:/acp-fixture:ro" \
   -v "$src/policy.mjs:/app/policy.mjs:ro" -v "$src/matrix.mjs:/app/matrix.mjs:ro" \
+  -v "$src/../../deploy/matrix/bot/telegram-space.mjs:/app/telegram-space.mjs:ro" \
+  -v "$src/../../deploy/matrix/bot/telegram-office.mjs:/app/telegram-office.mjs:ro" \
   -v "$src/acp.mjs:/app/acp.mjs:ro" -v "$src/control.mjs:/app/control.mjs:ro" -v "$src/service.mjs:/app/service.mjs:ro" \
   --entrypoint node "$connector_image" --input-type=module - <<'JS'
 import assert from 'node:assert/strict';
@@ -139,9 +166,11 @@ import { createServer } from 'node:https';
 import { setTimeout as delay } from 'node:timers/promises';
 import pg from 'pg';
 import { WebSocketServer } from 'ws';
+import matrix from '@vector-im/matrix-bot-sdk';
 import { matrixConnection } from './matrix.mjs';
 import { TelegramStore, pollStart, reviewAnswer } from './policy.mjs';
 import { telegramRequest } from './control.mjs';
+import { telegramOfficeAction } from './telegram-office.mjs';
 const url = 'http://synapse:8008';
 const root = '/_matrix/client/v3';
 async function api(path, body, token) {
@@ -201,10 +230,16 @@ async function privateRoom(token, invite, asUser) {
 const controlRoom = await privateRoom(agent.access_token, [b.user_id, dot.user_id]);
 await api('/join/' + encodeURIComponent(controlRoom), {}, b.access_token);
 await api('/join/' + encodeURIComponent(controlRoom), {}, dot.access_token);
+const {room_id: space} = await api('/createRoom', {preset:'private_chat', visibility:'private',
+  creation_content:{type:'m.space','m.federate':false}, invite:[b.user_id]}, agent.access_token);
+await api('/join/' + encodeURIComponent(space), {}, b.access_token);
 const dotClient = await connect(dot, 'dot');
 await dotClient.applySync(await dotClient.sync(null, 0), async () => {});
 const portal = await privateRoom(botToken, [agent.user_id, b.user_id, remote.user_id], bridgeBot);
 const portalRoute = '/rooms/' + encodeURIComponent(portal);
+const spaceClient = new matrix.MatrixClient(url, agent.access_token);
+const childRoute = root + '/rooms/' + encodeURIComponent(space) + '/state/m.space.child/' + encodeURIComponent(portal);
+await spaceClient.doRequest('PUT', childRoute, null, {via:['telegram.test']});
 await api(portalRoute + '/join', {}, b.access_token);
 await api(portalRoute + '/join', {}, remote.access_token);
 const remoteClient = await connect(remote, 'remote');
@@ -249,7 +284,7 @@ acp.on('connection', ws => ws.on('message', raw => {
 }));
 await new Promise(resolve => https.listen(0, resolve));
 await writeFile('/state/acp-fixture-token', 'test-token');
-await writeFile('/state/config.json', JSON.stringify({ matrixUrl:url, domain:'telegram.test',
+await writeFile('/state/config.json', JSON.stringify({ matrixUrl:url, domain:'telegram.test', space,
   agent:agent.user_id, device:agent.device, owner:b.user_id, dot:dot.user_id, bridgeBot, controlRoom, auditDatabase,
   engine:{ revision:'fixture', url: 'wss://localhost:' + https.address().port + '/api/v1/acp',
     ca: '/acp-fixture/cert.pem', token: '/state/acp-fixture-token', workspace: '/instance/workspace' } }));
@@ -323,6 +358,32 @@ try {
   assert.equal(JSON.parse(store.draft(draft).approval).event, voteId);
   assert.equal(store.get('SELECT closed FROM draft_review WHERE event=?', review.event).closed, 1);
   console.log('Both review options arrived encrypted, and a single encrypted approval closed the poll and sent only into the disposable Matrix portal.');
+
+  const setupDevice = 'TELEGRAM_SETUP';
+  const setup = await api('/login', {type:'m.login.password', identifier:{type:'m.id.user',user:'telegram-agent'},
+    password:'fixture-long-password', device_id:setupDevice});
+  const setupCrypto = await connect({...setup, device:setupDevice}, 'setup-guide');
+  await setupCrypto.applySync(await setupCrypto.sync(null,0), async () => {});
+  const setupSdk = new matrix.MatrixClient(url, setup.access_token);
+  const setupClient = {getRoomState: room => setupSdk.getRoomState(room), doRequest: (...args) => setupSdk.doRequest(...args),
+    crypto: {encryptRoomEvent: async (room, type, content) => JSON.parse(await setupCrypto.encryptEvent(room, type, content))}};
+  const officeOptions = {client:setupClient, control:controlRoom, owner:b.user_id, guide:agent.user_id, domain:'telegram.test'};
+  const officeInput = {id:'$office-fixture', action:'draft', target:'pilot', type:'direct', text:'Exact text from Office.\nSecond line.'};
+  const queuedOffice = await telegramOfficeAction(officeInput, officeOptions);
+  assert.equal(queuedOffice.ok, true);
+  assert.deepEqual(await telegramOfficeAction(officeInput, officeOptions), queuedOffice);
+  const officeEvent = decodeURIComponent(queuedOffice.message.split('/').at(-1));
+  await waitFor(() => store.get('SELECT 1 FROM draft WHERE control_event=?', officeEvent), 'the Office draft');
+  const fromOffice = store.get('SELECT * FROM draft WHERE control_event=?', officeEvent);
+  assert.equal(fromOffice.body, officeInput.text);
+  assert.equal(fromOffice.state, 'awaiting_approval');
+  assert.equal(store.controlRequiresDot(officeEvent), false);
+  assert.equal(store.get('SELECT count(*) AS n FROM draft WHERE control_event=?', officeEvent).n, 1);
+  const officeReject = await reader.encrypted(controlRoom, 'telegram reject ' + fromOffice.id + ' 1');
+  await reader.put(controlRoom, 'fixture-owner-reject-office-draft', officeReject);
+  await waitFor(() => store.draft(fromOffice.id).state === 'cancelled', 'the operator decision on the Office draft');
+  setupCrypto.close();
+  console.log('The Guide device encrypted one Office request into Control across retries, preserving the exact text for operator review.');
 
   const compose = await dotClient.encryptEvent(controlRoom, 'm.room.message', {
     msgtype:'m.text', body:'Prepare a message to the test chat.',
@@ -431,6 +492,15 @@ try {
   await waitFor(() => store.get('SELECT status FROM control_request WHERE event=?', repeat)?.status === 'done', 'the duplicate draft notice');
   assert.equal(store.get('SELECT count(*) AS count FROM draft WHERE operator_approval=1 AND reply_event=?', latest).count, 1);
   console.log('A threaded follow-up reused the portal, and “rispondi” prepared one unsent reply for approval.');
+
+  await spaceClient.doRequest('PUT', childRoute, null, {});
+  const removed = await reader.put(controlRoom, 'fixture-removed-room-draft',
+    await reader.encrypted(controlRoom, 'telegram draft direct "pilot": This room was removed.'));
+  await waitFor(() => store.get('SELECT status FROM control_request WHERE event=?', removed)?.status === 'done',
+    'the removed room to refuse a new draft');
+  assert.equal(store.get('SELECT 1 FROM draft WHERE control_event=?', removed), undefined);
+  await spaceClient.doRequest('PUT', childRoute, null, {via:['telegram.test']});
+  console.log('Unlinking the verified Telegram room prevented it from receiving a new Control draft.');
 
   await api(portalRoute + '/leave', {}, agent.access_token);
   await waitFor(() => store.binding('pilot').active === 0, 'the binding to pause after leaving');

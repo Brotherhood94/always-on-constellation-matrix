@@ -823,6 +823,24 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(legacy['networks']['workshop-targets']['internal'])
         self.assertNotIn('workshop-egress', legacy['networks'])
 
+    def test_telegram_office_socket_is_only_mounted_in_the_coordinator_connector(self):
+        self.registry['agents']['task-manager'] = {**self.registry['agents']['manager']}
+        data = Path('/srv/fixture')
+        secrets = {'POSTGRES_PASSWORD': 'fixture'}
+        for enabled in (True, False):
+            with self.subTest(enabled=enabled):
+                services = definition({**self.settings, 'telegram': enabled}, data, self.registry, secrets)['services']
+                mounted = {key: item for key, service in services.items() for item in service.get('volumes', [])
+                           if item['target'] == '/telegram-office'}
+                if enabled:
+                    self.assertEqual(set(mounted), {'task-manager'})
+                    self.assertTrue(mounted['task-manager']['read_only'])
+                    self.assertFalse(mounted['task-manager']['bind']['create_host_path'])
+                    self.assertEqual(services['task-manager']['environment']['TELEGRAM_OFFICE_SOCKET'],
+                                     '/telegram-office/actions.sock')
+                else:
+                    self.assertEqual(mounted, {})
+
     def test_catalog_keeps_unconfigured_agents_pending_during_health_refresh(self):
         observed = [{'name': 'Coder', 'status': 'Available'}]
         for inventory in ([], observed):

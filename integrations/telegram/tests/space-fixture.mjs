@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import matrix from '@vector-im/matrix-bot-sdk';
 import pg from 'pg';
 import { reconcileTelegramRooms } from './telegram-space.mjs';
+import { telegramOfficeAction } from './telegram-office.mjs';
 
 const domain = 'telegram.test';
 const matrixUrl = 'http://synapse:8008';
@@ -77,11 +78,24 @@ try {
   await reconcile();
   assert.deepEqual((await children()).map(event => event.event_id).sort(), baseline.map(event => event.event_id).sort());
 
-  const route = `/_matrix/client/v3/rooms/${encodeURIComponent(space)}/state/m.space.child/${encodeURIComponent(dm)}`;
-  await client.doRequest('PUT', route, null, {});
+  const office = { client, database: reader, space, domain, owner, guide, key: 'fixture', bridgeFetch: async (url, request) => {
+    assert.equal(new URL(url).searchParams.get('user_id'), owner);
+    assert.equal(request.method, 'POST');
+    const contact = url.includes('/create_dm/');
+    assert.match(url, contact ? /create_dm\/%40sample/ : /constellation_group\/channel%3A456/);
+    return Response.json(contact ? { dm_room_mxid: dm } : { room: supergroup });
+  } };
+  const remove = async (id, target) => telegramOfficeAction({ id, action: 'remove', target }, office);
+  const add = async (id, target) => telegramOfficeAction({ id, action: 'add', target }, office);
+  assert.equal((await remove('$remove-dm', 'user:1001')).ok, true);
+  assert.equal((await remove('$remove-group', supergroup)).ok, true);
   await reconcile();
   assert.deepEqual((await children()).find(event => event.state_key === dm).content, {});
-  console.log('Opening the contact and groups linked them once in Synapse before any sends. Other logins, cached peers and unsupported rooms stayed out.');
+  assert.deepEqual((await children()).find(event => event.state_key === supergroup).content, {});
+  assert.match((await add('$reopen-dm', '@sample')).message, new RegExp(encodeURIComponent(dm)));
+  assert.match((await add('$reopen-group', 'https://t.me/c/456/789')).message, new RegExp(encodeURIComponent(supergroup)));
+  assert.equal((await children()).filter(event => event.content.via?.length).length, 3);
+  console.log('Office opened and removed the verified contact and group in Synapse. Reconciliation preserved the removals.');
 } finally {
   await reader.end();
   await bridge.end();

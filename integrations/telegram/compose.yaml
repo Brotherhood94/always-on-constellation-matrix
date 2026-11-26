@@ -23,8 +23,10 @@ services:
       MATRIX_OWNER: ${MATRIX_OWNER:-}
       STATE_DIR: /state
       TELEGRAM_GUIDE: 'true'
+      TELEGRAM_OFFICE_SOCKET: /office/actions.sock
     volumes:
       - ${TELEGRAM_DATA:?}/guide:/state
+      - ${TELEGRAM_DATA:?}/office:/office
   telegram-bridge:
     <<: *worker
     image: constellation-telegram-bridge:26.11-chat-link

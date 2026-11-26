@@ -26,7 +26,8 @@ const date = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Rome', dateSty
 const pollText = 'org.matrix.msc1767.text';
 
 async function liveBinding(room, target) {
-  if (!(await audit.verifiedTarget(room, target))) return false;
+  if (!(await audit.verifiedTarget(room, target)) ||
+      (settings.space && await matrix.roomRemovedFromSpace(settings.space, room))) return false;
   const state = await matrix.liveState(room);
   if (!state.encrypted || !state.private || state.tombstone) return false;
   const known = new Set([settings.owner, settings.agent, settings.bridgeBot]);
@@ -137,7 +138,8 @@ async function run() {
       store.pause(binding.id, 'portal_security_state_changed');
       return;
     }
-    if (!encrypted || event.sender === settings.agent || event.sender === settings.bridgeBot || event.unsigned?.redacted_because) return;
+    if (!encrypted || event.sender === settings.bridgeBot || event.unsigned?.redacted_because ||
+        (event.sender === settings.agent && room !== settings.controlRoom)) return;
     if (unreadable) {
       if (binding?.active && event.origin_server_ts >= binding.activated) store.pause(binding.id, 'message_decryption_failed');
       return;
@@ -149,7 +151,10 @@ async function run() {
         if (await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
       } else {
         const request = addressedRequest(event, settings);
-        if (request && !pausedFile() && await matrix.verifyControl({ requireDot: true })) store.queueControl(event.event_id, request, now);
+        const requireDot = event.sender === settings.dot || (event.sender === settings.owner && request?.action !== 'compose');
+        if (request && !pausedFile() && await matrix.verifyControl({ requireDot })) {
+          store.queueControl(event.event_id, request, now, { requireDot });
+        }
       }
       return;
     }
@@ -219,7 +224,8 @@ async function run() {
   }
 
   async function processControl(request) {
-    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true }))) return;
+    const requireDot = request.requires_dot !== 0;
+    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot }))) return;
     const input = JSON.parse(request.payload);
     const destinations = await Promise.all(store.bindings().filter(binding => binding.active).map(async binding => {
       const state = await matrix.liveState(binding.room).catch(error => {
@@ -252,7 +258,7 @@ async function run() {
     }
     if (input.action === 'compose') {
       const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
-      if (pausedFile() || !(await matrix.verifyControl({ requireDot: true }))) return;
+      if (pausedFile() || !(await matrix.verifyControl({ requireDot }))) return;
       if (!store.prepareControlDraft(request, binding, recipient, input.text, input.source, Date.now())) {
         result('The chat changed, cannot send from this binding, or the reply does not reference a received message in this chat.');
       }
@@ -266,7 +272,7 @@ async function run() {
       const source = await audit.source(binding.room, target, event, [0]);
       if (source) return { ...event, author: source.author };
     }))).filter(Boolean).reverse();
-    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true })) ||
+    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot })) ||
         await liveBinding(binding.room, target) !== target.audience) return;
     if (input.action === 'reply') {
       const latest = admitted.at(-1);
@@ -284,7 +290,7 @@ async function run() {
         author, body: body.replace(/^(?:>.*\n)+\n/u, '').slice(0, 1000),
       }));
       const text = await draftWithInstance(settings.engine, null, contextMessages, () => {}, input.question);
-      if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true })) ||
+      if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot })) ||
           await liveBinding(binding.room, target) !== target.audience) return;
       const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
       const evidence = { room: binding.room, event: latest.event_id };
@@ -316,7 +322,9 @@ async function run() {
   }
 
   async function publishControlResult(request) {
-    if (!request || pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true }))) return;
+    if (!request) return;
+    const requireDot = request.requires_dot !== 0;
+    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot }))) return;
     let { body, sources } = JSON.parse(request.result);
     if (request.binding) {
       const current = store.binding(request.binding);
@@ -327,10 +335,10 @@ async function run() {
         sources = [];
       }
     }
-    if (!(await matrix.verifyControl({ requireDot: true }))) return;
+    if (!(await matrix.verifyControl({ requireDot }))) return;
     const encrypted = await matrix.encryptEvent(settings.controlRoom, 'm.room.message',
       updateReply(settings, request.event, body, sources, request.thread_root ?? request.event));
-    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot: true }))) return;
+    if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot }))) return;
     await matrix.put(settings.controlRoom, `control-${digest(request.event)}`, encrypted);
     store.controlDelivered(request.event);
     if (process.env.TELEGRAM_CONTEXT_ENABLED === 'true') {
@@ -407,7 +415,8 @@ async function run() {
   async function publish() {
     const draft = store.nextSend(Date.now());
     if (!draft || pausedFile() || store.paused() || Date.now() - lastGood > 15_000) return;
-    if (draft.control_event && !(await matrix.verifyControl({ requireDot: true }))) return store.stale(draft.id);
+    if (draft.control_event &&
+        !(await matrix.verifyControl({ requireDot: store.controlRequiresDot(draft.control_event) }))) return store.stale(draft.id);
     const target = JSON.parse(draft.target);
     if (await liveBinding(draft.room, target) !== target.audience || !(await matrix.verifyControl())) {
       store.pause(draft.binding, 'portal_or_control_room_changed');

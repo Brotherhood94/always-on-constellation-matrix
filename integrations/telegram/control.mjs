@@ -13,13 +13,17 @@ function boundedText(value, limit) {
 export function addressedRequest(event, settings) {
   const { content, sender } = event;
   const mentions = content?.['m.mentions'];
-  if (!settings.dot || !eventId.test(event.event_id ?? '') || event.type !== 'm.room.message' ||
-      content?.msgtype !== 'm.text' || content['m.new_content'] ||
-      mentions?.room || !Array.isArray(mentions?.user_ids) || mentions.user_ids.length !== 1 ||
-      mentions.user_ids[0] !== settings.agent) return null;
-
+  if (!eventId.test(event.event_id ?? '') || event.type !== 'm.room.message' ||
+      content?.msgtype !== 'm.text' || content['m.new_content'] || mentions?.room) return null;
+  const mentioned = Array.isArray(mentions?.user_ids) && mentions.user_ids.length === 1 &&
+    mentions.user_ids[0] === settings.agent;
   const relation = content['m.relates_to'];
   if (sender === settings.owner && !content[telegramRequest] && typeof content.body === 'string') {
+    const compose = !relation && /^telegram\s+draft\s+(direct|group)\s+"([^"\n]+)"[ \t]*:[ \t]?([\s\S]+)$/iu.exec(content.body);
+    if (compose && boundedText(compose[2], 120) && boundedText(compose[3], 3500)) {
+      return { action: 'compose', destination: compose[2].trim(), chatType: compose[1].toLowerCase(), text: compose[3] };
+    }
+    if (!settings.dot || !mentioned) return null;
     if (relation && (relation.rel_type !== 'm.thread' || !eventId.test(relation.event_id) || relation.event_id === event.event_id)) return null;
     const question = content.body.replace(/^(?:>[^\n]*\n)+\n/u, '')
       .replace(/^\s*@?telegram[ -]agent(?::[a-z0-9.-]+)?[,:]?\s*/iu, '').trim();
@@ -30,7 +34,10 @@ export function addressedRequest(event, settings) {
     return { action: reply ? 'reply' : 'update', question, ...(relation && { thread: relation.event_id }) };
   }
   const request = content[telegramRequest];
-  if (sender !== settings.dot || relation || !request || !boundedText(request.destination, 120) ||
+  const guide = sender === settings.agent && request?.origin === 'office' && request.action === 'compose' &&
+    request.source_event === undefined;
+  const dot = settings.dot && sender === settings.dot && mentioned && request?.origin !== 'office';
+  if ((!guide && !dot) || relation || !request || !boundedText(request.destination, 120) ||
       !['direct', 'group'].includes(request.chat_type)) return null;
 
   const target = { destination: request.destination.trim(), chatType: request.chat_type };
@@ -98,7 +105,8 @@ export function controlThread(root, reply = root) {
 }
 
 export function updateReply(settings, requestEvent, body, sources = [], thread = requestEvent) {
-  const users = [{ id: settings.owner, name: settings.owner.split(':')[0].slice(1) }, { id: settings.dot, name: 'Dot' }];
+  const users = [{ id: settings.owner, name: settings.owner.split(':')[0].slice(1) }];
+  if (settings.dot) users.push({ id: settings.dot, name: 'Dot' });
   return {
     msgtype: 'm.text',
     body: users.map(({ id }) => id).join(' ') + '\n' + body + sources.map(({ label, url }) => '\n' + label + ' ' + url).join(''),

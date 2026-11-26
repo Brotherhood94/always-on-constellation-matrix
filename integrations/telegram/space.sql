@@ -1,7 +1,7 @@
 BEGIN;
 -- Keep the view name compatible with deployed guide containers. An opened portal is enough to link it.
 CREATE OR REPLACE VIEW telegram_space_sent_portal AS
-SELECT DISTINCT p.mxid AS room, u.user_mxid AS owner
+SELECT DISTINCT p.mxid AS room, u.user_mxid AS owner, p.id AS peer, p.name AS name
 FROM portal p JOIN user_login u ON (p.bridge_id,p.receiver)=(u.bridge_id,u.id)
 WHERE p.bridge_id='' AND p.mxid IS NOT NULL AND p.parent_id IS NULL
   AND NOT (p.user_blocked OR p.message_request)

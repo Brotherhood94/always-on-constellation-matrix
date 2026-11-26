@@ -109,10 +109,17 @@ function telegramGuide(command) {
       { label: 'Optional · Set up drafts and approvals in Telegram Control',
         url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#start-the-drafting-agent' },
     ]],
+    ['6. Element · Ask Task Manager in Office', [
+      'Choose @Task Manager from Element’s mention picker, then add one of these commands.',
+      { code: 'telegram add @username\ntelegram add channel:1234567890\ntelegram remove "Sample Contact"\ntelegram draft direct "Sample Contact": See you tomorrow!' },
+      'For a group draft, use group in place of direct. Open the Control thread to approve a draft for a verified, bound chat.',
+      { label: 'Use Telegram from Office or Control',
+        url: 'https://github.com/Brotherhood94/always-on-constellation-matrix/blob/main/docs/telegram.md#use-telegram-from-office' },
+    ]],
   ]);
 }
 
-export function shortcutRecipientKey(owner, devices) {
+function recipientKeys(owner, devices) {
   const recipients = [];
   for (const id of Object.keys(devices ?? {}).sort()) {
     const device = devices[id];
@@ -124,12 +131,24 @@ export function shortcutRecipientKey(owner, devices) {
       recipients.push([id, curve, signing]);
     }
   }
-  return recipients.length ? createHash('sha256').update(JSON.stringify(recipients)).digest('hex') : null;
+  return recipients;
+}
+
+const recipientHash = keys => createHash('sha256').update(JSON.stringify(keys)).digest('hex');
+
+export function shortcutRecipientKey(owner, devices) {
+  const keys = recipientKeys(owner, devices);
+  return keys.length ? recipientHash(keys) : null;
+}
+
+export function shortcutRecipientDevices(owner, devices) {
+  return recipientKeys(owner, devices).map(recipientHash).sort();
 }
 
 async function reconcile({ recipientKey, getPinned, send, setPinned, save }, groups, state) {
   const recipients = await recipientKey();
-  if (!recipients) return false;
+  if (!recipients || !recipients.length) return false;
+  const devices = Array.isArray(recipients) ? recipients : null;
   const managed = [];
   for (const { key, entries, content } of groups) {
     const previous = [...new Set(entries.map(([name]) => state.entries[name]?.event).filter(Boolean))];
@@ -145,13 +164,19 @@ async function reconcile({ recipientKey, getPinned, send, setPinned, save }, gro
     const revision = createHash('sha256').update(JSON.stringify(content)).digest('hex');
     if (previous.length !== 1 || entries.some(([name, body]) => {
       const entry = state.entries[name];
-      return entry?.body !== body || entry.recipients !== recipients || entry.revision !== revision;
+      return entry?.body !== body || entry.revision !== revision || (devices ?
+        devices.some(device => !entry.devices?.includes(device)) : entry.recipients !== recipients);
     })) {
       const transaction = createHash('sha256')
         .update(JSON.stringify([key, previous, revision, recipients])).digest('hex');
       event = await send(transaction, content);
       state.replaced.push(...previous);
-      for (const [name, body] of entries) state.entries[name] = { body, event, recipients, revision };
+      for (const [name, body] of entries) {
+        const prior = state.entries[name];
+        state.entries[name] = devices ? {
+          body, event, revision, devices: [...new Set([...(prior?.revision === revision ? prior.devices ?? [] : []), ...devices])].sort(),
+        } : { body, event, recipients, revision };
+      }
       await save(state);
     }
     managed.push(event);

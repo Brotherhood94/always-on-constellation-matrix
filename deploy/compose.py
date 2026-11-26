@@ -17,6 +17,14 @@ def port(local, target):
     return f'127.0.0.1:{local}:{target}'
 
 
+def telegram_office_agent(registry):
+    agents = registry['agents']
+    for key in ('task-manager', 'manager'):
+        if agents.get(key, {}).get('placement') == 'local':
+            return key
+    return None
+
+
 def definition(settings, data, registry, secrets, *, workshop_internal=True):
     engine_image = ENGINE
     slice_name = {'cgroup_parent': 'matrix-workload.slice'} if settings['systemd'] else {}
@@ -86,6 +94,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                            'command': ['node', '/app/dot-bridge.mjs'],
                            'environment': {**matrix, **catalog, 'DOT_STATE': '/state'},
                            'volumes': [volume(state / 'dot/matrix', '/state'), volume(dashboard, '/catalog', True)]}
+    telegram_coordinator = telegram_office_agent(registry) if settings['telegram'] else None
     for key, entry in sorted(registry['agents'].items()):
         if entry.get('placement') != 'local':
             continue
@@ -119,6 +128,11 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                         volume(data / 'context' / f'{key}.token', '/context-token', True)],
             'depends_on': {instance: {'condition': 'service_healthy'}},
         }
+        if key == telegram_coordinator:
+            worker['environment']['TELEGRAM_OFFICE_SOCKET'] = '/telegram-office/actions.sock'
+            mount = volume(data / 'telegram/office', '/telegram-office', True)
+            mount['bind'] = {'create_host_path': False}
+            worker['volumes'].append(mount)
         if key == 'chief-of-staff':
             worker.update(command=['node', '/app/chief-of-staff/direct/bridge.mjs'],
                           healthcheck=health('test', '-s', '/tmp/direct-ready'))

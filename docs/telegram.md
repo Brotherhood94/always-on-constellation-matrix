@@ -4,7 +4,23 @@ This optional integration adds a private, top-level **Telegram** Space with **Te
 
 The installer joins your Matrix account to **Telegram** and **Telegram Control**. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
 
-Already set up? [Add a contact or group](#add-a-telegram-contact-or-group) or [send a message](#write-to-a-contact-or-group).
+Already set up? [Use Telegram from Office](#use-telegram-from-office), [open a contact or group in Telegram Bridge](#add-a-telegram-contact-or-group), or [send a message](#write-to-a-contact-or-group).
+
+## Use Telegram from Office
+
+In **Agents → Office**, choose **@Task Manager** from Element’s mention picker and append one command. On an older workspace with Manager, mention **@Manager**.
+
+| Action | Text after the mention |
+| --- | --- |
+| Open a private chat | `telegram add @username` |
+| Open an existing group | `telegram add https://t.me/c/1234567890/42` or `telegram add channel:1234567890` |
+| Remove a person or group from the Space | `telegram remove "Sample Contact"` |
+| Draft a private message | `telegram draft direct "Sample Contact": See you tomorrow!` |
+| Draft a group message | `telegram draft group "Project Room": The meeting starts at 10.` |
+
+The bridge uses the operator's linked Telegram account. Open a new room from Task Manager’s reply or **Telegram → Rooms**. For an undiscovered group, send `!tg sync-chats` in Telegram Bridge and retry. A basic group can be opened with `telegram add chat:<id>`. If several rooms share a name, remove one by its Matrix room ID. Removal unlinks the room, retains its history and membership, and blocks drafts for the room while it is unlinked. An explicit add can link it again.
+
+Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office command opens a private Telegram Control thread. Only the operator can approve and send the exact text there. For text you want to keep within Control, open **Telegram → Telegram Control** and send the draft command directly without a mention. Dot is optional for both paths.
 
 ## Get the Telegram API credentials
 
@@ -149,7 +165,7 @@ A Telegram relay uses the selected Telegram login with bridge attribution. Matri
 
 ## Repair an existing Telegram layout
 
-Run this from the updated checkout to repair the top-level **Telegram** Space and refresh the guide. It also updates the running bridge when its image changes. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
+Run this from the updated checkout to repair the top-level **Telegram** Space, refresh the guide, and enable Telegram actions for the installed Task Manager. It also updates the running bridge when its image changes. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
 
 ```sh
 ./constellation_matrix telegram layout

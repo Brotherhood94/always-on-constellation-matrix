@@ -4,6 +4,24 @@ import { freshness, historyWithin, httpsLink } from '../dashboard/dashboard.mjs'
 import { connectionDetails, connectionGraph, connectionRoute } from '../dashboard/connections.mjs';
 import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from '../deploy/matrix/bot/pins.mjs';
 
+test('Telegram setup only republishes unchanged instructions for a previously unseen device', async () => {
+  let devices = ['desktop', 'phone'];
+  let pinned = ['$operator'];
+  let sends = 0;
+  const state = { entries: {}, replaced: [] };
+  const matrix = {
+    recipientKey: async () => devices, getPinned: async () => pinned,
+    send: async () => '$guide-' + ++sends,
+    setPinned: async events => { pinned = events; }, save: async () => {},
+  };
+  for (const selected of [devices, ['desktop'], ['phone'], devices, [], ['desktop', 'new'], ['phone']]) {
+    devices = selected;
+    await reconcileTelegramPin(matrix, state, 'sudo ./constellation_matrix');
+  }
+  assert.equal(sends, 2);
+  assert.deepEqual(pinned, ['$operator', '$guide-2']);
+});
+
 test('team connections use directional catalog permissions, including pending agents', () => {
   const catalog = {contactPolicy:true, dynamicHandoffs:true, agents:[
     {key:'coach', contacts:['scouter', 'removed'], status:'Available'},

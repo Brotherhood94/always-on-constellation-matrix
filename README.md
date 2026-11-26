@@ -47,7 +47,7 @@ Run `./constellation_matrix setup-guide` to resume onboarding or append `--print
 ### Finish in Element
 
 - **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Telegram Control → Pinned messages.** Open **Set up Telegram**. Use **Telegram Bridge** in the same Space to open a contact or group. Click the room link to join. Then find the chat under **Telegram → Rooms**. [Telegram setup](docs/telegram.md)
+- **Telegram → Telegram Control → Pinned messages.** Open **Set up Telegram**. Use **Telegram Bridge** or ask **Task Manager** in Office to open contacts and groups. Find the chats under **Telegram → Rooms** and approve outbound drafts in **Telegram Control**. [Telegram setup](docs/telegram.md)
 
 ### Send your first task
 

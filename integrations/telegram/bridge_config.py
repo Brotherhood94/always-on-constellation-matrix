@@ -84,6 +84,19 @@ def database_uri(root, role):
     return f'postgres://{role}:{credentials(root)[role]}@postgres/matrix_telegram?sslmode=disable'
 
 
+def office_provisioning(root):
+    config = json.load(sys.stdin)
+    provision = config['provisioning']
+    key = provision.get('shared_secret', '')
+    if not re.fullmatch(r'constellation-office-[0-9a-f]{64}', key):
+        key = 'constellation-office-' + secrets.token_hex(32)
+    provision['shared_secret'] = key
+    provision['allow_matrix_auth'] = False
+    provision['debug_endpoints'] = False
+    write(root / 'bridge/config.yaml', config, uid=991)
+    write(root / 'guide/office-bridge-key', (key + '\n').encode(), uid=991)
+
+
 def database_sql(root):
     for role, password in credentials(root).items():
         if not re.fullmatch(r'[0-9a-f]{64}', password) or role not in DATABASE_ROLES:
@@ -135,6 +148,8 @@ if __name__ == '__main__':
         generate(directory, *args)
     elif command == 'database-sql':
         database_sql(directory)
+    elif command == 'office-provisioning':
+        office_provisioning(directory)
     elif command == 'space-reader':
         write(directory / 'guide/space-db', (database_uri(directory, 'matrix_telegram_space') + '\n').encode(), uid=991)
     elif command in ('enable', 'disable'):

@@ -88,7 +88,8 @@ export class TelegramStore {
       CREATE TABLE IF NOT EXISTS controls (event TEXT PRIMARY KEY, at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS control_request (
         event TEXT PRIMARY KEY, requested INTEGER NOT NULL, payload TEXT, status TEXT NOT NULL DEFAULT 'queued',
-        result TEXT, binding TEXT, generation INTEGER, revision INTEGER, thread_root TEXT
+        result TEXT, binding TEXT, generation INTEGER, revision INTEGER, thread_root TEXT,
+        requires_dot INTEGER NOT NULL DEFAULT 1
       );
       CREATE TABLE IF NOT EXISTS draft_review (
         event TEXT PRIMARY KEY, draft TEXT NOT NULL REFERENCES draft(id), version INTEGER NOT NULL,
@@ -109,8 +110,12 @@ export class TelegramStore {
       ]) {
         if (!columns.has(name)) this.db.exec(`ALTER TABLE draft ADD COLUMN ${name} ${type}`);
       }
-      if (!this.all('PRAGMA table_info(control_request)').some(({ name }) => name === 'thread_root')) {
+      const controlColumns = new Set(this.all('PRAGMA table_info(control_request)').map(({ name }) => name));
+      if (!controlColumns.has('thread_root')) {
         this.db.exec('ALTER TABLE control_request ADD COLUMN thread_root TEXT');
+      }
+      if (!controlColumns.has('requires_dot')) {
+        this.db.exec('ALTER TABLE control_request ADD COLUMN requires_dot INTEGER NOT NULL DEFAULT 1');
       }
       this.db.exec('CREATE INDEX IF NOT EXISTS control_request_thread ON control_request(thread_root, requested)');
     });
@@ -226,13 +231,13 @@ export class TelegramStore {
     this.run("DELETE FROM control_request WHERE requested<? AND status NOT IN ('queued','ready')", now - day);
   }
 
-  queueControl(event, request, now) {
+  queueControl(event, request, now, { requireDot = true } = {}) {
     return this.atomic(() => {
       if (!eventID.test(event) || this.paused() ||
           this.get('SELECT count(*) AS count FROM control_request WHERE requested>?', now - 60 * minimum).count >= 24) return false;
       if (request.thread && !eventID.test(request.thread)) return false;
-      return !!this.run('INSERT OR IGNORE INTO control_request(event, requested, payload, thread_root) VALUES (?, ?, ?, ?)',
-        event, now, JSON.stringify(request), request.thread ?? event).changes;
+      return !!this.run('INSERT OR IGNORE INTO control_request(event, requested, payload, thread_root, requires_dot) VALUES (?, ?, ?, ?, ?)',
+        event, now, JSON.stringify(request), request.thread ?? event, Number(requireDot)).changes;
     });
   }
 
@@ -249,6 +254,10 @@ export class TelegramStore {
 
   controlThread(event) {
     return this.get('SELECT thread_root FROM control_request WHERE event=?', event)?.thread_root ?? event;
+  }
+
+  controlRequiresDot(event) {
+    return this.get('SELECT requires_dot FROM control_request WHERE event=?', event)?.requires_dot !== 0;
   }
 
   controlDraft(thread, binding, reply) {

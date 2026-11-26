@@ -16,6 +16,7 @@ import { Store } from './store.mjs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
+import { requestTelegramOffice, telegramOfficeCommand, telegramOfficeHelp } from './telegram-office.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
   AGENT_STATE, AGENT_WORKSPACE, MATRIX_PLANNER, AGENT_INSTRUCTIONS } = process.env;
@@ -231,7 +232,23 @@ async function deliver(client, event) {
       if (desk && !event.replyTo && reply === null && !raw?.content?.[turnKey]?.returning) desk.assignment(event);
       const profile = catalog.current()?.agents.find(a => a.id === userId)?.persona;
       const effectiveIdentity = profile ? [identity, profile.purpose, ...profile.duties, profile.working_style].join('\n') : identity;
-      if (reply === null) reply = await runTurn({ workspace, event: { ...context, files: paths }, store, identity:effectiveIdentity, guidance });
+      const telegram = process.env.TELEGRAM_OFFICE_SOCKET && telegramOfficeCommand(event.body, AGENT_NAME, userId);
+      if (reply === null && telegram) {
+        const original = await read(event.id);
+        if (original?.sender !== MATRIX_OWNER) {
+          reply = 'Ask the operator to request this Telegram action directly in Office.';
+        } else if (telegram.action === 'help') {
+          reply = telegramOfficeHelp;
+        } else {
+          const result = await requestTelegramOffice(process.env.TELEGRAM_OFFICE_SOCKET, event.id, telegram).catch(() => null);
+          reply = result?.message ?? 'Telegram Office actions are unavailable. Check that Telegram Bridge and its guide are running.';
+          if (!result?.ok && !event.replyTo) reply += '\nTASK_OUTCOME: ' + JSON.stringify({
+            status: 'blocked', blocker: reply, unblocker: 'The operator', action: 'Check the Telegram target or setup and retry.',
+          });
+        }
+      } else if (reply === null) {
+        reply = await runTurn({ workspace, event: { ...context, files: paths }, store, identity:effectiveIdentity, guidance });
+      }
       if (!issues.length && AGENT_USERNAME === 'reviewer' && !event.replyTo && !event.managed && !dynamicTurn(catalog, event)) {
         const delegator = peers.find(peer => event.delegator ? peer.id === event.delegator : peer.name === 'Analyst');
         reply = returnDelegatedReview(event, reply, delegator);

@@ -62,6 +62,13 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
       (!requireDot || members.get(config.dot) === 'join');
   }
 
+  async function roomRemovedFromSpace(space, room) {
+    const child = await request('GET', `${route(space)}/state/m.space.child/${encodeURIComponent(room)}`).catch(error => {
+      if (error.status !== 404 || error.code !== 'M_NOT_FOUND') throw error;
+    });
+    return child !== undefined && !child.via?.length;
+  }
+
   async function recentMessages(room, range) {
     const events = [];
     let from;
@@ -143,7 +150,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     }
   }
 
-  return { sync, applySync, liveState, verifyControl, recentMessages, joinPortal, encrypted, encryptEvent, put,
+  return { sync, applySync, liveState, verifyControl, roomRemovedFromSpace, recentMessages, joinPortal, encrypted, encryptEvent, put,
     close: () => sdk.crypto?.engine.machine.close(), tokenHash: digest([who.user_id, who.device_id, token]) };
 }
 

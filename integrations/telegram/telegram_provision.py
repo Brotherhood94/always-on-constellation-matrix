@@ -162,10 +162,11 @@ def bootstrap(root):
     write(out, current, uid=991)
 
 
-def space_child(space, room, token, domain):
+def space_child(space, room, token, domain, *, preserve_removal=False):
     route = f'/_matrix/client/v3/rooms/{quote(space, safe="")}/state/m.space.child/{quote(room, safe="")}'
     desired = {'via': [domain], 'suggested': False}
-    if not (missing(route, token) or {}).get('via'):
+    current = missing(route, token)
+    if current is None or (not preserve_removal and not current.get('via')):
         request('PUT', route, desired, token)
 
 
@@ -241,7 +242,7 @@ def reconcile_layout(root, domain, owner, operator, agents, *, bridge_active, se
         if bridge:
             write(path, {'space': space, 'control': control, 'bridge': bridge})
     for room in dict.fromkeys([control, *portals, *([bridge] if bridge else [])]):
-        space_child(space, room, agent_token, domain)
+        space_child(space, room, agent_token, domain, preserve_removal=room not in {control, bridge})
         clear_space_link(agents, 'child', room, operator)
     clear_space_link(agents, 'child', space, operator)
     for room in (space, control):

@@ -100,6 +100,9 @@ class LayoutTest(unittest.TestCase):
                              ['content']['body'], 'Fixture history')
             self.assertEqual(set(request('GET', room_route(control) + '/joined_members', token=token)['joined']),
                              {owner['user_id'], f'@telegram-agent:{domain}'})
+            request('PUT', room_route(space) + '/state/m.space.child/' + encoded(portal), {}, guide_token)
+            self.assertEqual(reconcile_layout(*args, bridge_active=True, select=select), migrated)
+            self.assertEqual(children(space), {control, bridge})
 
     def test_idempotent_space_direct_chats_and_pin_power(self):
         server = os.environ['MATRIX_SERVER_NAME']
