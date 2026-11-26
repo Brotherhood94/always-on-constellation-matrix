@@ -60,6 +60,8 @@ Task Manager is the entry point for coordinated Office tasks. Open **Agents → 
 
 If you enabled Dot, open a ChatGPT conversation with the **Constellation Office** plugin and ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” [Dot setup](docs/dot.md)
 
+With Dot and Telegram configured, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Open the private **Telegram Bridge** thread from Dot’s task status or the Office reply. Review the recipient and exact text, then vote **✅ Accept** or **❌ Decline** in Element. [Telegram from Office](docs/telegram.md#use-telegram-from-office)
+
 If you skipped Task Manager, use the Office agent named in your welcome. If you skipped the Office roster, add a worker first. [Add a worker](docs/runbook.md#add-a-worker)
 
 ## Follow an Office task
@@ -195,7 +197,7 @@ For unattended provisioning, edit the example configuration, check it with `./co
 
 ### Move agents between hosts
 
-Enroll a Linux server, PC, or VM on the same Tailscale network. You can create an agent there with `agent add --host`, or move an existing agent from the VPS with `agent move`. The agent keeps its Matrix identity, workspace, and Amplifier sessions. The dashboard shows its current host and readiness. Open **Persona and duties** for its move history.
+Enroll a Linux server, PC, or VM on the same Tailscale network. You can create an agent there with `agent add --host`, or move an existing agent from the VPS with `agent move`. The agent keeps its Matrix identity, workspace, and Amplifier sessions. New assignments pause while the source finishes its current turn and the destination starts. The dashboard shows its current host and readiness. Open **Persona and duties** for its move history.
 
 ```sh
 ./constellation_matrix agent move helper --to worker.example.ts.net
@@ -210,10 +212,7 @@ Helper shares one tip per day in **Agents → People → Helper**, starting afte
 ## Planned features
 
 - Copy files from workspaces and approved folders to the shared desktop from local and remote agents. The plan includes approval for protected agents. [Shared desktop copy plan](next_features_plans/plan.md#shared-desktop-file-copying)
-- Route natural-language requests from ChatGPT to a verified Telegram chat and ask when several registered chats match.
-- Attach a named file from the VPS shared desktop to a Telegram message.
-
-[Telegram feature plan](next_features_plans/plan.md#send-telegram-messages-through-dot)
+- Attach a named file from the VPS shared desktop to a Telegram message. [Telegram attachment plan](next_features_plans/plan.md#attach-a-file-from-the-vps)
 
 ## Uninstall
 
