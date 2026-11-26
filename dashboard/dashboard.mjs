@@ -26,6 +26,30 @@ export function freshness(timestamp, now = Date.now()) {
   return `${label} ${new Date(timestamp * 1000).toLocaleString()}`;
 }
 
+export function officeCatalog(catalog, integrations) {
+  const services = integrations?.services ?? {};
+  if (!catalog?.agents || catalog.agents.some(agent => agent.key === 'telegram-agent') ||
+      !['Telegram', 'Telegram guide', 'Telegram Agent'].some(name => Object.hasOwn(services, name))) return catalog;
+  const manager = ['task-manager', 'manager'].find(key =>
+    catalog.agents.some(agent => agent.key === key && agent.placement !== 'remote'));
+  const agents = catalog.agents.map(agent => agent.key === manager ? {
+    ...agent, contacts: [...new Set([...(agent.contacts ?? []), 'telegram-agent'])],
+  } : agent);
+  const status = services['Telegram Agent'];
+  agents.push({ key: 'telegram-agent', name: 'Telegram Agent', role: 'worker', contacts: [], placement: 'local',
+    server: 'VPS', status: status ? status[0].toUpperCase() + status.slice(1) : 'Setup required',
+    limits: 'Operates on linked Telegram chats and uses verified bindings for drafts and updates.',
+    persona: {
+      purpose: 'Manage the Telegram Space and take Telegram assignments in Office.',
+      duties: ['Find and link Telegram chats', 'Prepare drafts and summarize verified chats',
+        'Report status and a private thread link back to Office'],
+      working_style: 'Ask the operator to resolve ambiguous recipients and approve outbound messages in Telegram Agent.',
+    },
+    tools: ['Scoped Telegram MCP'],
+  });
+  return { ...catalog, agents };
+}
+
 export function historyWithin(history, resource, days, now = Date.now()) {
   const collectorNames = { cpu: 'CPU', memory: 'RAM', disk: 'Disk' };
   const rows = history?.[resource] ?? history?.[collectorNames[resource]];
@@ -158,7 +182,8 @@ function showView(metrics, catalog, connections) {
   if (route) renderConnectionDetails(details, route, connections, catalog, freshness);
 }
 
-function render(metrics, catalog, links, integrationStates, connections) {
+function render(metrics, roster, links, integrationStates, connections) {
+  const catalog = officeCatalog(roster, integrationStates);
   const now = Date.now();
   const el = id => document.getElementById(id);
   const make = (tag, text, className) => Object.assign(document.createElement(tag), { textContent: text, className });
@@ -254,7 +279,7 @@ if (typeof document !== 'undefined') {
   document.getElementById('range').addEventListener('change', () => render(...state));
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render(...state));
   window.addEventListener('hashchange', () => {
-    showView(state[0], state[1], state[4]);
+    showView(state[0], officeCatalog(state[1], state[3]), state[4]);
     const heading = document.querySelector('#connection-details:not([hidden]) h2, #persona-view:not([hidden]) h2');
     if (heading) {
       heading.tabIndex = -1;

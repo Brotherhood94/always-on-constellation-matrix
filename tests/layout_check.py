@@ -52,7 +52,7 @@ class LayoutTest(unittest.TestCase):
             (root / 'guide').mkdir()
             save(root / 'matrix-password', password + '\n')
             args = (root, domain, owner['user_id'], token, agents)
-            fresh = reconcile_layout(*args, bridge_active=False, select=lambda _: self.fail('No bridge DM'))
+            fresh = reconcile_layout(*args, office=rooms['office'], bridge_active=False, select=lambda _: self.fail('No bridge DM'))
             self.assertFalse((root / 'database.json').exists())
             self.assertFalse((root / 'connector/config.json').exists())
             space, control = fresh['space'], fresh['control']
@@ -61,6 +61,12 @@ class LayoutTest(unittest.TestCase):
             self.assertNotIn(unrelated, joined)
             self.assertEqual(children(space), {control})
             self.assertNotIn(space, children(agents))
+            telegram_agent = f'@telegram-agent:{domain}'
+            self.assertIn(telegram_agent, request('GET', room_route(rooms['office']) + '/joined_members', token=token)['joined'])
+            unsafe = request('POST', CLIENT + '/createRoom', {'preset': 'private_chat'}, token)['room_id']
+            with self.assertRaisesRegex(ValueError, 'private encrypted Office'):
+                reconcile_layout(*args, office=unsafe, bridge_active=False, select=lambda _: None)
+            self.assertNotIn(telegram_agent, request('GET', room_route(unsafe) + '/joined_members', token=token)['joined'])
 
             def direct(key):
                 return direct_room(domain, agents, key, 'Fixture bridge chat', owner['user_id'], token,
@@ -91,14 +97,14 @@ class LayoutTest(unittest.TestCase):
                 selected.append(set(candidates))
                 return bridge
 
-            migrated = reconcile_layout(*args, bridge_active=True, select=select)
+            migrated = reconcile_layout(*args, office=rooms['office'], bridge_active=True, select=select)
             self.assertEqual(migrated, {**fresh, 'bridge': bridge})
             self.assertEqual(request('GET', name_route, token=token)['name'], 'Telegram Agent')
             self.assertEqual(request('GET', room_route(control) + '/event/' + encoded(previous_control_event), token=token)
                              ['type'], 'm.room.encrypted')
             alias = CLIENT + '/directory/room/' + encoded(f'#telegram-control:{domain}')
             request('DELETE', alias, token=guide_token)
-            self.assertEqual(reconcile_layout(*args, bridge_active=True, select=select), migrated)
+            self.assertEqual(reconcile_layout(*args, office=rooms['office'], bridge_active=True, select=select), migrated)
             self.assertEqual(request('GET', alias, token=token)['room_id'], control)
             self.assertEqual(selected, [{bridge, other}])
             self.assertEqual(children(space), {control, bridge, portal})

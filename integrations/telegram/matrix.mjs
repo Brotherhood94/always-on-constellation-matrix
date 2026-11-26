@@ -142,6 +142,17 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     return result.event_id;
   }
 
+  async function react(room, txn, event, key) {
+    const result = await request('PUT', `${route(room)}/send/m.reaction/${encodeURIComponent(txn)}`,
+      JSON.stringify({ 'm.relates_to': { rel_type: 'm.annotation', event_id: event, key } }));
+    if (!result.event_id) throw new Error('Matrix did not confirm the reaction.');
+    return result.event_id;
+  }
+
+  function redact(room, txn, event) {
+    return request('PUT', `${route(room)}/redact/${encodeURIComponent(event)}/${encodeURIComponent(txn)}`, '{}');
+  }
+
   async function joinPortal(room) {
     const joined = await request('GET', '/_matrix/client/v3/joined_rooms');
     if (!joined.joined_rooms.includes(room)) {
@@ -150,7 +161,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     }
   }
 
-  return { sync, applySync, liveState, verifyControl, roomRemovedFromSpace, recentMessages, joinPortal, encrypted, encryptEvent, put,
+  return { sync, applySync, liveState, verifyControl, roomRemovedFromSpace, recentMessages, joinPortal, encrypted, encryptEvent, put, react, redact,
     close: () => sdk.crypto?.engine.machine.close(), tokenHash: digest([who.user_id, who.device_id, token]) };
 }
 

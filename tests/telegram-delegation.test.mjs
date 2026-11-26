@@ -69,12 +69,15 @@ function fixture() {
   const store = new TelegramStore(':memory:');
   const effects = [];
   const messages = new Map();
+  const officeMessages = new Map();
+  const officeReactions = new Map();
   let broker;
   let binding;
   let clock = 1_000;
   const resolved = [{ peer: 'user:1001', name: 'Sam Example', room: '!sam:sample.test' }];
   const settings = { domain, owner, agent, officeRoom, controlRoom };
   const options = { store, settings, now: () => clock, checkRoom: async () => true,
+    checkOffice: async () => true,
     getBinding: async () => binding,
     guide: async input => {
       if (input.action === 'resolve' || input.action === 'list') return { ok: true, rooms: resolved };
@@ -85,6 +88,12 @@ function fixture() {
       if (!messages.has(txn)) messages.set(txn, { id: '$msg' + (messages.size + 1), content });
       return messages.get(txn).id;
     },
+    postOffice: async (txn, content) => officeMessages.set(txn, content),
+    reactOffice: async (txn, event, key) => {
+      officeReactions.set(txn, { event, key });
+      return txn;
+    },
+    clearOfficeReaction: async (_txn, id) => officeReactions.delete(id),
     runAgent: async (grant, tool) => {
       assert.deepEqual(await broker.tool({ grant: 'forged', tool }), { status: 'forbidden' });
       assert.deepEqual(await broker.tool({ grant, tool: tool === 'open_room' ? 'unlink_room' : 'open_room' }), { status: 'forbidden' });
@@ -93,7 +102,7 @@ function fixture() {
     },
   };
   broker = createTelegramDelegation(options);
-  return { store, effects, messages, resolved, broker: () => broker,
+  return { store, effects, messages, officeMessages, officeReactions, resolved, broker: () => broker,
     restart: () => { broker = createTelegramDelegation(options); },
     setBinding: value => { binding = value; }, advance: amount => { clock += amount; } };
 }
@@ -112,6 +121,30 @@ test('an Office handoff is private, idempotent and selects one verified group', 
   assert.deepEqual(await f.broker().office(request), { status: 'completed', link: 'https://matrix.to/#/!telegram%3Asample.test/%24msg1' });
   assert.equal((await f.broker().office({ ...request, text: 'Add Sam to my Telegram rooms' })).status, 'conflict');
   assert.equal([...f.messages.values()].at(-1).content.body, 'Private details for channel:222');
+});
+
+test('a direct Office mention keeps Telegram details private and acknowledges the original assignment', async () => {
+  const f = fixture();
+  const request = direct('$office-list', 'List my Telegram rooms');
+  assert.equal(await f.broker().directOffice(direct('$untrusted', 'List my Telegram rooms', '@coder:sample.test')), false);
+  assert.equal(await f.broker().directOffice({ ...request, content: { ...request.content, 'm.mentions': {} } }), false);
+  await f.broker().directOffice(request);
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  assert.deepEqual([...f.officeReactions.values()], [{ event: request.event_id, key: '👀' }]);
+  f.restart();
+  await f.broker().directOffice(request);
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  await f.broker().publishOffice();
+  assert.equal(f.officeMessages.size, 2);
+  assert.deepEqual([...f.officeReactions.values()], [{ event: request.event_id, key: '✅' }]);
+  for (const message of f.officeMessages.values()) {
+    assert.equal(message['m.relates_to'].event_id, request.event_id);
+    assert.match(message.body, /https:\/\/matrix\.to\/#\/!telegram%3Asample\.test/u);
+    assert.doesNotMatch(message.body, /Sam Example|!sam/u);
+  }
+  assert.match([...f.messages.values()].at(-1).content.body, /Sam Example/u);
 });
 
 test('the private mention works without Dot and disambiguates only in its own thread', async () => {

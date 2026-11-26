@@ -252,7 +252,7 @@ def bridge_dm(domain, owner, token, recorded, *, select):
     return room
 
 
-def reconcile_layout(root, domain, owner, operator, agents, *, bridge_active, select):
+def reconcile_layout(root, domain, owner, operator, agents, *, office=None, bridge_active, select):
     agent_token = device_token(root, root / 'connector/matrix-token', domain, 'TELEGRAM_CONNECTOR', 'Telegram Connector')
     space, control = ensure_layout(root, domain, owner, agent_token)
     path = root / 'layout.json'
@@ -261,6 +261,17 @@ def reconcile_layout(root, domain, owner, operator, agents, *, bridge_active, se
         raise ValueError('The saved Telegram rooms do not match the Matrix layout.')
     join(space, owner, operator)
     join(control, owner, operator)
+    if office:
+        state = read_room_state(room_route(office), operator)
+        content = {kind: event['content'] for (kind, key), event in state.items() if not key}
+        if (office in {agents, space, control} or content.get('m.room.create', {}).get('m.federate') is not False
+                or content.get('m.room.join_rules', {}).get('join_rule') != 'invite'
+                or content.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2'
+                or 'm.room.tombstone' in content or membership(office, owner, operator) != 'join'):
+            raise ValueError('Telegram Agent can only join the private encrypted Office room.')
+        agent = f'@telegram-agent:{domain}'
+        invite(office, agent, operator)
+        join(office, agent, agent_token)
     guide = root / 'guide'
     device_token(root, guide / 'token', domain, 'TELEGRAM_SETUP', 'Telegram Setup Guide')
     write(guide / 'room-id', (control + '\n').encode(), uid=991)

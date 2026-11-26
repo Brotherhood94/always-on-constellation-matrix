@@ -4,6 +4,7 @@ import { chmod, unlink } from 'node:fs/promises';
 import { digest } from './policy.mjs';
 import { controlThread, matrixLink } from './control.mjs';
 import { matchTelegramName, telegramIntent, telegramMention } from '../../agents/connector/telegram-intent.mjs';
+import { telegramTaskStatus } from '../../agents/connector/telegram-office.mjs';
 
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
 const peerId = /^(?:user|chat|channel):[1-9][0-9]{0,18}$/u;
@@ -72,11 +73,15 @@ function candidates(rooms, scope) {
   return (exact.length ? exact : matches).slice(0, 11);
 }
 
-export function createTelegramDelegation({ store, settings, checkRoom, guide, post, runAgent, getBinding, now = Date.now }) {
+export function createTelegramDelegation({ store, settings, checkRoom, checkOffice, guide, post, postOffice,
+  reactOffice, clearOfficeReaction, runAgent, getBinding, now = Date.now }) {
   store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_task (
     id TEXT PRIMARY KEY, office INTEGER NOT NULL, created INTEGER NOT NULL, fingerprint TEXT NOT NULL,
     thread TEXT, intent TEXT, phase TEXT NOT NULL DEFAULT 'queued', selection TEXT, feedback TEXT,
     outcome TEXT, final_event TEXT
+  );`);
+  store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_office_receipt (
+    id TEXT PRIMARY KEY REFERENCES telegram_task(id), status TEXT, activity TEXT
   );`);
   const grants = new Map();
   const load = id => store.get('SELECT * FROM telegram_task WHERE id=?', id);
@@ -112,6 +117,37 @@ export function createTelegramDelegation({ store, settings, checkRoom, guide, po
     if (input.method !== 'submit' || !await checkRoom()) return { status: 'unavailable' };
     const intent = telegramIntent(input.text, { office: true });
     return intent ? submit(input.id, true, intent) : { status: 'forbidden' };
+  }
+  async function directOffice(event) {
+    if (event.sender !== settings.owner || event.type !== 'm.room.message' || !eventId.test(event.event_id) ||
+        event.content?.['m.relates_to'] || event.content?.['org.matrixconstellation.telegram.request']) return false;
+    const text = telegramMention(event.content, settings.agent, 'Telegram Agent');
+    if (text === null || !await checkOffice() || !await checkRoom()) return false;
+    store.atomic(() => {
+      const result = submit(event.event_id, true, telegramIntent(text) ?? { action: 'clarify' });
+      if (result.status !== 'conflict') store.run('INSERT OR IGNORE INTO telegram_office_receipt(id) VALUES (?)', event.event_id);
+    });
+    return true;
+  }
+  async function publishOffice() {
+    const rows = store.all(`SELECT id, status, activity FROM telegram_office_receipt
+      WHERE status IS NULL OR status NOT IN ('completed', 'blocked') ORDER BY rowid`);
+    for (const row of rows) {
+      const result = receipt(load(row.id));
+      if (!result.link || result.status === row.status || !Object.hasOwn(telegramTaskStatus, result.status)) continue;
+      if (!await checkOffice()) return;
+      const state = row.status === null ? 'pending' : result.status;
+      const transaction = action => 'telegram-office-' + digest([row.id, action]);
+      const activity = row.activity ?? await reactOffice(transaction('activity'), row.id, '👀');
+      await postOffice(transaction(state), { msgtype: 'm.text', body: telegramTaskStatus[state] + '\n' + result.link,
+        'm.relates_to': controlThread(row.id) });
+      if (state === 'completed' || state === 'blocked') {
+        await reactOffice(transaction('outcome'), row.id, state === 'completed' ? '✅' : '❌');
+        await clearOfficeReaction(transaction('clear'), activity);
+      }
+      store.run('UPDATE telegram_office_receipt SET status=?,activity=? WHERE id=?', state, activity, row.id);
+      return;
+    }
   }
   async function direct(event) {
     if (event.sender !== settings.owner || event.type !== 'm.room.message' || !eventId.test(event.event_id)) return false;
@@ -197,7 +233,9 @@ export function createTelegramDelegation({ store, settings, checkRoom, guide, po
     const grant = grants.get(input?.grant);
     if (!grant || grant.until < now()) return { status: 'forbidden' };
     const row = load(grant.id);
-    if (row?.phase !== 'queued' || !await checkRoom() || grant.until < now() || grants.get(input.grant) !== grant) {
+    const directOfficeRequest = row && store.get('SELECT 1 FROM telegram_office_receipt WHERE id=?', row.id);
+    if (row?.phase !== 'queued' || !await checkRoom() || (directOfficeRequest && !await checkOffice()) ||
+        grant.until < now() || grants.get(input.grant) !== grant) {
       return { status: 'forbidden' };
     }
     const scope = JSON.parse(row.intent);
@@ -255,5 +293,5 @@ export function createTelegramDelegation({ store, settings, checkRoom, guide, po
       }
     }
   }
-  return { office, direct, tool, tick, controlDelivered, settleDrafts };
+  return { office, direct, directOffice, publishOffice, tool, tick, controlDelivered, settleDrafts };
 }

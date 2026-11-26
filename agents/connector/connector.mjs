@@ -16,7 +16,7 @@ import { Store } from './store.mjs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
-import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp } from './telegram-office.mjs';
+import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramTaskStatus } from './telegram-office.mjs';
 import { telegramIntent, telegramMention } from './telegram-intent.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
@@ -313,15 +313,6 @@ async function deliver(client, event) {
 }
 
 const privateTelegramReceipt = /^https:\/\/matrix\.to\/#\/(?:%21|!)[A-Za-z0-9_.:%-]+\/(?:%24|\$)[A-Za-z0-9_:%.-]+$/iu;
-const telegramStatuses = {
-  pending: 'Telegram Agent accepted the request.',
-  needs_input: 'Telegram Agent needs your input in the private thread.',
-  awaiting_approval: 'The Telegram draft is ready for your approval.',
-  sending: 'Telegram Agent is waiting for a delivery receipt.',
-  completed: 'Telegram Agent completed the request.',
-  blocked: 'Telegram Agent could not complete the request. Open the private thread for the next step.',
-  unconfirmed: 'Telegram delivery is unconfirmed. Check the private receipt before retrying.',
-};
 
 function telegramRequest(event, method, text) {
   return requestTelegramService(telegramHandoff, { method, id: event, room: roomId, actor: userId,
@@ -336,7 +327,7 @@ async function delegateTelegram(client, event, text) {
   store.acceptEvidence(event.id, process.env.CONTEXT_INTELLIGENCE_URL && assignmentEvidence({ roomId, actor: userId, event }));
   await publishActivity(client, event.id);
   const result = await telegramRequest(event.id, 'submit', text);
-  if (!Object.hasOwn(telegramStatuses, result.status)) {
+  if (!Object.hasOwn(telegramTaskStatus, result.status)) {
     const sent = await sendEncrypted(client, roomId, reactionTransaction('telegram-unavailable', event.id), {
       msgtype: 'm.text', body: 'Telegram Agent is unavailable. Check its setup or service and retry.',
       'm.relates_to': threadRelation(event),
@@ -354,7 +345,7 @@ async function pollTelegram(client) {
   if (!row) return;
   store.telegramProgress(row.id, row.status, Date.now());
   const result = await telegramRequest(row.id, 'status');
-  if (!Object.hasOwn(telegramStatuses, result.status) || !privateTelegramReceipt.test(result.link ?? '')) return;
+  if (!Object.hasOwn(telegramTaskStatus, result.status) || !privateTelegramReceipt.test(result.link ?? '')) return;
   const event = { id: row.id, request: row.id, thread: row.thread, number: 1 };
   const evidence = (sent, fields) => process.env.CONTEXT_INTELLIGENCE_URL && executionEvidence({
     roomId, actor: userId, event, sent, target: `@telegram-agent:${MATRIX_SERVER_NAME}`, ...fields,
@@ -363,13 +354,13 @@ async function pollTelegram(client) {
     msgtype: 'm.text', body: text + '\n' + result.link, 'm.relates_to': threadRelation(event),
   });
   if (!row.status) {
-    const sent = await post('pending', telegramStatuses.pending);
+    const sent = await post('pending', telegramTaskStatus.pending);
     const dispatch = evidence(sent, { flow: 'dispatch' });
     if (dispatch) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(sent, JSON.stringify(dispatch));
     store.telegramProgress(row.id, 'pending', Date.now());
   }
   if (result.status === (row.status ?? 'pending')) return;
-  const sent = await post(result.status, telegramStatuses[result.status]);
+  const sent = await post(result.status, telegramTaskStatus[result.status]);
   if (['completed', 'blocked'].includes(result.status)) {
     store.finishTelegram(row.id, outcomeReaction[result.status], evidence(sent, { flow: 'return', status: result.status }));
   } else store.telegramProgress(row.id, result.status, Date.now());

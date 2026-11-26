@@ -1,8 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { freshness, historyWithin, httpsLink } from '../dashboard/dashboard.mjs';
+import { freshness, historyWithin, httpsLink, officeCatalog } from '../dashboard/dashboard.mjs';
 import { connectionDetails, connectionGraph, connectionRoute } from '../dashboard/connections.mjs';
 import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from '../deploy/matrix/bot/pins.mjs';
+
+test('the dashboard shows the Telegram specialist and its managed route when Telegram is enabled', () => {
+  const catalog = { contactPolicy: true, dynamicHandoffs: true,
+    agents: [{ key: 'task-manager', name: 'Task Manager', role: 'coordinator', contacts: [] },
+      { key: 'coder', name: 'Coder', role: 'worker', contacts: [] }] };
+  assert.equal(officeCatalog(catalog, { services: {} }), catalog);
+  const setup = officeCatalog(catalog, { services: { 'Telegram guide': 'running' } });
+  assert.deepEqual(connectionGraph(setup).edges, [['task-manager', 'telegram-agent']]);
+  assert.equal(setup.agents.at(-1).status, 'Setup required');
+  assert.equal(officeCatalog(catalog, { services: { 'Telegram Agent': 'running' } }).agents.at(-1).status, 'Running');
+  assert.deepEqual(catalog.agents[0].contacts, []);
+});
 
 test('Telegram setup only republishes unchanged instructions for a previously unseen device', async () => {
   let devices = ['desktop', 'phone'];
@@ -159,6 +171,7 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
   assert.match(guide.body, /4\. Element · Ask Telegram Agent/u);
+  assert.match(guide.body, /mention Telegram Agent in Agents → Office/u);
   assert.match(guide.formatted_body, /docs\/telegram\.md#start-the-drafting-agent">Finish Telegram Agent setup/u);
   for (const sample of ['add Sam Example', 'open the private chat with @sample_contact', 'with ID 1001',
     'add the Project Room group', 'prepare a private message', 'prepare a message for Project Room', 'summarize what I missed']) {

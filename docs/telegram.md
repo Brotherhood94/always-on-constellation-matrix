@@ -2,7 +2,7 @@
 
 This optional integration adds a private, top-level **Telegram** Space with **Telegram Agent**, the **Telegram Bridge** DM, and your bridged Telegram rooms. The optional drafting connector attaches over scoped ACP to one persistent Constellation Instance running Amplifier. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
 
-The installer joins your Matrix account to **Telegram** and **Telegram Agent**. Open **Telegram → Telegram Agent → Pinned messages → Set up Telegram** for the copyable setup steps.
+The installer joins your Matrix account to **Telegram** and **Telegram Agent**. It also joins Telegram Agent to **Agents → Office** as the Telegram specialist. Open **Telegram → Telegram Agent → Pinned messages → Set up Telegram** for the copyable setup steps.
 
 Already set up? [Search for a Telegram user](#search-for-a-telegram-user), [use Telegram from Office](#use-telegram-from-office), [open a contact or group in Telegram Bridge](#add-a-telegram-contact-or-group), or [send a message](#write-to-a-contact-or-group).
 
@@ -27,7 +27,9 @@ The bridge checks saved contacts by name and username, then searches Telegram us
 
 ## Use Telegram from Office
 
-In **Agents → Office**, choose **@Task Manager** from Element’s mention picker and append one command. On an older workspace with Manager, mention **@Manager**.
+In **Agents → Office**, start a new message and choose **@Telegram Agent** from Element’s mention picker for a direct Telegram task. For example, add `List my Telegram rooms` or `manda messaggio a Sam "ciao bello"`. Telegram Agent posts status and a link to its private thread in the original Office thread. Use **Telegram → Telegram Agent** when you want the original request itself to be private. The dashboard shows Telegram Agent and its setup status alongside the Office team.
+
+Choose **@Task Manager** when you want the coordinator to hand off the request or to use one of the exact Office commands below. On an older workspace with Manager, mention **@Manager**.
 
 You can also write “Find Sam Example on Telegram and prepare a private message saying tomorrow works for me.” Task Manager delegates to Telegram Agent and posts status and a link to the private thread in Office. Contact matches, summaries, and draft text appear in **Telegram → Telegram Agent**. The drafting connector must be configured for natural-language requests. The exact commands below remain available.
 
@@ -192,7 +194,7 @@ A Telegram relay uses the selected Telegram login with bridge attribution. Matri
 
 ## Repair an existing Telegram layout
 
-Run this from the updated checkout to rename the existing room to **Telegram Agent**, refresh the guide, and update the bridge, the configured Telegram Agent, and Task Manager. It also moves verified bridged chats already linked in Telegram into the **Rooms** category. The first image build can take several minutes. Use your current Matrix operator password when prompted. Your existing room history, bindings, and approvals carry over.
+Run this from the updated checkout to join **Telegram Agent** to Office, refresh the guide and dashboard, and update the bridge, the configured Telegram Agent, and Task Manager. It also updates the private room name and moves verified bridged chats already linked in Telegram into the **Rooms** category. The first image build can take several minutes. Use your current Matrix operator password when prompted. Your existing room history, bindings, and approvals carry over.
 
 ```sh
 ./constellation_matrix telegram layout

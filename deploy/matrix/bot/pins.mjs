@@ -97,6 +97,7 @@ function telegramGuide(command) {
     ]],
     ['4. Element · Ask Telegram Agent', [
       'Once the agent is configured, open this room, type @, and select Telegram Agent from Element’s mention picker. Adapt one example and send it.',
+      'You can also mention Telegram Agent in Agents → Office. Open the private thread linked in its reply to review the result or approve a draft.',
       '@Telegram Agent, add Sam Example to my Telegram rooms.',
       '@Telegram Agent, open the private chat with @sample_contact.',
       '@Telegram Agent, add the Telegram user with ID 1001 to my rooms.',

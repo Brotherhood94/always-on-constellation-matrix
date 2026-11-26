@@ -58,15 +58,22 @@ try {
     await call('Emulation.setDeviceMetricsOverride', {width, height:900, deviceScaleFactor:1, mobile:width < 400});
     await call('Page.navigate', {url});
     await waitFor(() => evaluate("Boolean(document.querySelector('.graph-edge'))"));
-    assert.equal(await evaluate("document.querySelectorAll('.graph-edge').length"), 3);
+    assert.equal(await evaluate("document.querySelectorAll('.graph-edge').length"), 4);
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Fixture Analyst can assign to Fixture QA\"]').getAttribute('href')"),
       '#/connections/analyst/qa');
+    assert.equal(await evaluate("document.querySelector('[aria-label=\"Task Manager can assign to Telegram Agent\"]').getAttribute('href')"),
+      '#/connections/task-manager/telegram-agent');
+    await enter('.graph-node[href="#/agents/telegram-agent"]');
+    await waitFor(() => evaluate("document.querySelector('#persona-view h2')?.textContent === 'Telegram Agent'"));
+    assert.match(await evaluate("document.getElementById('persona-view').textContent"), /Manage the Telegram Space/);
+    await enter('#persona-view a');
+    await waitFor(() => evaluate("!document.getElementById('overview').hidden"));
     assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true);
     assert.equal(await evaluate("[...document.querySelectorAll('canvas')].every(chart => chart.width === chart.clientWidth)"), true);
     await evaluate("const pick = document.getElementById('connection-focus'); pick.value = 'analyst'; pick.dispatchEvent(new Event('change'))");
     assert.equal(await evaluate("document.getElementById('connection-count').textContent"), '1 outgoing · 1 incoming (dashed)');
     assert.deepEqual(await evaluate("[...document.querySelectorAll('.graph-edge')].map(edge => edge.dataset.focus)"),
-      ['outgoing', 'incoming', 'muted']);
+      ['outgoing', 'incoming', 'muted', 'muted']);
     assert.equal(await evaluate("document.querySelectorAll('.graph-node[data-active]').length"), 1);
     await enter('.graph-node[href="#/agents/qa"]');
     await waitFor(() => evaluate("!document.getElementById('persona-view').hidden"));

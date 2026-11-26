@@ -36,6 +36,16 @@ export function telegramOfficeCommand(body, name, id) {
 export const telegramOfficeHelp = 'Use `telegram add @username`, `telegram add user:1001`, `telegram add channel:1234567890`, ' +
   '`telegram remove "Name"`, or `telegram draft direct "Name": your message`. Use `group` for a group draft.';
 
+export const telegramTaskStatus = {
+  pending: 'Telegram Agent accepted the request.',
+  needs_input: 'Telegram Agent needs your input in the private thread.',
+  awaiting_approval: 'The Telegram draft is ready for your approval.',
+  sending: 'Telegram Agent is waiting for a delivery receipt.',
+  completed: 'Telegram Agent completed the request.',
+  blocked: 'Telegram Agent could not complete the request. Open the private thread for the next step.',
+  unconfirmed: 'Telegram delivery is unconfirmed. Check the private receipt before retrying.',
+};
+
 export function requestTelegramOffice(socketPath, id, operation) {
   return requestTelegramService(socketPath, { id, ...operation });
 }

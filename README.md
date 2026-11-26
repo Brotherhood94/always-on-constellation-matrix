@@ -51,7 +51,7 @@ Run `./constellation_matrix setup-guide` to resume onboarding or append `--print
 ### Finish in Element
 
 - **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Telegram Agent → Pinned messages.** Open **Set up Telegram**. Mention **@Telegram Agent** there or ask **@Task Manager** in Office to find a contact, open a chat, or prepare a draft. Opened chats appear under **Telegram → Rooms**, and outbound drafts are reviewed in **Telegram Agent**. [Telegram setup and examples](docs/telegram.md)
+- **Telegram → Telegram Agent → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Review recipients, drafts, and outbound approvals in **Telegram → Telegram Agent**. [Telegram setup and examples](docs/telegram.md)
 
 ### Send your first task
 

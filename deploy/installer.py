@@ -995,7 +995,7 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
 
     owner = rooms['owner']
     layout = reconcile_layout(root, settings['server_name'], owner, token, rooms['space'],
-                              bridge_active=active, select=select)
+                              office=rooms['office'], bridge_active=active, select=select)
     if active and (root / 'guide/space-db').is_file():
         portals = compose(data, 'exec', '-T', 'postgres', 'psql', '-qXAt', '--set', 'ON_ERROR_STOP=1',
                           '-U', 'synapse', '-d', 'matrix_telegram', '--set', f'owner={owner}',
@@ -1046,6 +1046,7 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
                 if action == 'activate':
                     run_telegram(data, action)
                 rooms = provision_telegram_layout(settings, data, workspace, token, options.bridge_room)
+                publish_dashboard(settings, data)
                 guide_args = ('--refresh-bridge',) if action == 'layout' else ()
                 run_telegram(data, 'start-guide', *guide_args)
                 coordinator = telegram_office_agent(registry)

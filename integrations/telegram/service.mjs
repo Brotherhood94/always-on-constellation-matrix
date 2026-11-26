@@ -126,13 +126,29 @@ async function run() {
     return '';
   })).trim();
   const checkRoom = () => !pausedFile() && !store.paused() && matrix.verifyControl();
-  const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom }, checkRoom,
+  async function checkOffice() {
+    if (!officeRoom || officeRoom === settings.controlRoom || officeRoom === settings.space) return false;
+    const state = await matrix.liveState(officeRoom).catch(error => {
+      if (error.status !== 403 && error.status !== 404) throw error;
+    });
+    const members = new Map(state?.members);
+    return state?.encrypted && state.private && !state.tombstone &&
+      members.get(settings.owner) === 'join' && members.get(settings.agent) === 'join';
+  }
+  const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom }, checkRoom, checkOffice,
     guide: input => requestTelegramService(TELEGRAM_GUIDE_SOCKET, input),
     post: async (transaction, content) => {
       const ciphertext = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', content);
       if (!await checkRoom()) throw new Error('Telegram Agent room changed');
       return matrix.put(settings.controlRoom, transaction, ciphertext);
     },
+    postOffice: async (transaction, content) => {
+      const ciphertext = await matrix.encryptEvent(officeRoom, 'm.room.message', content);
+      if (!await checkOffice()) throw new Error('Office changed.');
+      return matrix.put(officeRoom, transaction, ciphertext);
+    },
+    reactOffice: (...args) => matrix.react(officeRoom, ...args),
+    clearOfficeReaction: (...args) => matrix.redact(officeRoom, ...args),
     runAgent: (grant, tool) => runDelegatedWithInstance(settings.engine, grant, tool),
     getBinding: async (room, peer) => {
       const binding = store.inRoom(room);
@@ -145,6 +161,11 @@ async function run() {
 
   async function dispatch(room, event, encrypted, unreadable, initial) {
     const now = Date.now();
+    if (room === officeRoom && officeRoom !== settings.controlRoom) {
+      if (!initial && encrypted && !unreadable && !event.unsigned?.redacted_because &&
+          now - event.origin_server_ts <= catchup && event.origin_server_ts <= now + 60_000) await delegation?.directOffice(event);
+      return;
+    }
     const binding = store.inRoom(room);
     if (binding && encrypted && event.sender === settings.agent && event.unsigned?.transaction_id) {
       store.accepted(event.unsigned.transaction_id, room, event.event_id);
@@ -217,6 +238,9 @@ async function run() {
     if (previous && (batch.rooms?.join?.[settings.controlRoom]?.timeline?.limited || batch.rooms?.leave?.[settings.controlRoom])) {
       store.pause(undefined, 'control_room_sync_gap');
     }
+    const officeTimeline = batch.rooms?.join?.[officeRoom]?.timeline;
+    if (officeTimeline?.events) officeTimeline.events = officeTimeline.events.filter(event =>
+      event.type !== 'm.room.encrypted' || event.sender === settings.owner);
     await matrix.applySync(batch, (room, event, encrypted, unreadable) => dispatch(room, event, encrypted, unreadable, !previous));
     lastGood = Date.now();
     store.atomic(() => {
@@ -491,6 +515,7 @@ async function run() {
       await publish();
       await publishControlResult(store.nextControl('ready', now));
       delegation?.settleDrafts();
+      await delegation?.publishOffice();
       if (!worker && !pausedFile() && !store.paused()) {
         const work = store.nextWork(Date.now());
         if (work) worker = processWork(work).catch(() => {
