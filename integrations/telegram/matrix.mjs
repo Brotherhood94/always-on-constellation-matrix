@@ -73,6 +73,13 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     return config.bridgeControl ? !child?.via?.length : child !== undefined && !child.via?.length;
   }
 
+  async function officeEvent(room, event) {
+    const raw = await request('GET', `${route(room)}/event/${encodeURIComponent(event)}`);
+    if (raw.type !== encryptedType || raw.event_id !== event || raw.unsigned?.redacted_because) return null;
+    const decrypted = (await sdk.crypto.decryptRoomEvent(new EncryptedRoomEvent(raw), room)).raw;
+    return { ...decrypted, event_id: raw.event_id, sender: raw.sender };
+  }
+
   async function recentMessages(room, range) {
     const events = [];
     let from;
@@ -165,7 +172,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     }
   }
 
-  return { sync, applySync, liveState, verifyControl, roomRemovedFromSpace, recentMessages, joinPortal, encrypted, encryptEvent, put, react, redact,
+  return { sync, applySync, liveState, officeEvent, verifyControl, roomRemovedFromSpace, recentMessages, joinPortal, encrypted, encryptEvent, put, react, redact,
     close: () => sdk.crypto?.engine.machine.close(), tokenHash: digest([who.user_id, who.device_id, token]) };
 }
 

@@ -106,7 +106,7 @@ export class TelegramStore {
       }
       const columns = new Set(this.all('PRAGMA table_info(draft)').map(({ name }) => name));
       for (const [name, type] of [
-        ['operator_approval', 'INTEGER NOT NULL DEFAULT 0'], ['control_event', 'TEXT'],
+        ['operator_approval', 'INTEGER NOT NULL DEFAULT 0'], ['direct_send', 'INTEGER NOT NULL DEFAULT 0'], ['control_event', 'TEXT'],
         ['recipient', 'TEXT'], ['reply_event', 'TEXT'],
       ]) {
         if (!columns.has(name)) this.db.exec(`ALTER TABLE draft ADD COLUMN ${name} ${type}`);
@@ -282,7 +282,7 @@ export class TelegramStore {
     this.run("UPDATE control_request SET status='done', payload=NULL, result=NULL WHERE event=?", event);
   }
 
-  prepareControlDraft(request, binding, recipient, text, reply, now, evidence) {
+  prepareControlDraft(request, binding, recipient, text, reply, now, evidence, explicitOperator) {
     return this.atomic(() => {
       const verified = evidence?.room === binding.room && evidence.event === reply;
       if (!this.get("SELECT 1 FROM control_request WHERE event=? AND status='queued' AND requested>=?", request.event, now - maxAge) ||
@@ -290,7 +290,10 @@ export class TelegramStore {
           !eventID.test(reply ?? request.event) || typeof text !== 'string' || !text.trim() || Buffer.byteLength(text) > 3500 ||
           (reply && !verified && !this.get(`SELECT 1 FROM inbound WHERE room=? AND event=? AND binding=? AND generation=? AND author='remote'`,
             binding.room, reply, binding.id, binding.generation))) return false;
-      this.insertDraft(binding, text, reply ?? request.event, now, { control: request.event, recipient, reply });
+      const operator = JSON.parse(binding.target).operator;
+      if (explicitOperator && (explicitOperator !== operator || reply)) return false;
+      this.insertDraft(binding, text, reply ?? request.event, now, { control: request.event, recipient, reply,
+        directSend: Boolean(explicitOperator) });
       this.run('UPDATE control_request SET binding=?, generation=?, revision=? WHERE event=?',
         binding.id, binding.generation, binding.revision, request.event);
       this.controlDelivered(request.event);
@@ -309,7 +312,8 @@ export class TelegramStore {
       if (!this.run(`INSERT OR IGNORE INTO inbound VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, binding.room,
         incoming.event, binding.id, binding.generation, now, incoming.author, body, revision).changes) return false;
       this.run('UPDATE binding SET context=? WHERE id=?', revision, binding.id);
-      this.invalidate(binding.id);
+      this.run("UPDATE work SET state='stale' WHERE binding=? AND state='queued'", binding.id);
+      this.run("UPDATE draft SET state='stale' WHERE binding=? AND direct_send=0 AND state IN ('awaiting_approval','ready')", binding.id);
       if (incoming.author === 'remote' && body && incoming.ts >= now - maxAge && binding.trigger === 'inbound') {
         this.enqueue({ ...binding, context: revision }, incoming.event, now);
       }
@@ -375,7 +379,7 @@ export class TelegramStore {
   current(item, now) {
     const binding = this.binding(item.binding);
     return !this.paused() && binding?.active && binding.generation === item.generation && binding.revision === item.revision &&
-      binding.context === item.context && (item.until === undefined || item.until > now);
+      (item.direct_send || binding.context === item.context) && (item.until === undefined || item.until > now);
   }
 
   nextWork(now) {
@@ -417,13 +421,13 @@ export class TelegramStore {
     });
   }
 
-  insertDraft(binding, body, source, now, { control, recipient, reply } = {}) {
+  insertDraft(binding, body, source, now, { control, recipient, reply, directSend = false } = {}) {
     const id = randomUUID();
-    const state = 'awaiting_approval';
+    const state = directSend ? 'ready' : 'awaiting_approval';
     this.run(`INSERT INTO draft (id,binding,generation,room,target,revision,context,source,version,body,hash,until,state,txn,
-      operator_approval,control_event,recipient,reply_event) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      operator_approval,control_event,recipient,reply_event,direct_send) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id, binding.id, binding.generation, binding.room, binding.target, binding.revision, binding.context, source,
-    body, digest(body), now + expiry, state, `telegram-${id}`, Number(!!control), control ?? null, recipient ?? null, reply ?? null);
+    body, digest(body), now + expiry, state, `telegram-${id}`, Number(!!control), control ?? null, recipient ?? null, reply ?? null, Number(directSend));
     return id;
   }
 
@@ -493,11 +497,11 @@ export class TelegramStore {
       const approval = JSON.parse(draft.approval ?? '{}');
       const review = this.get('SELECT event FROM draft_review WHERE draft=? AND version=? AND hash=?',
         draft.id, draft.version, draft.hash);
-      if (!review || approval.poll !== review.event ||
+      if (!draft.direct_send && (!review || approval.poll !== review.event ||
         approval.sender !== JSON.parse(binding.target).operator || approval.hash !== draft.hash ||
         approval.version !== draft.version || approval.room !== draft.room ||
         approval.target !== draft.target || approval.generation !== draft.generation || approval.revision !== draft.revision ||
-        approval.context !== draft.context || approval.expiry !== draft.until) return false;
+        approval.context !== draft.context || approval.expiry !== draft.until)) return false;
       if (draft.ciphertext && draft.ciphertext !== ciphertext) throw new Error('Refusing to replace prepared ciphertext.');
       this.run(`UPDATE draft SET state='publishing', attempted=?, ciphertext=?, attempts=attempts+1 WHERE id=?`, now, ciphertext, id);
       return true;

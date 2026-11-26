@@ -17,12 +17,12 @@ export function staffingRoster(agents, integrations, server, now = Date.now()) {
         : state === 'starting' ? 'Starting' : 'Unavailable';
   return [...agents, {
     key: 'telegram-agent', id: '@telegram-agent:' + server, name: 'Telegram Agent', role: 'worker', status,
-    limits: 'Uses the scoped Telegram handoff. Draft delivery requires operator approval and a verified chat binding.',
+    limits: 'Uses verified Telegram chats and explicitly requested Office handoffs.',
     persona: { purpose: 'Link Telegram chats through the bridge, prepare drafts, and read verified chat updates.' },
     capabilities: [
       { code: 'telegram-chat-link', description: 'Find and link verified Telegram contacts and groups.',
         resources: ['workspace:telegram', 'telegram:*'] },
-      { code: 'telegram-draft', description: 'Prepare a draft for operator approval in Telegram Bridge.',
+      { code: 'telegram-draft', description: 'Prepare a preview or send an explicitly requested Telegram message.',
         resources: ['workspace:telegram', 'telegram:*'] },
       { code: 'telegram-chat-update', description: 'Summarize recent messages from a verified Telegram chat.',
         resources: ['workspace:telegram', 'telegram:*'] },

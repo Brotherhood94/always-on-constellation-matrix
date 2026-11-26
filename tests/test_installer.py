@@ -69,19 +69,9 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('[x] Remote Worker', rendered)
         self.assertIn('Runs: remote', rendered)
 
-    def test_telegram_agent_is_preselected_only_when_telegram_is_enabled(self):
-        profiles = onboarding_profiles(self.settings)
-        self.assertIn('telegram-agent', profiles)
-        self.assertNotIn('telegram-agent', onboarding_profiles({**self.settings, 'telegram': False}))
-        screen = Mock()
-        screen.getmaxyx.return_value = (26, 92)
-        screen.getch.side_effect = [curses.KEY_UP, curses.KEY_ENTER, curses.KEY_DOWN, curses.KEY_ENTER]
-        with patch('agent_picker.terminal_picker', side_effect=lambda render, *args: render(screen, *args)):
-            self.assertEqual(select_agents(profiles), [key for key in profiles if key != 'telegram-agent'])
-        rows = [item.args[2] for item in screen.addnstr.call_args_list]
-        self.assertIn('  [x] Telegram Agent', rows)
-        self.assertIn('> [ ] Telegram Agent', rows)
-        self.assertIn('Telegram Agent (telegram-agent)', rows)
+    def test_telegram_agent_is_not_in_the_office_checklist(self):
+        for enabled in (True, False):
+            self.assertNotIn('telegram-agent', onboarding_profiles({**self.settings, 'telegram': enabled}))
 
     def test_telegram_selection_reuses_the_specialist_account_and_leaves_ordinary_roster_separate(self):
         for selected in ([], ['telegram-agent']):
@@ -97,13 +87,11 @@ class InstallerTest(unittest.TestCase):
                 provision_selected_agents(data, initial, registry, selected, None, operator_token='fixture-session')
                 settings = load(data / 'settings.json')
                 self.assertTrue(settings['telegram'])
-                self.assertEqual(settings['telegram_agent'], bool(selected))
+                self.assertTrue(settings['telegram_agent'])
                 self.assertEqual(settings['agents'], [])
-                self.assertEqual(telegram_agent_pending(data, settings), bool(selected))
-                self.assertEqual(layout.call_count, int(bool(selected)))
-                if selected:
-                    verify.assert_called_once_with(rooms, 'fixture-session')
-                    layout.assert_called_once_with(settings, data, rooms, 'fixture-session')
+                self.assertTrue(telegram_agent_pending(data, settings))
+                verify.assert_called_once_with(rooms, 'fixture-session')
+                layout.assert_called_once_with(settings, data, rooms, 'fixture-session')
                 ordinary.assert_not_called()
                 self.assertEqual(registry, {'agents': {}})
 
@@ -837,7 +825,8 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(list(load(data / 'agents.json')['agents']), ['manager'])
             self.assertTrue(steps['provision_layout'].call_args.kwargs['unattended'])
             self.assertFalse(steps['provision_layout'].call_args.kwargs['office_setup'])
-            steps['run_telegram'].assert_called_once_with(data, 'start-guide')
+            self.assertEqual([args[1:] for args, _ in steps['run_telegram'].call_args_list],
+                             [('start-guide',), ('prepare-agent',)])
 
     def test_telegram_activation_and_layout_repair_share_the_linking_flow(self):
         with TemporaryDirectory() as work, redirect_stdout(StringIO()):

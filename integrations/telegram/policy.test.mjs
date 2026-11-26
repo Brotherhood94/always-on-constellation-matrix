@@ -336,3 +336,17 @@ test('an operator can explicitly reply or ask a follow-up in the same thread', (
   assert.equal(reply['m.relates_to'].event_id, '$root');
   assert.equal(reply['m.relates_to']['m.in_reply_to'].event_id, '$follow-up');
 });
+
+test('an explicit operator send uses the outbox without a poll, preserving the verified target and exact body', () => {
+  const store = fixture();
+  const request = { event: '$operator-send' };
+  assert.equal(store.queueControl(request.event, { action: 'compose' }, now, { requireDot: false }), true);
+  assert.equal(store.prepareControlDraft(request, store.binding(dm.id), 'Verified recipient', 'exact\ntext', null, now + 1, undefined, '@other:test'), false);
+  assert.equal(store.prepareControlDraft(request, store.binding(dm.id), 'Verified recipient', 'exact\ntext', null, now + 1, undefined, config.owner), true);
+  const send = store.nextSend(now + 2);
+  assert.equal(send.body, 'exact\ntext');
+  assert.equal(store.all('SELECT event FROM draft_review').length, 0);
+  assert.equal(store.record(input(dm), now + 2), true);
+  assert.equal(store.prepareSend(send.id, 'ciphertext', now + 3), true);
+  assert.equal(store.prepareSend(send.id, 'ciphertext', now + 3), false);
+});

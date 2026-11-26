@@ -19,7 +19,7 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 - **Agents → VPS Alerts → Pinned messages → Workspace shortcuts.** Open the dashboard to see resources and agent readiness. Open Context Intelligence to launch Neo4j Browser and sign in as `neo4j` with the dedicated password. The pin includes the command to retrieve the password privately on your VPS.
 - **Agents → VPS Alerts → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. An empty list is expected before you activate any Office agents. [Dot setup](dot.md)
-- **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Follow the QR sign-in steps when the terminal asks you to link Telegram. After setup, use this room for requests and approvals. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
+- **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Follow the QR sign-in steps when the terminal asks you to link Telegram. After setup, mention Task Manager in Office for Telegram work or Telegram Agent here for a private request. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
 
 VPS Alerts publishes its pins after you join and Element registers your first device’s encryption keys. Later sign-ins reuse the same pins. On a new device, restore your Matrix encryption keys if Element cannot show the original messages.
 
@@ -31,7 +31,7 @@ The installer automatically opens Amplifier’s provider and model setup for eac
 
 ## 📨 Configure Telegram Agent
 
-When Telegram is enabled, **Telegram Agent** is preselected in the agent checklist. The terminal registers it in Office and opens its Codex provider setup in the numbered agent sequence. Then follow the bridge activation and QR sign-in prompts. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix. Deselect Telegram Agent to link the bridge for manual use.
+When Telegram is enabled, the installer registers **Telegram Agent** in Office and includes it in the numbered provider setup. Follow the credential import and QR sign-in prompts in the same flow. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.
 
 If you closed the installer, resume the Telegram step on its own.
 

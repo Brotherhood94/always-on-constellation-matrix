@@ -48,7 +48,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                      'volumes': [volume(data / 'postgres', '/var/lib/postgresql/data')],
                      'healthcheck': health('pg_isready', '-U', 'synapse', '-d', 'synapse')},
         'synapse': {**common, 'image': SYNAPSE, 'networks': ['database', 'clients'],
-                    'environment': {'SYNAPSE_SERVER_NAME': server, 'SYNAPSE_REPORT_STATS': 'no'},
+                    'environment': {'SYNAPSE_SERVER_NAME': server, 'SYNAPSE_REPORT_STATS': 'no', 'PYTHONPATH': '/data'},
                     'ports': [port(settings['matrix_port'], 8008)],
                     'depends_on': {'postgres': {'condition': 'service_healthy'}},
                     'volumes': [volume(data / 'synapse', '/data')],

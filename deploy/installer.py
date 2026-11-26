@@ -60,18 +60,7 @@ def telegram_agent_selected(settings):
 
 
 def onboarding_profiles(settings):
-    profiles = starter_profiles()
-    if telegram_agent_selected(settings):
-        profiles[TELEGRAM_AGENT] = {
-            'name': 'Telegram Agent', 'model': 'gpt-6.2-sol', 'effort': 'low',
-            'profile': {
-                'role': 'worker',
-                'persona': {'purpose': 'Manage Telegram chats and handle Telegram assignments from Office.'},
-                'capabilities': [{'description': 'Find chats, draft messages, and summarize verified conversations.'}],
-                'limits': 'Outbound drafts require your approval in Telegram Bridge.',
-            },
-        }
-    return profiles
+    return starter_profiles()
 
 
 def available_profiles(registry=None):
@@ -175,6 +164,9 @@ def normalized(raw, presets):
     for key in ('tailscale', 'systemd', 'dot', 'telegram'):
         if type(settings[key]) is not bool:
             raise ValueError(f'{key} must be true or false')
+    telegram_api_file = settings.get('telegram_api_file')
+    if telegram_api_file is not None and (not settings['telegram'] or not isinstance(telegram_api_file, str) or not telegram_api_file):
+        raise ValueError('Provide a private telegram_api_file only when Telegram is enabled')
     if type(settings.get('telegram_agent', True)) is not bool:
         raise ValueError('telegram_agent must be true or false')
     for key in PORTS:
@@ -843,6 +835,7 @@ def install(data, args, *, entered=None):
             if key not in registry['agents']:
                 register_entry(settings, registry, key, presets[key])
         settings.pop('owner_password_file', None)
+        telegram_api_file = settings.pop('telegram_api_file', None)
         onboarding_path = data / 'onboarding.json'
         if not args.config and not current and not onboarding_path.exists():
             save(onboarding_path, {'confirmed': [], 'select_agents': True})
@@ -861,6 +854,14 @@ def install(data, args, *, entered=None):
             refresh_context(data)
         else:
             up(data, 'postgres', 'synapse', 'context')
+        if args.config and settings['telegram']:
+            bridge = data / 'telegram/bridge'
+            if telegram_api_file and not (bridge / 'registration.yaml').is_file():
+                run_telegram(data, 'prepare', str(Path(telegram_api_file).expanduser().absolute()))
+            if (bridge / 'registration.yaml').is_file() and not (data / 'telegram/guide/space-db').is_file():
+                run_telegram(data, 'activate')
+            elif not (bridge / 'registration.yaml').is_file():
+                print('Telegram setup is waiting for API credentials. Run setup-guide to continue.')
         office_setup = not args.config and onboarding_path.exists() and load(onboarding_path).get('select_agents') is True
         provision_layout(settings, data, registry, passphrase, unattended=bool(args.config) or entered is not None,
                          office_setup=office_setup)
@@ -874,6 +875,10 @@ def install(data, args, *, entered=None):
         up(data, *services)
         if settings['telegram']:
             run_telegram(data, 'start-guide')
+            if args.config and telegram_agent_selected(settings) and not (data / 'telegram/connector/engine-token').is_file():
+                run_telegram(data, 'prepare-agent')
+            if args.config and (data / 'telegram/bridge/registration.yaml').is_file():
+                print('Complete Telegram login in Element → Telegram → Rooms → Telegram Bridge.')
         sync_workshop(settings, data, registry)
         active = [key for key in local_agents if registry['agents'][key]['active']]
         up(data, *active, *(['helper-dm'] if 'helper' in active else []))
@@ -905,11 +910,11 @@ def provision_selected_agents(data, settings, registry, selection, passphrase, *
     from roster import prepare_management
 
     presets = available_profiles(registry)
-    install_telegram = TELEGRAM_AGENT in selection
-    if install_telegram and not settings['telegram']:
+    if TELEGRAM_AGENT in selection and not settings['telegram']:
         raise ValueError('Enable the Telegram integration before selecting Telegram Agent')
     if selection.count(TELEGRAM_AGENT) > 1:
         raise ValueError('Specify a list of distinct available agents')
+    install_telegram = settings['telegram'] and settings.get('telegram_agent', True)
     selection = [key for key in selection if key != TELEGRAM_AGENT]
     roster = normalized({**settings, 'agents': selection, 'telegram_agent': install_telegram}, presets)
     for key in selection:
@@ -1060,7 +1065,7 @@ def agent_activate(data, key, *, pending_only=False):
     if key == TELEGRAM_AGENT:
         settings = load(data / 'settings.json')
         if not telegram_agent_selected(settings):
-            raise ValueError('Select Telegram Agent in the installer first')
+            raise ValueError('Enable the Telegram integration in the installer first')
         telegram(data, ['setup'])
         return
     waiting_message = (f'Provider setup for {key} is waiting for another workspace command. '
@@ -1205,10 +1210,17 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
     if not args:
         raise ValueError('Specify a Telegram command. See docs/telegram.md.')
     if args[0] == 'setup':
+        enable_agent = '--enable-agent' in args[1:]
+        if enable_agent:
+            if not telegram_agent_selected(settings):
+                with operator_lock(data):
+                    settings['telegram_agent'] = True
+                    save(data / 'settings.json', settings)
+            telegram(data, ['layout'], owner_password_file, operator_token=operator_token)
         from telegram_setup import setup
         from operator_cli import publish_metadata
         try:
-            setup(data, args[1:], install_agent=telegram_agent_selected(settings))
+            setup(data, [arg for arg in args[1:] if arg != '--enable-agent'], install_agent=telegram_agent_selected(settings))
         finally:
             publish_metadata(data, settings, registry)
         return
@@ -1232,6 +1244,7 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
                 verify_operator(workspace, operator_token)
                 token = operator_token
             try:
+                compose_config(settings, data, registry)
                 if action == 'activate':
                     run_telegram(data, action)
                 rooms = provision_telegram_layout(settings, data, workspace, token, options.bridge_room)
@@ -1240,7 +1253,6 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
                 run_telegram(data, 'start-guide', *guide_args)
                 coordinator = telegram_office_agent(registry)
                 if 'root' not in registry['agents'] and (settings['dot'] or registry['agents'].get(coordinator, {}).get('active')):
-                    compose_config(settings, data, registry)
                     docker_build(CONNECTOR, SOURCE / 'agents/connector')
                     if registry['agents'].get(coordinator, {}).get('active'):
                         up(data, coordinator)

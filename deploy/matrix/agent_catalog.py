@@ -204,6 +204,33 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
     telegram = registry.get('telegram_placement')
     integration = ({'server': telegram['server'], 'placement': telegram['placement'],
                     **placement_details(registry, telegram, 'telegram-agent', now, data)} if telegram else None)
+    settings_file = data / 'settings.json' if data else None
+    settings = json.loads(settings_file.read_text()) if settings_file and settings_file.is_file() else {}
+    if settings.get('telegram') and settings.get('telegram_agent', True):
+        status_file = data / 'dashboard/telegram.json'
+        status = json.loads(status_file.read_text()) if status_file.is_file() else {}
+        services = status.get('services', {})
+        ready = services.get('connector', {}).get('state') == 'running' and services.get('telegram-engine', {}).get('health') == 'healthy'
+        for row in result:
+            if row['key'] in ('task-manager', 'manager'):
+                row['contacts'] = sorted(set(row['contacts']) | {'telegram-agent'})
+        abilities = [
+            ('telegram-chat-link', 'Find, open, bind and unlink Telegram contacts and groups.'),
+            ('telegram-group-management', 'Create groups and add verified participants.'),
+            ('telegram-draft', 'Prepare a preview or send an explicitly requested message to a verified chat.'),
+            ('telegram-chat-update', 'Read and summarize the requested conversations in Office.'),
+        ]
+        result.append(dict(key='telegram-agent', id=f'@telegram-agent:{server_name}', name='Telegram Agent',
+                           role='worker',
+                           status='Available' if ready else 'Telegram setup pending', active=ready, contacts=[],
+                           capabilities=[dict(code=code, description=description, resources=['workspace:telegram', 'telegram:*'])
+                                         for code, description in abilities],
+                           limits='Use the verified operator or Dot task routed by Task Manager.',
+                           persona={'purpose': 'Manage Telegram chats from Office.', 'duties': [description for _, description in abilities],
+                                    'working_style': 'Use verified recipients, ask about ambiguous matches, and report the outcome in the original thread.'},
+                           tools=['Scoped Telegram MCP'], model=status.get('agent', {}).get('model'),
+                           effort=status.get('agent', {}).get('effort'),
+                           **(integration or {'server': registry['local_server'], 'placement': 'local'})))
     return dict(version=1, contactPolicy=governed, time=now, telegramPlacement=integration, dynamicHandoffs=registry.get('dynamic_handoffs') is True,
                 agents=result, **({'policyRevision': revision} if revision else {}))
 

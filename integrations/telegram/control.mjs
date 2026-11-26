@@ -84,9 +84,21 @@ export function resolveDestination(request, destinations) {
 
 export function historyRange(question, now) {
   const plain = normalized(question);
+  const dateRange = /\b(\d{4}-\d{2}-\d{2})(?:\s+(?:to|al|a|until)\s+(\d{4}-\d{2}-\d{2}))?\b/u.exec(plain);
+  if (dateRange) {
+    const since = Date.parse(dateRange[1]);
+    const before = Date.parse(dateRange[2] ?? dateRange[1]) + day;
+    if (Number.isFinite(since) && before > since) {
+      return { since, before, label: dateRange.slice(1).filter(Boolean).join(' → '), includes: ts => ts >= since && ts < before };
+    }
+  }
   if (/\b(oggi|today)\b/u.test(plain)) {
     const date = localDate.format(now);
     return { since: now - 26 * 60 * minute, label: 'Today (Europe/Rome)', includes: ts => localDate.format(ts) === date };
+  }
+  if (/\b(ieri|yesterday)\b/u.test(plain)) {
+    const yesterday = localDate.format(now - day);
+    return { since: now - 50 * 60 * minute, label: 'Yesterday (Europe/Rome)', includes: ts => localDate.format(ts) === yesterday };
   }
   const days = /\b(ultimi 7 giorni|last 7 days|ultima settimana|past week)\b/u.test(plain) ? 7 : 1;
   return { since: now - days * day, label: days === 7 ? 'Last 7 days' : 'Last 24 hours', includes: () => true };

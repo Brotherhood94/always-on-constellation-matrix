@@ -117,11 +117,13 @@ export function canDispatch(agent, joined) {
 
 export function delegationGuidance(catalog, sender) {
   if (!catalog.fresh()) return 'The agent catalog is unavailable. Do not guess a recipient or claim a capability is missing.';
+  const specialist = catalog.current().agents.some(agent => agent.key === 'telegram-agent');
   const profiles = catalog.current().agents.filter(agent => agent.id !== sender && agent.role !== 'observer' && canContact(catalog.current(), sender, agent));
   return 'Choose a colleague by the capability and resource scope below. Include the requested work, reason for the choice, and evidence needed. ' +
     'Use one final control line: HANDOFF: {"agent":"catalog-key","capability":"capability-code","resource":"type:resource"}. ' +
     'If no registered capability covers an essential next step, use CAPABILITY_GAP: {"capability":"missing-code","resource":"type:resource","reason":"what work this prevents"}. ' +
     'If your own registered duty is blocked by missing tooling, expired credentials or a temporary outage, add OFFICE_NEED: {"kind":"tool|credentials|outage","capability":"your-code","topic":"public tool keywords"} before TASK_OUTCOME. ' +
+    (specialist ? 'Telegram Agent is registered for chat and group management, sending, and reading Telegram history. Task Manager handles Telegram requests from the operator or Dot. ' : '') +
     'Do not use CAPABILITY_GAP for a temporary outage, a request for permissions, or a missing prerequisite. Use no control line if you can answer or complete the task yourself.\n' +
     JSON.stringify(profiles.map(({ key, role, status, limits, capabilities }) => ({ key, role, status, limits, capabilities })));
 }

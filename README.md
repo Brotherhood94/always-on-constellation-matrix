@@ -51,7 +51,7 @@ Run `./constellation_matrix setup-guide` to resume onboarding or append `--print
 
 ### Finish Telegram setup
 
-If you enabled Telegram, **Telegram Agent** is preselected in **Select agents to install**. The installer opens its dedicated Amplifier sign-in as part of the same numbered agent setup. Then it uses your private `telegram-api.json` to activate the bridge and guides you through QR sign-in in Element. Deselect Telegram Agent if you want to use the bridge manually. If interrupted, resume the Telegram step.
+Enabling **Telegram** installs **Telegram Agent** automatically. The installer includes its Amplifier sign-in in the numbered agent setup, imports your Telegram API credentials, and guides you through QR sign-in and two-step verification in Element. If interrupted, resume setup from the same terminal.
 
 ```sh
 ./constellation_matrix telegram setup
@@ -62,7 +62,7 @@ If you enabled Telegram, **Telegram Agent** is preselected in **Select agents to
 ### Finish in Element
 
 - **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Rooms → Telegram Bridge → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Review the verified recipient and exact text in **Telegram Bridge**, then vote **✅ Accept** or **❌ Decline**. [Telegram setup and examples](docs/telegram.md)
+- **Telegram → Rooms → Telegram Bridge → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Telegram Agent verifies the destination and reports the result in the originating thread. Use a draft request to preview a message. [Telegram setup and examples](docs/telegram.md)
 
 ### Send your first task
 
@@ -70,7 +70,7 @@ Task Manager is the entry point for coordinated Office tasks. Open **Agents → 
 
 If you enabled Dot, open a ChatGPT conversation with the **Constellation Office** plugin and ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” [Dot setup](docs/dot.md)
 
-With Dot and Telegram configured, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Open the **Telegram Bridge** poll from Dot’s task status or the Office reply. Review the recipient and exact text, then vote **✅ Accept** or **❌ Decline** in Element. [Telegram from Office](docs/telegram.md#use-telegram-from-office)
+With Dot and Telegram configured, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Task Manager hands the request to Telegram Agent in Office. Dot reports the verified result from the same thread. [Telegram from Office](docs/telegram.md#use-telegram-from-office)
 
 If you skipped Task Manager, use the Office agent named in your welcome. If you skipped the Office roster, add a worker first. [Add a worker](docs/runbook.md#add-a-worker)
 
@@ -201,7 +201,7 @@ For unattended provisioning, edit the example configuration, check it with `./co
 | Trace an Office task | Open [Context Intelligence](integrations/context-execution/README.md) to see who handed off the work, whether the recipient accepted it, and how the original assignee closed the task. |
 | Get help with setup or a service | Open **Agents → People → Helper**. On an existing deployment, run `./constellation_matrix agent add --starter helper --configure`. [Helper guide](docs/team.md#ask-helper) |
 | Repair sidebar placement | Run `./constellation_matrix layout` on the VPS and sign in as the Matrix operator. [Layout migration](docs/telegram.md#repair-an-existing-workspace) |
-| Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Agent](docs/telegram.md) for drafts and updates from approved chats. |
+| Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Agent](docs/telegram.md) to open chats, manage groups, send requested messages and summarize registered conversations. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
 

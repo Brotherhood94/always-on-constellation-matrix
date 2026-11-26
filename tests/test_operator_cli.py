@@ -80,7 +80,7 @@ class OperatorCLITest(unittest.TestCase):
     def test_element_and_agent_selection_use_the_operator_session_before_elevation(self):
         output = StringIO()
         with TemporaryDirectory() as work, redirect_stdout(output), patch('operator_cli.confirm_element', return_value='next'), \
-                patch('operator_cli.select_agents', return_value=['manager', 'helper', 'telegram-agent']) as picker, \
+                patch('operator_cli.select_agents', return_value=['manager', 'helper']) as picker, \
                 patch('operator_cli.request') as request, patch('operator_cli.elevate') as sudo:
             data = Path(work)
             publish_metadata(data, self.settings, {'agents': {}})
@@ -96,7 +96,7 @@ class OperatorCLITest(unittest.TestCase):
                     self.assertIn('start local Amplifier containers with Docker', notice)
                     self.assertIn('Linux password for the VPS account shown in the prompt', notice)
                     self.assertNotIn('matrix-fixture-password', notice)
-                    self.assertEqual(payload, {'selection': ['manager', 'helper', 'telegram-agent'],
+                    self.assertEqual(payload, {'selection': ['manager', 'helper'],
                                                'token': 'matrix-session-fixture'})
                     save(data / 'setup.json', {**initial, 'element_confirmed': True, 'select_agents': False,
                                               'selected': ['manager', 'helper'], 'pending': ['manager', 'helper'],
@@ -115,7 +115,7 @@ class OperatorCLITest(unittest.TestCase):
                              [('enroll',), ('configure', 'manager', '--pending-only'),
                               ('configure', 'helper', '--pending-only'),
                               ('configure', 'telegram-agent', '--pending-only'), ('finish',)])
-            self.assertIn('telegram-agent', picker.call_args.args[0])
+            self.assertNotIn('telegram-agent', picker.call_args.args[0])
             self.assertIn('Amplifier will open provider and model setup', output.getvalue())
             self.assertIn('Local agent 1 of 3', output.getvalue())
             self.assertIn('Local agent 2 of 3', output.getvalue())
@@ -156,7 +156,7 @@ class OperatorCLITest(unittest.TestCase):
                 patch('operator_cli.select_agents', return_value=[]), patch('operator_cli.request') as request, \
                 patch('operator_cli.elevate') as sudo, patch('operator_cli.configure_as_operator'):
             data = Path(work)
-            publish_metadata(data, {**self.settings, 'agents': []}, {'agents': {}})
+            publish_metadata(data, {**self.settings, 'telegram': False, 'agents': []}, {'agents': {}})
             current = {**load(data / 'setup.json'), 'element_confirmed': True, 'select_agents': True}
             save(data / 'setup.json', current)
 

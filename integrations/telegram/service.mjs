@@ -133,6 +133,13 @@ async function run() {
     if (error.code !== 'ENOENT') throw error;
     return '';
   })).trim();
+  const officeFirst = process.env.TELEGRAM_OFFICE_FIRST === 'true';
+  if (officeFirst && !store.setting('office_first_enabled')) {
+    store.atomic(() => {
+      store.run("UPDATE draft SET state='stale', notified='stale' WHERE state='awaiting_approval'");
+      store.set('office_first_enabled', 'true');
+    });
+  }
   const checkRoom = () => !pausedFile() && !store.paused() && matrix.verifyControl();
   async function checkOffice() {
     if (!officeRoom || officeRoom === settings.controlRoom || officeRoom === settings.space) return false;
@@ -143,17 +150,23 @@ async function run() {
     return state?.encrypted && state.private && !state.tombstone &&
       members.get(settings.owner) === 'join' && members.get(settings.agent) === 'join';
   }
-  const guide = input => requestTelegramService(TELEGRAM_GUIDE_SOCKET, input);
+  const guide = input => requestTelegramService(TELEGRAM_GUIDE_SOCKET, input, 55_000, input.action === 'history' ? 230_000 : 8192);
   async function getBinding(room, peer) {
     const binding = store.inRoom(room);
     const target = binding?.active && JSON.parse(binding.target);
     return target?.peer === peer && await liveBinding(room, target) === target.audience ? binding : null;
   }
-  async function prepareBinding({ room, peer }, id) {
+  async function prepareBinding({ room, peer }, id, admitOwner = false) {
     const paused = { error: 'This chat already has a paused or changed binding. Review its status before starting a new request.' };
     if (store.inRoom(room)) return paused;
     if (!await checkRoom()) return { error: 'Telegram Bridge is unavailable or paused.' };
-    const relay = await guide({ id, action: 'prepare-binding', target: room, peer });
+    let relay;
+    const admission = { id, action: 'prepare-binding', target: room, peer, ...(admitOwner && { admitOwner }) };
+    for (let attempt = 0; attempt < 8; attempt++) {
+      relay = await guide(admission);
+      if (!relay?.pending) break;
+      await delay(500);
+    }
     if (!relay?.ok) return { error: relay?.message ?? 'Telegram Bridge is unavailable.' };
     if (relay.room !== room || relay.peer !== peer || typeof relay.login !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(relay.login)) {
       return { error: 'Telegram Bridge could not verify the selected chat and login.' };
@@ -168,8 +181,37 @@ async function run() {
       trigger: 'request' }, settings.controlRoom, Date.now(), { createOnly: true });
     return created ? { binding: store.binding(bindingId) } : paused;
   }
-  const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom }, checkRoom, checkOffice,
+  store.db.exec('CREATE TABLE IF NOT EXISTS telegram_context_outbox (id TEXT PRIMARY KEY, payload TEXT NOT NULL)');
+  function recordContext(event, source, data) {
+    if (process.env.TELEGRAM_CONTEXT_ENABLED !== 'true') return;
+    const id = 'telegram-' + digest([event, source]);
+    store.run('INSERT OR IGNORE INTO telegram_context_outbox VALUES (?,?)', id, JSON.stringify({
+      event, workspace: 'telegram', idempotency_key: id,
+      data: { session_id: 'telegram-' + digest(source), timestamp: new Date().toISOString(), ...data },
+    }));
+  }
+  let nextContext = 0;
+  async function flushContext(now) {
+    if (now < nextContext || process.env.TELEGRAM_CONTEXT_ENABLED !== 'true') return;
+    const row = store.get('SELECT id,payload FROM telegram_context_outbox ORDER BY rowid LIMIT 1');
+    if (!row) return;
+    nextContext = now + 2000;
+    try {
+      const credential = (await readFile('/context-token', 'utf8')).trim();
+      const response = await fetch('http://context:8000/events', {
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
+        headers: { authorization: 'Bearer ' + credential, 'content-type': 'application/json' }, body: row.payload,
+      });
+      if (!response.ok) throw new Error('Context Intelligence write failed');
+      store.run('DELETE FROM telegram_context_outbox WHERE id=?', row.id);
+    } catch {
+      nextContext = now + 30_000;
+    }
+  }
+  const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom, officeFirst }, checkRoom, checkOffice,
     guide,
+    getOfficeEvent: id => matrix.officeEvent(officeRoom, id),
+    recordOffice: (task, status) => recordContext('telegram:office_result', task.id, { status, handoff: task.handoff }),
     post: async (transaction, content) => {
       const ciphertext = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', content);
       if (!await checkRoom()) throw new Error('Telegram Agent room changed');
@@ -226,7 +268,9 @@ async function run() {
     const now = Date.now();
     if (room === officeRoom && officeRoom !== settings.controlRoom) {
       if (!initial && encrypted && !unreadable && !event.unsigned?.redacted_because &&
-          now - event.origin_server_ts <= catchup && event.origin_server_ts <= now + 60_000) await delegation?.directOffice(event);
+          now - event.origin_server_ts <= catchup && event.origin_server_ts <= now + 60_000) {
+        if (!await delegation?.receiveOffice(event)) await delegation?.directOffice(event);
+      }
       return;
     }
     const binding = store.inRoom(room);
@@ -258,7 +302,7 @@ async function run() {
       // Authentication and bridge commands are for the bridge bot alone.
       if (typeof event.content?.body === 'string' && /^\s*!tg(?:\s|$)/iu.test(event.content.body)) return;
       if (command) {
-        if (await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
+        if ((!officeFirst || command.action === 'pause') && await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
       } else if (!await delegation?.direct(event)) {
         const request = addressedRequest(event, settings);
         const requireDot = !settings.bridgeControl && (event.sender === settings.dot ||
@@ -377,7 +421,11 @@ async function run() {
     if (input.action === 'compose') {
       const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
       if (pausedFile() || !(await matrix.verifyControl({ requireDot }))) return;
-      if (!store.prepareControlDraft(request, binding, recipient, input.text, input.source, Date.now())) {
+      if (officeFirst && !input.explicitSend) {
+        return result(`Draft for ${recipient}\n\n${input.text}`, [], binding, true);
+      }
+      if (!store.prepareControlDraft(request, binding, recipient, input.text, input.source, Date.now(), undefined,
+        officeFirst && input.explicitSend && input.operator)) {
         result('The chat changed, cannot send from this binding, or the reply does not reference a received message in this chat.');
       }
       return;
@@ -417,25 +465,42 @@ async function run() {
       }
       return;
     }
-    const coverage = `${name} · ${range.label} · ${admitted.length} readable text messages in the connected room.`;
-    const partial = !history.complete || history.unreadable > 0 || admitted.length !== history.events.length;
-    if (!admitted.length) return result(coverage + '\nNo verified text messages were available for this request.', [], binding, true);
-    const messages = admitted.map((event, index) => ({
-      number: index + 1,
+    let partial = !history.complete || history.unreadable > 0 || admitted.length !== history.events.length;
+    let evidence = admitted.map((event, index) => ({
+      number: index + 1, event: event.event_id,
       author: (state.names.get(event.sender) || event.sender).slice(0, 100),
-      time: date.format(event.ts),
-      body: event.body.replace(/^(?:>.*\n)+\n/u, '').slice(0, 1000),
+      time: date.format(event.ts), body: event.body.replace(/^(?:>.*\n)+\n/u, '').slice(0, 1000),
     }));
+    let source = 'the connected room';
+    if (officeFirst && (partial || evidence.length < 30)) {
+      const remote = await guide({ id: request.event, action: 'history', target: binding.room, peer: target.peer,
+        since: range.since, before: range.before ?? request.requested }).catch(() => null);
+      if (remote?.ok) {
+        const retrieved = remote.messages.filter(message => Number.isSafeInteger(message.ts) && range.includes(message.ts) &&
+          typeof message.body === 'string' && typeof message.author === 'string');
+        if (retrieved.length || !evidence.length) {
+          partial = !remote.complete;
+          source = 'Telegram history';
+          evidence = retrieved.sort((a, b) => a.ts - b.ts).map((message, index) => ({
+            number: index + 1, author: message.author.slice(0, 100), time: date.format(message.ts),
+            body: message.body.slice(0, 1000),
+          }));
+        }
+      } else partial = true;
+    }
+    const coverage = `${name} · ${range.label} · ${evidence.length} readable text messages in ${source}.`;
+    const accessNote = partial ? ' Coverage is partial.' : '';
+    if (!evidence.length) return result(coverage + accessNote + '\nNo verified text messages were available for this request.', [], binding, true);
+    const messages = evidence.map(({ event, ...entry }) => entry);
     const answer = await summarizeWithInstance(settings.engine, input.question, messages);
     if (!answer) throw new Error('No summary returned.');
     const cited = [...new Set([...answer.matchAll(/\[(\d{1,2})\]/gu)].map(match => Number(match[1])))]
-      .filter(number => number > 0 && number <= admitted.length);
+      .filter(number => number > 0 && number <= evidence.length);
     const numbers = cited.length ? cited.slice(0, 8) : messages.slice(-3).map(message => message.number);
-    const sources = numbers.map(number => ({
+    const sources = numbers.filter(number => evidence[number - 1].event).map(number => ({
       label: `[${number}] ${messages[number - 1].author} · ${messages[number - 1].time}`,
-      url: matrixLink(binding.room, admitted[number - 1].event_id),
+      url: matrixLink(binding.room, evidence[number - 1].event),
     }));
-    const accessNote = partial ? ' Coverage is partial.' : '';
     if (!pausedFile() && !store.paused()) result(coverage + accessNote + '\n\n' + answer.slice(0, 3000), sources, binding, true);
   }
 
@@ -455,6 +520,7 @@ async function run() {
       }
     }
     if (!(await matrix.verifyControl({ requireDot }))) return;
+    if (delegation?.officeControlResult(request.event, success, body)) return;
     const standalone = delegation?.standaloneApproval(request.event);
     const message = standalone ? operatorNotice(settings.owner, body) :
       updateReply(requireDot ? settings : { ...settings, dot: undefined }, request.event, body, sources, request.thread_root ?? request.event);
@@ -465,26 +531,12 @@ async function run() {
       store.controlDelivered(request.event);
       delegation?.controlDelivered(request.event, success, reply);
     });
-    if (process.env.TELEGRAM_CONTEXT_ENABLED === 'true') {
-      try {
-        const credential = (await readFile('/context-token', 'utf8')).trim();
-        const response = await fetch('http://context:8000/events', {
-          method: 'POST', redirect: 'error', signal: AbortSignal.timeout(3000),
-          headers: { authorization: 'Bearer ' + credential, 'content-type': 'application/json' },
-          body: JSON.stringify({ event: 'telegram:control_result', workspace: 'telegram',
-            idempotency_key: 'telegram-control-' + digest(request.event),
-            data: { session_id: 'telegram-' + digest(request.thread_root ?? request.event),
-              timestamp: new Date().toISOString(), action: 'update delivered' } }),
-        });
-        if (!response.ok) throw new Error('Context Intelligence write failed');
-      } catch (error) {
-        console.warn('Telegram metadata write failed:', error.name);
-      }
-    }
+    recordContext('telegram:control_result', request.thread_root ?? request.event, { action: 'update delivered' });
   }
 
   async function notify(draft) {
     const awaiting = draft.state === 'awaiting_approval';
+    if (draft.direct_send) { store.notified(draft.id, draft.state); return; }
     const office = delegation?.standaloneApproval(draft.control_event);
     if (office && !awaiting) {
       store.notified(draft.id, draft.state);
@@ -625,8 +677,9 @@ async function run() {
       await publishControlResult(store.nextControl('ready', now));
       delegation?.settleDrafts();
       await delegation?.publishOffice();
+      await flushContext(now);
       if (!worker && !pausedFile() && !store.paused()) {
-        const work = store.nextWork(Date.now());
+        const work = officeFirst ? null : store.nextWork(Date.now());
         if (work) worker = processWork(work).catch(() => {
           store.finish(work, 'backend_failed');
           store.pause(work.binding, 'backend_turn_failed');

@@ -17,7 +17,7 @@ import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
 import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramReceipt,
-  telegramReceiptKey, telegramTaskStatus, telegramTerminal } from './telegram-office.mjs';
+  telegramHandoffKey, telegramReceiptKey, telegramTaskStatus, telegramTerminal } from './telegram-office.mjs';
 import { helperIdentity, supportEvidence } from './helper-support.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
@@ -337,8 +337,18 @@ function telegramRequest(event, method, { sender = MATRIX_OWNER, text, telegram 
 async function delegateTelegram(client, event, request) {
   store.acceptEvidence(event.id, process.env.CONTEXT_INTELLIGENCE_URL && assignmentEvidence({ roomId, actor: userId, event }));
   await publishActivity(client, event.id);
-  const result = await telegramRequest(event.id, 'submit', request);
-  if (!Object.hasOwn(telegramTaskStatus, result.status)) {
+  const specialist = { id: `@telegram-agent:${MATRIX_SERVER_NAME}`, name: 'Telegram Agent' };
+  const joined = new Set(await client.getJoinedRoomMembers(roomId));
+  const handoff = joined.has(specialist.id) && await sendEncrypted(client, roomId, reactionTransaction('telegram-dispatch', event.id), {
+    ...mentionMessage('Please handle the Telegram request in this thread.', specialist),
+    [telegramHandoffKey]: { request: event.id },
+    'm.relates_to': threadRelation(event),
+  });
+  const dispatched = handoff && process.env.CONTEXT_INTELLIGENCE_URL &&
+    executionEvidence({ roomId, actor: userId, event, sent: handoff, target: specialist.id, flow: 'dispatch' });
+  if (dispatched) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(handoff, JSON.stringify(dispatched));
+  const result = handoff ? await telegramRequest(event.id, 'submit', request) : { status: 'unavailable' };
+  if (!handoff && !Object.hasOwn(telegramTaskStatus, result.status)) {
     const sent = await sendEncrypted(client, roomId, reactionTransaction('telegram-unavailable', event.id), {
       msgtype: 'm.text', body: 'Telegram Agent is unavailable. Check its setup or service and retry.',
       [telegramReceiptKey]: { status: 'blocked' },
@@ -357,7 +367,12 @@ async function pollTelegram(client) {
   if (!row) return;
   store.telegramProgress(row.id, row.status, Date.now());
   const result = telegramReceipt(await telegramRequest(row.id, 'status'));
-  if (!result || (!result.link && !telegramTerminal(result.status))) return;
+  if (!result || (!result.office && !result.link && !telegramTerminal(result.status))) return;
+  if (result.office) {
+    if (result.terminal || telegramTerminal(result.status)) store.finishTelegram(row.id, outcomeReaction[result.status === 'completed' ? 'completed' : 'blocked']);
+    else store.telegramProgress(row.id, result.status, Date.now());
+    return;
+  }
   const event = { id: row.id, request: row.id, thread: row.thread, number: 1 };
   const evidence = (sent, fields) => process.env.CONTEXT_INTELLIGENCE_URL && executionEvidence({
     roomId, actor: userId, event, sent, target: `@telegram-agent:${MATRIX_SERVER_NAME}`, ...fields,

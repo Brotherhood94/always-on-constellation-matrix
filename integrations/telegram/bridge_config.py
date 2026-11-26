@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 REGISTRATION = '/data/telegram-appservice.yaml'
+ADMISSION = 'synapse_admission.TelegramAdmission'
 DATABASE_ROLES = ('matrix_telegram_bridge', 'matrix_telegram_audit', 'matrix_telegram_space')
 
 
@@ -61,7 +62,9 @@ def generate(root, private):
                             personal_filtering_spaces=False,
                             permissions={'*': 'block', owner: 'admin', f'@telegram-agent:{domain}': 'relay'},
                             portal_create_filter={'mode': 'allow', 'list': [], 'always_deny_from_login': []})
-    config['bridge']['relay'].update(enabled=True, admin_only=True, default_relays=[])
+    relay = config['bridge']['relay']
+    relay.update(enabled=True, admin_only=True, default_relays=[])
+    relay.setdefault('message_formats', {})['m.text'] = '{{ .Message }}'
     config['database'].update(type='postgres', uri=database_uri(root, 'matrix_telegram_bridge'))
     config['matrix'].update(federate_rooms=False, message_error_notices=False, message_status_events=True,
                             sync_direct_chat_list=False,
@@ -93,10 +96,12 @@ def office_provisioning(root):
         key = 'constellation-office-' + secrets.token_hex(32)
     desired = {'shared_secret': key, 'allow_matrix_auth': False, 'debug_endpoints': False}
     matrix = config['matrix']
-    changed = any(provision.get(name) != value for name, value in desired.items()) or matrix.get('sync_direct_chat_list') is not False
+    relay_formats = config['bridge']['relay'].setdefault('message_formats', {})
+    changed = relay_formats.get('m.text') != '{{ .Message }}' or any(provision.get(name) != value for name, value in desired.items()) or matrix.get('sync_direct_chat_list') is not False
     if changed:
         provision.update(desired)
         matrix['sync_direct_chat_list'] = False
+        relay_formats['m.text'] = '{{ .Message }}'
         write(root / 'bridge/config.yaml', config, uid=991)
     key_file = root / 'guide/office-bridge-key'
     expected = (key + '\n').encode()
@@ -120,13 +125,28 @@ def registration(root, action):
     path = Path(os.environ['MATRIX_DATA']) / 'synapse/homeserver.yaml'
     config = load(path)
     paths = config.setdefault('app_service_config_files', [])
+    prior = next((module for module in config.get('modules', []) if module.get('module') == ADMISSION), None)
+    modules = [module for module in config.get('modules', []) if module.get('module') != ADMISSION]
+    admission_path = path.parent / 'synapse_admission.py'
+    changed = False
     if action == 'enable':
         write(path.parent / 'telegram-appservice.yaml', (root / 'bridge/registration.yaml').read_bytes(), 0o640, 991)
+        owner = os.environ['MATRIX_OWNER']
+        extension = {'module': ADMISSION, 'config': {'owner': owner}}
+        source = Path(__file__).with_name('synapse_admission.py').read_bytes()
+        if not admission_path.is_file() or admission_path.read_bytes() != source:
+            write(admission_path, source, 0o640, 991)
+            changed = True
+        modules.append(extension)
+        changed = changed or prior != extension or REGISTRATION not in paths
         if REGISTRATION not in paths:
             paths.append(REGISTRATION)
     else:
         config['app_service_config_files'] = [entry for entry in paths if entry != REGISTRATION]
+    config['modules'] = modules
     write(path, config)
+    if action == 'enable':
+        print('changed' if changed else 'unchanged')
 
 
 def update_allowlist(root, operation, peer, receiver):

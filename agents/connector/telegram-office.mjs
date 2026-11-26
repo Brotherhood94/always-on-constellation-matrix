@@ -50,11 +50,14 @@ export const telegramTaskStatus = {
 
 export const telegramTerminal = status => ['completed', 'blocked', 'declined'].includes(status);
 
+export const telegramHandoffKey = 'org.matrixconstellation.telegram.handoff';
 export const telegramReceiptKey = 'org.matrixconstellation.telegram.receipt';
 const privateTelegramLink = /^https:\/\/matrix\.to\/#\/(?:%21|!)[A-Za-z0-9_.:%-]+\/(?:%24|\$)[A-Za-z0-9_:%.-]+$/iu;
 
 export function telegramReceipt(result) {
   if (!result || !Object.hasOwn(telegramTaskStatus, result.status)) return null;
+  if (result.office === true) return { status: result.status, office: true,
+    ...(result.status === 'unconfirmed' && result.terminal === true && { terminal: true }) };
   if (typeof result.link === 'string' && privateTelegramLink.test(result.link)) return { status: result.status, link: result.link };
   return result.status === 'blocked' && result.link === undefined ? { status: 'blocked' } : null;
 }
@@ -77,7 +80,7 @@ export async function relocationCall(operation, payload, timeout = 55_000) {
   return response.json();
 }
 
-export async function requestTelegramService(socketPath, input, timeout = 55_000) {
+export async function requestTelegramService(socketPath, input, timeout = 55_000, maxResponse = 8192) {
   if (socketPath.startsWith('role:')) return relocationCall(socketPath.slice(5), input, timeout);
   return new Promise((resolve, reject) => {
     const req = request({ socketPath, method: 'POST', path: '/', signal: AbortSignal.timeout(timeout),
@@ -87,7 +90,7 @@ export async function requestTelegramService(socketPath, input, timeout = 55_000
       res.on('error', reject);
       res.on('data', chunk => {
         data += chunk;
-        if (data.length > 8192) req.destroy(new Error('Invalid Telegram office response.'));
+        if (Buffer.byteLength(data) > maxResponse) req.destroy(new Error('Invalid Telegram office response.'));
       });
       res.on('end', () => {
         try { resolve(JSON.parse(data)); } catch (error) { reject(error); }

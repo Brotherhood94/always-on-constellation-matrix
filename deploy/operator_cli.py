@@ -124,9 +124,10 @@ def setup_as_operator(data, *, passphrase=None):
             if current['select_agents'] and selection is None:
                 selection = select_agents(onboarding_profiles(settings))
             payload = {'selection': selection}
-            if selection and passphrase is None:
+            needs_matrix = bool(selection) or telegram_agent_selected(settings)
+            if needs_matrix and passphrase is None:
                 passphrase = password(settings)
-            session = matrix_session(current, passphrase) if selection else nullcontext()
+            session = matrix_session(current, passphrase) if needs_matrix else nullcontext()
             with session as token:
                 if token is not None:
                     payload['token'] = token

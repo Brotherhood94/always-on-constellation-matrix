@@ -6,7 +6,7 @@ WORKDIR /bridge
 RUN git init -q \
     && git fetch -q --depth=1 https://github.com/mautrix/telegram.git 8d85e547208fcdeae47b08f57bca0a7c8cf910af \
     && git checkout -q --detach FETCH_HEAD
-COPY chat-link.patch chat-link_test.go office-portal.patch telegram-groups.go element-rooms.patch contact-search.patch contact-search_test.go /tmp/
+COPY chat-link.patch chat-link_test.go office-portal.patch telegram-groups.go constellation-actions.go group-results.patch element-rooms.patch contact-search.patch contact-search_test.go /tmp/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go mod download maunium.net/go/mautrix \
     && cp -r "$(go env GOMODCACHE)/maunium.net/go/mautrix@v0.33.0" /mautrix \
@@ -15,9 +15,10 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     && patch -d /mautrix -p1 < /tmp/office-portal.patch \
     && patch -d /mautrix -p1 < /tmp/element-rooms.patch \
     && patch -p1 < /tmp/contact-search.patch \
+    && patch -p1 < /tmp/group-results.patch \
     && cp /tmp/chat-link_test.go /mautrix/bridgev2/commands/ \
     && cp /tmp/telegram-groups.go /mautrix/bridgev2/provisionutil/constellation_telegram.go \
-    && cp /tmp/contact-search_test.go pkg/connector/ \
+    && cp /tmp/contact-search_test.go /tmp/constellation-actions.go pkg/connector/ \
     && go mod edit -replace=maunium.net/go/mautrix=/mautrix \
     && go test maunium.net/go/mautrix/bridgev2/commands -run '^Test(OpenedChatLink|ResolvedTelegramTarget|TelegramGroupID)$' \
     && GOFLAGS='-p=2 -gcflags=go.mau.fi/mautrix-telegram/pkg/gotd/tg=-l' go test ./pkg/connector -run '^TestMatchingSavedContacts$' \

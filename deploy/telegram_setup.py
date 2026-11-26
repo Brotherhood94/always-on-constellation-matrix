@@ -1,5 +1,8 @@
 """Interactive bridge and Telegram Agent setup using the existing operator commands."""
 import argparse
+import getpass
+import json
+import tempfile
 import os
 from pathlib import Path
 from pwd import getpwnam
@@ -48,14 +51,24 @@ def setup(data, arguments=(), *, install_agent=True):
                     sudo_user = os.environ.get('SUDO_USER')
                     home = Path(getpwnam(sudo_user).pw_dir) if sudo_user else Path.home()
                     default = home / 'telegram-api.json'
-                    if not default.is_file():
-                        print('Open https://my.telegram.org/apps and get App api_id and App api_hash.\n'
-                              'Save them in a private JSON file with mode 0600. docs/telegram.md has an example.', flush=True)
-                    selected = input(f'Path to your private Telegram API file [{default}] ').strip()
-                    path = Path(selected).expanduser() if selected else default
+                    if default.is_file():
+                        path = default
+                        print('Using the existing private Telegram API credentials file.')
+                    else:
+                        print('Open https://my.telegram.org/apps and copy App api_id and App api_hash.', flush=True)
+                        try:
+                            api_id = int(input('Telegram App api_id: ').strip())
+                        except ValueError as error:
+                            raise ValueError('Enter the numeric Telegram App api_id') from error
+                        api_hash = getpass.getpass('Telegram App api_hash: ').strip()
+                        with tempfile.TemporaryDirectory(prefix='constellation-telegram-') as directory:
+                            credentials = Path(directory) / 'api.json'
+                            with open(credentials, 'x', opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
+                                json.dump({'api_id': api_id, 'api_hash': api_hash}, stream)
+                            telegram(data, ['prepare', str(credentials)])
+                        continue
                 if not path.is_file():
-                    print(f'Telegram API credentials file not found. Create it, then run:\n  {command}')
-                    return
+                    raise ValueError('The private Telegram API credentials file does not exist')
                 telegram(data, ['prepare', str(path.absolute())])
             elif stage == 'bridge':
                 print('Activating Telegram Bridge. Use your existing Matrix operator password when prompted.', flush=True)

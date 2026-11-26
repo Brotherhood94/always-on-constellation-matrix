@@ -43,18 +43,48 @@ function destination(value, type) {
 }
 
 export function telegramSendPayload(input) {
-  if (!input || !['direct', 'group'].includes(input.type) || typeof input.target !== 'string' ||
-      typeof input.text !== 'string' || !input.text.trim() || Buffer.byteLength(input.text) > 3500) return null;
+  if (!input || (input.type !== undefined && !['direct', 'group'].includes(input.type)) ||
+      typeof input.target !== 'string' || typeof input.text !== 'string' || !input.text.trim() ||
+      Buffer.byteLength(input.text) > 3500) return null;
   const target = input.target.trim();
   if (!target || Buffer.byteLength(target) > 120 || /[\p{Cc}\p{Cf}]/u.test(target)) return null;
-  return { target, type: input.type, text: input.text };
+  return { target, ...(input.type && { type: input.type }), text: input.text };
+}
+
+export function telegramTaskPayload(input) {
+  if (!input || typeof input !== 'object') return null;
+  const action = input.action ?? 'send';
+  if (['send', 'draft'].includes(action)) {
+    const message = telegramSendPayload(input);
+    return message && { ...(input.action && { action }), ...message };
+  }
+  if (action === 'list') return { action };
+  if (!['open', 'unlink', 'lookup', 'read', 'create_group', 'add_members'].includes(action) ||
+      typeof input.target !== 'string' ||
+      (input.type !== undefined && !['direct', 'group'].includes(input.type))) return null;
+  const target = destination(input.target, input.type);
+  if (!target) return null;
+  if (action === 'read') {
+    if (typeof input.question !== 'string' || !input.question.trim() || Buffer.byteLength(input.question) > 1000) return null;
+    return { action, ...target, question: input.question };
+  }
+  if (action === 'create_group' || action === 'add_members') {
+    if (target.type === 'direct' || !Array.isArray(input.members) || input.members.length < 1 || input.members.length > 20 ||
+        input.members.some(member => typeof member !== 'string' || !destination(member, 'direct') ||
+          destination(member, 'direct').type !== 'direct')) return null;
+    return { action, target: target.target, type: 'group', members: input.members.map(member => destination(member, 'direct').target) };
+  }
+  return { action, ...target };
 }
 
 export function telegramIntent(body, { office = false } = {}) {
   if (typeof body !== 'string' || Buffer.byteLength(body) > 4800 || /^\s*[>`]/u.test(body)) return null;
   let input = body.trim();
   if (office && !/\btelegram\b/iu.test(input)) return null;
-  const telegramPrefix = /^telegram\s*[,\-:]\s*/iu;
+  const legacyDraft = /^telegram\s+draft\s+(direct|group)\s+"([^"\r\n]+)"\s*:\s*([\s\S]+)$/iu.exec(input);
+  if (legacyDraft) return telegramTaskPayload({ action: 'draft', type: legacyDraft[1].toLowerCase(),
+    target: legacyDraft[2], text: legacyDraft[3] });
+  const telegramPrefix = /^telegram(?:\s*[,\-:]\s*|\s+(?=(?:add|open|remove|unlink|send|list)\b))/iu;
   const explicitChannel = telegramPrefix.test(input);
   input = input.replace(telegramPrefix, '').replace(/^(?:please|per favore),?\s+/iu, '');
   const findAndDraft = /^(?:find|look up) (.{1,120}?) on telegram and (?:prepare|draft) a (private )?message (?:saying|that says) ([\s\S]+)$/iu.exec(input);
@@ -62,6 +92,13 @@ export function telegramIntent(body, { office = false } = {}) {
   const plain = input.replace(/\s+(?:on|su) telegram[.!]?$/iu, '').replace(/[.!?]$/u, '');
   if (/^(?:list|show(?: me)?|elenca|mostrami)(?:\s+(?:my|the|le|mie))*\s+(?:(?:telegram\s+)?rooms|(?:stanze|chat)(?:\s+(?:di )?telegram)?)$/iu.test(plain)) {
     return { action: 'list' };
+  }
+  const create = /^(?:create (?:a )?(?:telegram )?group|crea (?:(?:un|il) )?gruppo(?: telegram)?) (?:named |called |chiamato )?(.+?) (?:with|con) (.+)$/iu.exec(plain);
+  const add = /^(?:add|invite|aggiungi|invita) (.+?) (?:to (?:the )?group|al gruppo|nel gruppo) (.+)$/iu.exec(plain);
+  if (create || add) {
+    const members = (create?.[2] ?? add[1]).split(/\s*,\s*|\s+(?:and|e)\s+/iu);
+    return telegramTaskPayload({ action: create ? 'create_group' : 'add_members',
+      target: create?.[1] ?? add[2], members });
   }
   const quotedSend = /^(?:send|invia|manda|scrivi)\s+(?:"([^"\r\n]+)"|“([^”\r\n]+)”|«([^»\r\n]+)»)\s+(?:to|ad?)\s+(@[a-z0-9_]{4,32})(\s+(?:(?:on|su)\s+)?telegram)?[.!]?$/iu.exec(input);
   if (quotedSend) {
@@ -79,7 +116,7 @@ export function telegramIntent(body, { office = false } = {}) {
     const text = exact[1] ?? exact[2] ?? exact[3];
     return dest?.type === 'direct' && text.trim() && Buffer.byteLength(text) <= 3500 ? { action: 'send', ...dest, text } : null;
   }
-  const draft = /^(?<verb>prepare|draft|send|prepara|scrivi|invia|manda)(?:\s+(?:a|an|un|una))?\s+(?:(?<private>private|privat[oa])\s+)?(?:(?:telegram\s+)?(?:message|messaggio|bozza|draft)(?:\s+(?<privateAfter>privat[oa]|private))?\s+)?(?:to|for|ad?|per|nel)\s+(?<target>[^\r\n]{1,130}?)(?:\s+(?:on|su) telegram)?(?:(?:\s+(?:saying|that says|dicendo|che dice|che)|\s*:\s+)\s*(?<text>[\s\S]+)|\s+(?:(?:con il testo(?: esatto)?|with (?:the )?(?:exact )?text)\s+)?(?<literal>["“«][\s\S]+))$/iu.exec(input);
+  const draft = /^(?<verb>prepare|draft|send|write|prepara|scrivi|invia|manda)(?:\s+(?:a|an|un|una))?\s+(?:(?<private>private|privat[oa])\s+)?(?:(?:telegram\s+)?(?:message|messaggio|bozza|draft)(?:\s+(?<privateAfter>privat[oa]|private))?\s+)?(?:to|for|ad?|per|nel)\s+(?<target>[^\r\n]{1,130}?)(?:\s+(?:on|su) telegram)?(?:(?:\s+(?:saying|that says|dicendo|che dice|che)|\s*:\s+)\s*(?<text>[\s\S]+)|\s+(?:(?:con il testo(?: esatto)?|with (?:the )?(?:exact )?text)\s+)?(?<literal>["“«][\s\S]+))$/iu.exec(input);
   if (draft) {
     const { verb, target, text, literal } = draft.groups;
     if (office && !explicitChannel && !/\btelegram\b/iu.test(input.slice(0, -(text ?? literal).length))) return null;
@@ -90,12 +127,15 @@ export function telegramIntent(body, { office = false } = {}) {
     if (literal && !quoted) return null;
     const message = quoted ? quoted[1] ?? quoted[2] ?? quoted[3] : value;
     return dest && message && Buffer.byteLength(message) <= 3500 ? {
-      action: /^(?:send|invia|scrivi|manda)$/iu.test(verb) ? 'send' : 'draft', ...dest, text: message,
+      action: /^(?:send|write|invia|scrivi|manda)$/iu.test(verb) ? 'send' : 'draft', ...dest, text: message,
     } : null;
   }
-  const summary = /^(?:summarize|summarise|what happened|give me an update|riassumi|aggiornami|cosa è successo)\b.*?\b(?:in|nel|nella|su|about)\s+(.+)$/iu.exec(plain);
+  const readChat = /^(?:leggi|riassumi|read|summarize) (?:la |the )?(?:conversazione|chat|conversation) (?:con|di|with) (.+)$/iu.exec(plain);
+  const summary = readChat ?? /^(?:summarize|summarise|read|what happened|give me an update|riassumi|leggi|aggiornami|cosa è successo)\b.*?\b(?:in|nel|nella|su|about)\s+(.+)$/iu.exec(plain);
   if (summary) {
-    const dest = destination(summary[1]);
+    const chat = summary[1].replace(/^(?:(?:the |la )?(?:chat|conversazione) (?:with|con|di) )/iu, '')
+      .replace(/\s+(?:today|yesterday|last 24 hours|last 7 days|oggi|ieri|nelle ultime 24 ore|negli ultimi 7 giorni)$/iu, '');
+    const dest = destination(chat);
     return dest && { action: 'read', ...dest, question: input };
   }
   const chatRequest = compact(plain).replace(/^chiedi (?:a|al) (?:telegram|teelgram) (?:agent|agente|agetn) di /iu, '');

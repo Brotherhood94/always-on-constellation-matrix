@@ -114,6 +114,12 @@ SQL
       "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/space.sql"
       "${config[@]}" space-reader "$TELEGRAM_DATA"
       "${compose[@]}" up -d --no-deps --build --wait --wait-timeout 120 "${bridge_recreate[@]}" telegram-bridge
+      if [[ ${2:-} == --refresh-bridge ]]; then
+        resolve_matrix_owner
+        if [[ $("${config[@]}" enable "$TELEGRAM_DATA") == changed ]]; then
+          "${stack[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 synapse
+        fi
+      fi
     fi
     "${compose[@]}" up -d --no-deps --build --force-recreate telegram-guide
     if [[ -f "$TELEGRAM_DATA/restart-connector" || -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
@@ -148,14 +154,14 @@ SQL
     ;;
   activate)
     [[ $# == 1 && -s "$TELEGRAM_DATA/bridge/registration.yaml" ]]
+    resolve_matrix_owner
     configure_office_bridge
     "${compose[@]}" build telegram-bridge
     previous=$(mktemp "$TELEGRAM_DATA/.synapse-config.XXXXXXXX")
     cp -p "$MATRIX_DATA/synapse/homeserver.yaml" "$previous"
     "${config[@]}" enable "$TELEGRAM_DATA"
     if "${compose[@]}" up -d --no-deps "${bridge_recreate[@]}" telegram-bridge &&
-       "${stack[@]}" restart synapse &&
-       "${stack[@]}" up -d --no-deps --wait --wait-timeout 120 synapse &&
+       "${stack[@]}" up -d --no-deps --force-recreate --wait --wait-timeout 120 synapse &&
        "${compose[@]}" up -d --no-deps --wait --wait-timeout 120 telegram-bridge; then
       rm -f -- "$previous"
     else

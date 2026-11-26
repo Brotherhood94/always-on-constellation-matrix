@@ -5,7 +5,7 @@ import { TelegramStore } from '../integrations/telegram/policy.mjs';
 import { telegramIntent, telegramMention } from '../agents/connector/telegram-intent.mjs';
 import { acceptedMessage, dotPlanKey, telegramOfficeAssignment } from '../agents/connector/matrix-routing.mjs';
 import { mentionMessage } from '../agents/connector/matrix-format.mjs';
-import { telegramReceipt } from '../agents/connector/telegram-office.mjs';
+import { telegramHandoffKey, telegramReceipt, telegramReceiptKey } from '../agents/connector/telegram-office.mjs';
 
 const domain = 'sample.test';
 const owner = `@operator:${domain}`;
@@ -67,9 +67,10 @@ test('the pinned requests and Italian Telegram requests have bounded intents', (
     { action: 'read', target: 'Sam', type: 'direct', question: 'Cosa è successo oggi nel privato Sam?' });
 });
 
-function fixture() {
+function fixture({ officeFirst = false } = {}) {
   const store = new TelegramStore(':memory:');
   const effects = [];
+  const originalEvents = new Map();
   const messages = new Map();
   const officeMessages = new Map();
   const officeReactions = new Map();
@@ -78,9 +79,10 @@ function fixture() {
   let prepareError;
   let clock = 1_000;
   const resolved = [{ peer: 'user:1001', name: 'Sam Example', room: '!sam:sample.test' }];
-  const settings = { domain, owner, agent, officeRoom, controlRoom };
+  const settings = { domain, owner, agent, officeRoom, controlRoom, officeFirst };
   const options = { store, settings, now: () => clock, checkRoom: async () => true,
     checkOffice: async () => true,
+    getOfficeEvent: async id => originalEvents.get(id),
     getBinding: async () => binding,
     prepareBinding: async (destination, id) => {
       effects.push({ action: 'prepare-binding', destination, id });
@@ -96,7 +98,10 @@ function fixture() {
       if (!messages.has(txn)) messages.set(txn, { id: '$msg' + (messages.size + 1), content });
       return messages.get(txn).id;
     },
-    postOffice: async (txn, content) => officeMessages.set(txn, content),
+    postOffice: async (txn, content) => {
+      officeMessages.set(txn, content);
+      return '$office-reply-' + officeMessages.size;
+    },
     reactOffice: async (txn, event, key) => {
       officeReactions.set(txn, { event, key });
       return txn;
@@ -110,7 +115,7 @@ function fixture() {
     },
   };
   broker = createTelegramDelegation(options);
-  return { store, effects, messages, officeMessages, officeReactions, resolved, broker: () => broker,
+  return { store, effects, messages, officeMessages, officeReactions, resolved, originalEvents, broker: () => broker,
     restart: () => { broker = createTelegramDelegation(options); },
     setBinding: value => { binding = value; }, failPreparation: error => { prepareError = error; }, advance: amount => { clock += amount; } };
 }
@@ -404,4 +409,104 @@ test('a short Italian send request queues one approval draft and does not delive
   assert.equal(queued.length, 1);
   assert.equal(JSON.parse(queued[0].payload).text, 'ciao bello');
   assert.deepEqual(f.effects, []);
+});
+
+function officeHandoff(f, id, body, sender = owner, structured) {
+  const manager = { name: 'Task Manager', id: caller.actor };
+  f.originalEvents.set(id, { event_id: id, type: 'm.room.message', sender,
+    content: { ...mentionMessage(body, manager), ...(structured && { [dotPlanKey]: { task_id: 'telegram-test', telegram: structured } }) } });
+  return { event_id: id + '-handoff', type: 'm.room.message', sender: manager.id,
+    content: { ...mentionMessage('Please handle this Telegram request.', { name: 'Telegram Agent', id: agent }),
+      [telegramHandoffKey]: { request: id }, 'm.relates_to': { rel_type: 'm.thread', event_id: id } } };
+}
+
+test('the Office handoff verifies the original sender and queues an exact send without a poll', async () => {
+  const f = fixture({ officeFirst: true });
+  const id = '$office-send-without-vote';
+  const handoff = officeHandoff(f, id, 'Scrivi a Sam su Telegram che domani sarà una bella giornata');
+  const input = { ...caller, id, method: 'submit', text: 'Send a different message on Telegram' };
+  assert.deepEqual(await f.broker().office(input), { status: 'pending', office: true });
+  await f.broker().tick();
+  assert.equal(f.store.get('SELECT count(*) AS count FROM control_request').count, 0);
+  assert.equal(await f.broker().receiveOffice({ ...handoff, sender: '@untrusted:sample.test' }), false);
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  await f.broker().tick();
+  const work = f.store.all('SELECT payload FROM control_request');
+  assert.equal(work.length, 1);
+  assert.equal(JSON.parse(work[0].payload).explicitSend, true);
+  assert.equal(JSON.parse(work[0].payload).text, 'domani sarà una bella giornata');
+  assert.equal(f.store.all('SELECT event FROM draft_review').length, 0);
+  assert.equal(f.messages.size, 0);
+});
+
+test('a Dot read reports its result in the original Office thread with a real Dot mention', async () => {
+  const f = fixture({ officeFirst: true });
+  const dot = '@dot:sample.test';
+  const id = '$office-read';
+  const handoff = officeHandoff(f, id, 'Telegram request', dot,
+    { action: 'read', target: 'Sam Example', question: 'What happened today?' });
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  await f.broker().tick();
+  assert.equal(JSON.parse(f.store.get('SELECT payload FROM control_request').payload).action, 'update');
+  assert.equal(f.broker().officeControlResult(id, true, 'Agreed to meet on Friday.'), true);
+  await f.broker().publishOffice();
+  const [reply] = f.officeMessages.values();
+  assert.deepEqual(reply['m.mentions'], { user_ids: [dot] });
+  assert.equal(reply['m.relates_to'].event_id, id);
+  assert.equal(reply[telegramReceiptKey].status, 'completed');
+  assert.match(reply.body, /meet on Friday/u);
+  assert.equal(f.messages.size, 0);
+});
+
+test('Office requests disambiguate in place and only the operator can choose the recipient', async () => {
+  const f = fixture({ officeFirst: true });
+  f.resolved.push({ peer: 'user:1002', name: 'Sam Example', room: '!sam2:sample.test' });
+  const id = '$ambiguous-office';
+  await f.broker().receiveOffice(officeHandoff(f, id, 'Telegram: send a message to Sam Example saying Hi.'));
+  await f.broker().tick();
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  const [reply] = f.officeMessages.values();
+  assert.equal(reply[telegramReceiptKey].status, 'needs_input');
+  assert.equal(reply['m.relates_to'].event_id, id);
+  const choice = { event_id: '$choice', type: 'm.room.message', sender: '@untrusted:sample.test',
+    content: { msgtype: 'm.text', body: 'scegli 2', 'm.relates_to': { rel_type: 'm.thread', event_id: id } } };
+  assert.equal(await f.broker().receiveOffice(choice), false);
+  assert.equal(await f.broker().receiveOffice({ ...choice, sender: owner }), true);
+  await f.broker().tick();
+  assert.equal(JSON.parse(f.store.get('SELECT payload FROM control_request').payload).verifiedBinding.room, '!sam2:sample.test');
+  assert.equal(f.messages.size, 0);
+});
+
+test('an explicit group request resolves participants, records the mutation and does not repeat it', async () => {
+  const f = fixture({ officeFirst: true });
+  const id = '$office-create-group';
+  const handoff = officeHandoff(f, id, 'Telegram: create a group called Project with @sample_contact.');
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  await f.broker().tick();
+  f.restart();
+  await f.broker().receiveOffice(handoff);
+  await f.broker().tick();
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  assert.deepEqual(f.effects, [{ id, action: 'create-group', target: 'Project', peer: undefined, members: ['user:1001'] }]);
+  const [reply] = f.officeMessages.values();
+  assert.equal(reply[telegramReceiptKey].status, 'completed');
+  assert.equal(reply['m.relates_to'].event_id, id);
+});
+
+test('a lost group mutation response is reported as unconfirmed and is never blindly replayed', async () => {
+  const f = fixture({ officeFirst: true });
+  const id = '$unknown-group-mutation';
+  const handoff = officeHandoff(f, id, 'Telegram: create a group called Workshop with @sample_contact.');
+  await f.broker().receiveOffice(handoff);
+  f.store.run('INSERT INTO telegram_remote_action(id) VALUES (?)', id);
+  await f.broker().tick();
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  assert.equal(f.effects.length, 0);
+  const [reply] = f.officeMessages.values();
+  assert.equal(reply[telegramReceiptKey].status, 'unconfirmed');
+  assert.match(reply.body, /has not confirmed/u);
 });

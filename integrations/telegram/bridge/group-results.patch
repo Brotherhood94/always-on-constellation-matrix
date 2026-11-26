@@ -1,0 +1,14 @@
+--- a/pkg/connector/startchat.go
++++ b/pkg/connector/startchat.go
+@@ -30,0 +31 @@
++	"maunium.net/go/mautrix/bridgev2/networkid"
+@@ -375,0 +377 @@
++		failed := make(map[networkid.UserID]*bridgev2.CreateChatFailedParticipant, len(invitedUsers.MissingInvitees))
+@@ -377,0 +380 @@
++			failed[ids.MakeUserID(invitee.UserID)] = &bridgev2.CreateChatFailedParticipant{Reason: "Telegram did not add this participant"}
+@@ -409,2 +412,3 @@
+-			PortalKey:  portalKey,
+-			PortalInfo: info,
++			PortalKey:          portalKey,
++			PortalInfo:         info,
++			FailedParticipants: failed,

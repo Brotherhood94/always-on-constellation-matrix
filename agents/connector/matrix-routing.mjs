@@ -3,7 +3,7 @@ import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
 import { acceptedManaged, managedReply, replyLimit } from './managed-task.mjs';
 import { acceptsContact } from './agent-catalog.mjs';
 import { applyDispatch } from './capability-dispatch.mjs';
-import { telegramIntent, telegramMention, telegramSendPayload } from './telegram-intent.mjs';
+import { telegramIntent, telegramMention, telegramTaskPayload } from './telegram-intent.mjs';
 
 export { mentionMessage, replyLimit };
 
@@ -24,7 +24,7 @@ export function telegramOfficeAssignment(event, { owner, planner, userId, name }
     const plan = content[dotPlanKey];
     if (content['m.relates_to'] || typeof plan?.task_id !== 'string' || !/^[a-z0-9_-]{8,80}$/iu.test(plan.task_id)) return null;
     if (Object.hasOwn(plan, 'telegram')) {
-      const telegram = telegramSendPayload(plan.telegram);
+      const telegram = telegramTaskPayload(plan.telegram);
       return telegram && { sender, telegram };
     }
     const start = text.indexOf('\n\n');
@@ -37,7 +37,7 @@ export function telegramOfficeAssignment(event, { owner, planner, userId, name }
   // Use forms understood by already running Telegram connectors.
   if (intent.type === 'direct' && /^@[a-z0-9_]{4,32}$/iu.test(intent.target)) {
     if (intent.action === 'open') text = 'Telegram: open ' + intent.target;
-    if (intent.action === 'send') text = `Telegram: send a private message to ${intent.target} saying "${intent.text}"`;
+    if (intent.action === 'send' && !/["\r\n]/u.test(intent.text)) text = `Telegram: send a private message to ${intent.target} saying "${intent.text}"`;
   }
   return { sender, text };
 }

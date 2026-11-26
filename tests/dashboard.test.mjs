@@ -181,22 +181,17 @@ test('Element guides include copyable commands and manage optional pins independ
   telegramState.entries['telegram-setup'] = { body: 'Set up Telegram', event: '$old-telegram-guide', revision: 'old' };
   await reconcileTelegramPin(matrix, telegramState, command);
   const guide = messages.get(telegramState.entries['telegram-setup'].event);
-  assert.match(guide.body, /https:\/\/my\.telegram\.org\/apps/);
-  assert.match(guide.body, /message box in Telegram Bridge.*\n!tg login qr\nTelegram Bridge replies.*QR code/u);
   assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
-  assert.match(guide.body, /!tg <your Telegram two-step verification password>/u);
-  assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram setup`));
-  assert.match(guide.body, /4\. Element · Ask Telegram Agent/u);
-  assert.match(guide.body, /mention Telegram Agent in Agents → Office/u);
-  assert.match(guide.formatted_body, /docs\/telegram\.md#start-the-drafting-agent">Finish Telegram Agent setup/u);
-  for (const sample of ['add Sam Example', 'open the private chat with @sample_contact', 'with ID 1001',
-    'add the Project Room group', 'prepare a private message', 'prepare a message for Project Room', 'summarize what I missed']) {
+  assert.match(guide.body, /two-step verification/u);
+  assert.ok(guide.body.includes(`${command.slice('sudo '.length)} setup-guide`));
+  assert.match(guide.body, /@Task Manager/u);
+  for (const sample of ['open the chat with @sample_contact', 'create a group called Project Room',
+    'add @sample_contact to the group', 'send a message to Project Room', 'summarize what I missed']) {
     assert.ok(guide.body.includes(sample));
   }
-  assert.doesNotMatch(guide.body, /5\. Element|6\. Element|!tg (pm|search|resolve-identifier|create-portal)|telegram bind/u);
+  assert.doesNotMatch(guide.body, /api_hash|telegram bind|approve a draft/u);
   assert.equal(guide['m.mentions'], undefined);
-  assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
   await reconcileTelegramPin(matrix, telegramState, command);
   assert.equal(messages.size, 3);
   assert.deepEqual(pinned, ['$telegram-operator', telegramState.entries['telegram-setup'].event]);

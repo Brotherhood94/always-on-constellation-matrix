@@ -58,6 +58,7 @@ office_provisioning() {
       -B /src/bridge_config.py office-provisioning /state
 }
 [[ $(office_provisioning) == changed ]]
+bridge_config_json | python3 -c 'import json, sys; assert json.load(sys.stdin)["bridge"]["relay"]["message_formats"]["m.text"] == "{{ .Message }}"'
 office_config=$(bridge_config_json | shasum -a 256)
 docker run --rm --network none -v "$state:/state" --entrypoint sh "$py" -c \
   'printf stale-key > /state/guide/office-bridge-key'
@@ -72,6 +73,7 @@ p=Path('/state/synapse/homeserver.yaml')
 data=yaml.safe_load(p.read_text())
 data['listeners']=[{'type':'http','port':8008,'tls':False,'resources':[{'names':['client']}]}]
 data['app_service_config_files']=['/state/bridge/registration.yaml']
+data['modules']=[{'module':'synapse_admission.TelegramAdmission','config':{'owner':'@operator:telegram.test'}}]
 data['enable_registration']=True
 data['enable_registration_without_verification']=True
 data['rc_registration']={'per_second': 1, 'burst_count': 10}
@@ -90,7 +92,7 @@ done
 docker exec "$postgres" pg_isready -h 127.0.0.1 -U synapse -d synapse >/dev/null
 docker run --rm --network none -v "$state:/state" -v "$src:/src:ro" --entrypoint python3 "$py" -B /src/bridge_config.py database-sql /state |
   docker exec -i "$postgres" psql -qX --set ON_ERROR_STOP=1 -U synapse -d postgres
-docker run -d --name "$synapse" --network "$network" --network-alias synapse -v "$state:/state" \
+docker run -d --name "$synapse" --network "$network" --network-alias synapse -e PYTHONPATH=/telegram -v "$state:/state" \
   -v "$src:/telegram:ro" -v "$src/../../deploy/matrix:/matrix:ro" --entrypoint python "$syn" \
   -m synapse.app.homeserver -c /state/synapse/homeserver.yaml >/dev/null
 for i in $(seq 1 45); do
@@ -151,6 +153,8 @@ for method, route, secret, body, code in [
     ('POST', 'create_dm/%40sample', 'invalid-key', None, 'M_UNKNOWN_TOKEN'),
     ('POST', 'constellation_membership/user%3A123', key, None, 'FI.MAU.NOT_LOGGED_IN'),
     ('POST', 'constellation_membership/user%3A123?prepare_relay=true', key, None, 'M_FORBIDDEN'),
+    ('POST', 'constellation_group_action/create-group', key, b'{"name":"Fixture","members":["user:1001"]}', 'FI.MAU.NOT_LOGGED_IN'),
+    ('POST', 'constellation_group_action/add-members', key, b'{"room":"!unverified:telegram.test","peer":"chat:1001","members":["user:1002"]}', 'M_FORBIDDEN'),
     ('PUT', 'constellation_membership/user%3A123', key, None, 'M_FORBIDDEN'),
 ]:
     endpoint = 'http://telegram-bridge:29317/_matrix/provision/v3/' + route + ('&' if '?' in route else '?') + 'user_id=%40operator%3Atelegram.test'
@@ -197,9 +201,9 @@ import { listenTelegramSocket } from './delegation.mjs';
 import { requestTelegramService } from '../agents/connector/telegram-office.mjs';
 const url = 'http://synapse:8008';
 const root = '/_matrix/client/v3';
-async function api(path, body, token) {
+async function api(path, body, token, method = 'POST') {
   const response = await fetch(url + root + path, {
-    method: 'POST', headers: {'content-type':'application/json', ...(token ? {authorization:'Bearer ' + token} : {})}, body:JSON.stringify(body),
+    method, headers: {'content-type':'application/json', ...(token ? {authorization:'Bearer ' + token} : {})}, body:JSON.stringify(body),
   });
   if (!response.ok) throw Error(path + ': ' + response.status + ' ' + (await response.json()).errcode);
   return response.json();
@@ -241,6 +245,7 @@ const device = 'TESTTELEGRAMAGENT';
 const agent = { ...await api('/login', {type:'m.login.password', identifier:{type:'m.id.user',user:'telegram-agent'},
   password:'fixture-long-password', device_id:device}), device };
 const dot = await register('dot');
+const taskManager = await register('task-manager');
 const bridgeBot = '@telegrambot:telegram.test';
 const botToken = (await readFile('/fixture/bridge/registration.yaml', 'utf8')).match(/^as_token:\s+(\S+)$/m)[1];
 const remoteDevice = 'FIXTURE_REMOTE';
@@ -256,9 +261,10 @@ async function privateRoom(token, invite, asUser) {
 const controlRoom = await privateRoom(agent.access_token, [b.user_id, bridgeBot]);
 await api('/join/' + encodeURIComponent(controlRoom), {}, b.access_token);
 await api('/join/' + encodeURIComponent(controlRoom) + '?user_id=' + encodeURIComponent(bridgeBot), {}, botToken);
-const officeRoom = await privateRoom(b.access_token, [agent.user_id, dot.user_id]);
+const officeRoom = await privateRoom(b.access_token, [agent.user_id, dot.user_id, taskManager.user_id]);
 await api('/join/' + encodeURIComponent(officeRoom), {}, agent.access_token);
 await api('/join/' + encodeURIComponent(officeRoom), {}, dot.access_token);
+await api('/join/' + encodeURIComponent(officeRoom), {}, taskManager.access_token);
 const {room_id: space} = await api('/createRoom', {preset:'private_chat', visibility:'private',
   creation_content:{type:'m.space','m.federate':false}, invite:[b.user_id]}, agent.access_token);
 await api('/join/' + encodeURIComponent(space), {}, b.access_token);
@@ -274,6 +280,22 @@ await spaceClient.doRequest('PUT', childRoute.replace(encodeURIComponent(portal)
   null, {via:['telegram.test']});
 await api('/join/' + encodeURIComponent(autoPortal), {}, b.access_token);
 await api('/join/' + encodeURIComponent(autoPortal), {}, remote.access_token);
+const admissionOwner = await api('/login', {type:'m.login.password', identifier:{type:'m.id.user',user:'operator'},
+  password:'fixture-long-password'});
+const admittedPortal = await privateRoom(botToken, [admissionOwner.user_id], bridgeBot);
+const admissionPath = '/rooms/' + encodeURIComponent(admittedPortal) + '/state/';
+const asBridge = '?user_id=' + encodeURIComponent(bridgeBot);
+const admittance = 'org.matrixconstellation.telegram.admission/';
+const bridgeState = { bridgebot: bridgeBot, channel: { id: 'user:1003' } };
+await api(admissionPath + 'm.bridge/fixture' + asBridge, bridgeState, botToken, 'PUT');
+await api(admissionPath + admittance + asBridge, { peer: 'user:1003', operator: admissionOwner.user_id }, botToken, 'PUT');
+for (let attempt = 0; attempt < 30; attempt++) {
+  const direct = await api('/user/' + encodeURIComponent(admissionOwner.user_id) + '/account_data/m.direct', undefined, admissionOwner.access_token, 'GET')
+    .catch(() => ({}));
+  if (direct['@telegram_1003:telegram.test']?.includes(admittedPortal)) break;
+  if (attempt === 29) throw new Error('Verified Telegram portal was not joined and classified automatically');
+  await delay(200);
+}
 const remoteClient = await connect(remote, 'remote');
 await remoteClient.applySync(await remoteClient.sync(null, 0), async () => {});
 const portalState = await fetch(url + root + portalRoute + '/state', {
@@ -304,6 +326,10 @@ const sockets = { TELEGRAM_HANDOFF_SOCKET: '/tmp/handoffs.sock', TELEGRAM_MCP_SO
   TELEGRAM_GUIDE_SOCKET: '/tmp/guide.sock', TELEGRAM_DOT_SOCKET: '/tmp/dot-requests.sock' };
 let relayPreparations = 0;
 const guide = await listenTelegramSocket(sockets.TELEGRAM_GUIDE_SOCKET, async input => {
+  if (input.action === 'history') {
+    assert.equal(input.target, autoPortal);
+    return { ok: true, complete: true, messages: [{ author: 'Fixture person', body: 'Meet by the station.', ts: Date.now() - 5000 }] };
+  }
   if (input.action === 'prepare-binding') {
     assert.equal(input.target, autoPortal);
     assert.equal(input.peer, 'user:1002');
@@ -360,8 +386,9 @@ acp.on('connection', ws => {
         send({ id, result: { stopReason: 'end_turn' } });
         return;
       }
-      assert.match(data, /telegram_prepare_draft/);
-      assert.equal((await requestTelegramService(sockets.TELEGRAM_MCP_SOCKET, { grant, tool: 'prepare_draft' })).status, 'queued');
+      const operation = /telegram_(prepare_draft|send_message|read_recent)/u.exec(data)?.[1];
+      assert.ok(operation);
+      assert.equal((await requestTelegramService(sockets.TELEGRAM_MCP_SOCKET, { grant, tool: operation })).status, 'queued');
       delegatedCalls++;
       send({ id, result: { stopReason: 'end_turn' } });
       return;
@@ -408,6 +435,10 @@ const store = new TelegramStore('/state/telegram.sqlite3');
 const worker = spawn(process.execPath, ['/app/service.mjs'], {stdio:'inherit', env: { ...process.env, ...sockets }});
 const workerExit = once(worker, 'exit');
 let binder;
+let officeWorker;
+let officeWorkerExit;
+let managerReader;
+let dotReader;
 async function waitFor(check, label) {
   for (let attempt = 0; attempt < 280; attempt++) {
     if (await check()) return;
@@ -432,6 +463,8 @@ try {
   const bindExit = once(binder, 'exit');
   await waitFor(() => store.setting('bind_sync_request'), 'a sync request after the portal join');
   assert.equal(store.binding('pilot'), undefined);
+  officeWorker?.kill('SIGTERM');
+  if (officeWorkerExit) await officeWorkerExit;
   worker.kill('SIGCONT');
   const [exit] = await bindExit;
   assert.equal(exit, 0);
@@ -447,6 +480,8 @@ try {
   assert.equal(store.command({ room:controlRoom, sender:b.user_id, event:'$fixture-draft', encrypted:true },
     { action:'draft', binding:'pilot', source:'$fixture-inbound' }, { controlRoom, owner:b.user_id }, now), true);
   const draft = store.saveCandidate(store.nextWork(now), 'A synthetic Telegram draft.', now);
+  officeWorker?.kill('SIGTERM');
+  if (officeWorkerExit) await officeWorkerExit;
   worker.kill('SIGCONT');
 
   let review;
@@ -765,12 +800,71 @@ try {
   await waitFor(() => store.binding('pilot').active === 0, 'the binding to pause after leaving');
   assert.equal(store.setting('pause_reason:pilot'), 'portal_membership_lost');
   console.log('Initial portal sync completed before activation, and later membership loss still paused the binding.');
+
+  worker.kill('SIGTERM');
+  await workerExit;
+  officeWorker = spawn(process.execPath, ['/app/service.mjs'], { stdio: 'inherit',
+    env: { ...process.env, ...sockets, TELEGRAM_OFFICE_FIRST: 'true' } });
+  officeWorkerExit = once(officeWorker, 'exit');
+  await waitFor(() => store.setting('office_first_enabled') === 'true', 'Office-first migration');
+  managerReader = await connect(taskManager, 'office-manager');
+  await managerReader.applySync(await managerReader.sync(null, 0), async () => {});
+  const sendRoot = (source, transaction, body, extra = {}) => source.encryptEvent(officeRoom, 'm.room.message', {
+    msgtype: 'm.text', body, 'm.mentions': { user_ids: [taskManager.user_id] }, ...extra,
+  }).then(cipher => source.put(officeRoom, transaction, cipher));
+  const assign = root => managerReader.encryptEvent(officeRoom, 'm.room.message', {
+    msgtype: 'm.text', body: '@Telegram Agent, handle the Telegram request.',
+    'm.mentions': { user_ids: [agent.user_id] },
+    'org.matrixconstellation.telegram.handoff': { request: root },
+    'm.relates_to': { rel_type: 'm.thread', event_id: root },
+  }).then(cipher => managerReader.put(officeRoom, 'handoff-' + root, cipher));
+  const requested = await sendRoot(reader, 'office-first-send', 'Task Manager: Telegram: manda un messaggio a Auto Pilot con il testo esatto «Hello from Office».');
+  await assign(requested);
+  let exactSend;
+  await waitFor(() => {
+    exactSend = store.get('SELECT * FROM draft WHERE control_event=?', requested);
+    return exactSend?.state === 'matrix_accepted';
+  }, 'a verified Office handoff to send without a poll');
+  assert.equal(exactSend.body, 'Hello from Office');
+  assert.equal(exactSend.room, autoPortal);
+  assert.equal(exactSend.attempts, 1);
+  assert.equal(store.get('SELECT 1 FROM draft_review WHERE draft=?', exactSend.id), undefined);
+  store.delivery(autoPortal, exactSend.event, 'SUCCESS', Date.now());
+  await waitFor(() => store.get('SELECT status FROM telegram_office_receipt WHERE id=?', requested)?.status === 'completed',
+    'Telegram Agent to complete the original Office thread');
+
+  dotReader = await connect(dot, 'office-dot');
+  await dotReader.applySync(await dotReader.sync(null, 0), async () => {});
+  const readRoot = await sendRoot(dotReader, 'office-first-read', 'Task Manager Telegram history request', {
+    'net.matrix_agents.dot_plan': { task_id: 'office-history-fixture', telegram:
+      { action: 'read', target: 'Auto Pilot', question: 'What happened today?' } },
+  });
+  await assign(readRoot);
+  await waitFor(async () => {
+    const next = await reader.sync(cursor, 0);
+    cursor = next.next_batch;
+    let found = false;
+    await reader.applySync(next, async (room, event, encrypted, failed) => {
+      if (room !== officeRoom || !encrypted || failed || event.sender !== agent.user_id ||
+          event.content?.['m.relates_to']?.event_id !== readRoot ||
+          event.content?.['org.matrixconstellation.telegram.receipt']?.status !== 'completed') return;
+      assert.deepEqual(event.content['m.mentions'], { user_ids: [dot.user_id] });
+      assert.match(event.content.body, /Telegram history/u);
+      found = true;
+    });
+    return found;
+  }, 'an encrypted history summary in the Dot task thread');
+  console.log('Office-first Task Manager handoff sent once without a poll and returned the history request to Dot in Office.');
 } finally {
   binder?.kill('SIGTERM');
+  officeWorker?.kill('SIGTERM');
+  if (officeWorkerExit) await officeWorkerExit;
   worker.kill('SIGCONT');
   worker.kill('SIGTERM');
   await workerExit;
   store.db.close();
+  managerReader?.close();
+  dotReader?.close();
   reader.close();
   remoteClient.close();
   guide.close();

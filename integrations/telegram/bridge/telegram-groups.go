@@ -25,6 +25,10 @@ func validTelegramPeer(peer string, allowed ...string) bool {
 	return false
 }
 
+func IsTelegramUserID(peer string) bool {
+	return validTelegramPeer(peer, "user")
+}
+
 func IsTelegramGroupID(peer string) bool {
 	return validTelegramPeer(peer, "chat", "channel")
 }
