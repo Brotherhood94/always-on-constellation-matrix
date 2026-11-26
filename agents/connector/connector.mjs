@@ -369,7 +369,7 @@ async function pollTelegram(client) {
   const result = telegramReceipt(await telegramRequest(row.id, 'status'));
   if (!result || (!result.office && !result.link && !telegramTerminal(result.status))) return;
   if (result.office) {
-    if (result.terminal || telegramTerminal(result.status)) store.finishTelegram(row.id, outcomeReaction[result.status === 'completed' ? 'completed' : 'blocked']);
+    if (result.terminal || telegramTerminal(result.status)) store.finishTelegram(row.id, null);
     else store.telegramProgress(row.id, result.status, Date.now());
     return;
   }

@@ -448,11 +448,14 @@ test('a Dot read reports its result in the original Office thread with a real Do
   const handoff = officeHandoff(f, id, 'Telegram request', dot,
     { action: 'read', target: 'Sam Example', question: 'What happened today?' });
   assert.equal(await f.broker().receiveOffice(handoff), true);
+  await f.broker().publishOffice();
+  assert.deepEqual([...f.officeReactions.values()], [{ event: handoff.event_id, key: '👀' }]);
   await f.broker().tick();
   assert.equal(JSON.parse(f.store.get('SELECT payload FROM control_request').payload).action, 'update');
   assert.equal(f.broker().officeControlResult(id, true, 'Agreed to meet on Friday.'), true);
   await f.broker().publishOffice();
-  const [reply] = f.officeMessages.values();
+  const reply = [...f.officeMessages.values()].at(-1);
+  assert.deepEqual([...f.officeReactions.values()], [{ event: id, key: '✅' }]);
   assert.deepEqual(reply['m.mentions'], { user_ids: [dot] });
   assert.equal(reply['m.relates_to'].event_id, id);
   assert.equal(reply[telegramReceiptKey].status, 'completed');

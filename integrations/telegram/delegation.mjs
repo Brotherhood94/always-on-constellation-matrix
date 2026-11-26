@@ -228,7 +228,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       if (state === row.status || !Object.hasOwn(telegramTaskStatus, state) || (!result.office && !result.link && !terminal)) continue;
       if (!await checkOffice()) return;
       const transaction = action => 'telegram-office-' + digest([row.id, action]);
-      const activity = row.activity ?? await reactOffice(transaction('activity'), row.id, '👀');
+      const activity = row.activity ?? await reactOffice(transaction('activity'), task.handoff ?? row.id, '👀');
       const detail = result.office && state !== 'pending' ? task.feedback : null;
       const body = detail || (result.office && state === 'needs_input' ? 'Choose the intended Telegram chat in this thread.' : telegramTaskStatus[state]);
       const sent = await postOffice(transaction(state), { ...(result.office && state !== 'pending'

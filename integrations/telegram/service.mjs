@@ -211,7 +211,9 @@ async function run() {
   const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom, officeFirst }, checkRoom, checkOffice,
     guide,
     getOfficeEvent: id => matrix.officeEvent(officeRoom, id),
-    recordOffice: (task, status) => recordContext('telegram:office_result', task.id, { status, handoff: task.handoff }),
+    recordOffice: (task, status, sent) => recordContext('telegram:office_result', task.id, {
+      request: task.id, handoff: task.handoff, result_event: sent, status,
+    }),
     post: async (transaction, content) => {
       const ciphertext = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', content);
       if (!await checkRoom()) throw new Error('Telegram Agent room changed');
