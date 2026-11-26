@@ -233,6 +233,7 @@ def reconcile_layout(root, domain, owner, operator, agents, *, bridge_active, se
     guide = root / 'guide'
     device_token(root, guide / 'token', domain, 'TELEGRAM_SETUP', 'Telegram Setup Guide')
     write(guide / 'room-id', (control + '\n').encode(), uid=991)
+    write(guide / 'space-id', (space + '\n').encode(), uid=991)
     bridge = previous.get('bridge')
     portals = binding_rooms(root)
     if bridge_active:

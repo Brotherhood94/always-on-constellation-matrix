@@ -16,7 +16,7 @@ services:
     <<: *worker
     build: ../../deploy/matrix/bot
     mem_limit: 256m
-    networks: [matrix]
+    networks: [matrix, database]
     environment:
       MATRIX_URL: http://synapse:8008
       MATRIX_SERVER_NAME: ${MATRIX_SERVER_NAME:-}

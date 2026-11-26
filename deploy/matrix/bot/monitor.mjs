@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import matrix from '@vector-im/matrix-bot-sdk';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
 import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from './pins.mjs';
+import { reconcileTelegramRooms } from './telegram-space.mjs';
 
 const {
   LogService, LogLevel, MatrixClient, RustSdkCryptoStorageProvider,
@@ -166,6 +167,28 @@ async function shortcuts({ client, roomId }) {
   }
 }
 
+let spaceDatabase;
+let spaceConnection;
+async function telegramRooms({ client, roomId }) {
+  const connection = (await readOptional(join(STATE_DIR, 'space-db')))?.trim();
+  if (connection !== spaceConnection) {
+    await spaceDatabase?.end();
+    spaceDatabase = undefined;
+    if (connection) {
+      const { Pool } = await import('pg');
+      spaceDatabase = new Pool({ connectionString: connection, max: 1,
+        connectionTimeoutMillis: 5000, statement_timeout: 5000 });
+      spaceDatabase.on('error', error => console.error('Telegram Space database connection:', error.code || error.name));
+    }
+    spaceConnection = connection;
+  }
+  if (!spaceDatabase) return;
+  const space = (await readFile(join(STATE_DIR, 'space-id'), 'utf8')).trim();
+  await reconcileTelegramRooms(client, spaceDatabase, {
+    space, domain: MATRIX_SERVER_NAME, owner: MATRIX_OWNER, guide: userId, control: roomId,
+  });
+}
+
 let sender;
 let wait = 5000;
 while (true) {
@@ -173,6 +196,7 @@ while (true) {
     sender ??= await initialize();
     if (!telegram) await deliver(sender);
     await shortcuts(sender);
+    if (telegram) await telegramRooms(sender);
     wait = 5000;
   } catch (error) {
     console.error('Matrix alert delivery retry:', error.body?.errcode || error.code || error.message);

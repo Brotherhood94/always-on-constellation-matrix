@@ -471,10 +471,10 @@ try {
   })).pinned[0]);
   const telegramInstructions = await eventually(() => readShortcut(telegramSetup, telegramControl));
   assert.match(telegramInstructions.body, /^Set up Telegram\n/u);
-  assert.match(telegramInstructions.body, /Approve and send/u);
   assert.match(telegramInstructions.body, /REPLACE_WITH_YOUR_API_HASH/u);
   assert.match(telegramInstructions.body, /Telegram Control and Telegram Bridge/u);
-  assert.match(telegramInstructions.body, /Found 1001 \/ Sample Contact.*use user:1001/u);
+  assert.match(telegramInstructions.formatted_body, /<pre><code>!tg pm @username<\/code><\/pre>/u);
+  assert.match(telegramInstructions.body, /Click the room link.*Once Telegram accepts it, the room appears in the Telegram Space/u);
   console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');
 
   assert.equal(await readShortcut(oldPins[1]), null, 'A new device cannot decrypt the original shortcut');

@@ -8,6 +8,7 @@ import sys
 import tempfile
 
 REGISTRATION = '/data/telegram-appservice.yaml'
+DATABASE_ROLES = ('matrix_telegram_bridge', 'matrix_telegram_audit', 'matrix_telegram_space')
 
 
 def write(path, value, mode=0o600, uid=None):
@@ -32,9 +33,12 @@ def load(path):
 
 def credentials(directory):
     path = directory / 'database.json'
-    if not path.exists():
-        write(path, {role: secrets.token_hex(32) for role in ('matrix_telegram_bridge', 'matrix_telegram_audit')})
-    return load(path)
+    current = load(path) if path.exists() else {}
+    missing = [role for role in DATABASE_ROLES if role not in current]
+    if missing:
+        current.update({role: secrets.token_hex(32) for role in missing})
+        write(path, current)
+    return current
 
 
 def generate(root, private):
@@ -82,13 +86,13 @@ def database_uri(root, role):
 
 def database_sql(root):
     for role, password in credentials(root).items():
-        if not re.fullmatch(r'[0-9a-f]{64}', password) or role not in ('matrix_telegram_bridge', 'matrix_telegram_audit'):
+        if not re.fullmatch(r'[0-9a-f]{64}', password) or role not in DATABASE_ROLES:
             raise SystemExit('Unexpected database role or credential format.')
         print(f"SELECT 'CREATE ROLE {role} LOGIN' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='{role}') \\gexec")
         print(f"ALTER ROLE {role} PASSWORD '{password}';")
     print("SELECT 'CREATE DATABASE matrix_telegram OWNER matrix_telegram_bridge ENCODING ''UTF8'' LC_COLLATE ''C'' LC_CTYPE ''C'' TEMPLATE template0' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='matrix_telegram') \\gexec")
     print('REVOKE CONNECT ON DATABASE matrix_telegram FROM PUBLIC;')
-    print('GRANT CONNECT ON DATABASE matrix_telegram TO matrix_telegram_audit;')
+    print('GRANT CONNECT ON DATABASE matrix_telegram TO matrix_telegram_audit, matrix_telegram_space;')
 
 
 def registration(root, action):
@@ -131,6 +135,8 @@ if __name__ == '__main__':
         generate(directory, *args)
     elif command == 'database-sql':
         database_sql(directory)
+    elif command == 'space-reader':
+        write(directory / 'guide/space-db', (database_uri(directory, 'matrix_telegram_space') + '\n').encode(), uid=991)
     elif command in ('enable', 'disable'):
         registration(directory, command)
     elif command in ('allow', 'disallow'):

@@ -92,6 +92,7 @@ for i in $(seq 1 45); do
 done
 docker exec "$bridge" bash -c '</dev/tcp/127.0.0.1/29317'
 docker exec -i "$postgres" psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$src/audit.sql"
+docker exec -i "$postgres" psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$src/space.sql"
 docker exec "$postgres" psql -qAXt -U synapse -d matrix_telegram -c 'SELECT count(*) FROM portal' | grep -Fxq 0
 if docker logs "$bridge" 2>&1 | rg -qi 'config validation failed|failed to start bridge'; then
   echo 'Bridge reported a startup error.' >&2
@@ -120,6 +121,10 @@ print('Pinned mautrix joined the installer-created encrypted Telegram Bridge DM.
 PY
 # Leave the AppService identity available, but isolate the following synthetic room from bridge automation.
 docker stop --timeout 3 "$bridge" >/dev/null
+docker run --rm --network "$network" --user 0:0 -v "$state:/fixture:ro" \
+  -v "$src/../../deploy/matrix/bot/telegram-space.mjs:/app/telegram-space.mjs:ro" \
+  -v "$src/tests/space-fixture.mjs:/app/space-fixture.mjs:ro" \
+  --entrypoint node "$connector_image" /app/space-fixture.mjs
 docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gid=991,mode=0700 \
   -v "$state:/fixture:ro" -v "$fixture:/acp-fixture:ro" \
   -v "$src/policy.mjs:/app/policy.mjs:ro" -v "$src/matrix.mjs:/app/matrix.mjs:ro" \

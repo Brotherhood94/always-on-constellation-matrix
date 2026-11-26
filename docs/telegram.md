@@ -1,6 +1,6 @@
 # Telegram integration
 
-This optional integration adds a private, top-level **Telegram** Space with **Telegram Control**, the **Telegram Bridge** DM, and the private rooms for verified chats. The Telegram connector is separate from `Agents` and attaches over scoped ACP to one persistent Constellation Instance running Amplifier. The integration is ready for an isolated deployment and requires live acceptance before operational use. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
+This optional integration adds a private, top-level **Telegram** Space with **Telegram Control**, the **Telegram Bridge** DM, and the rooms you use to send messages to Telegram. The optional drafting connector attaches over scoped ACP to one persistent Constellation Instance running Amplifier. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
 
 The installer joins your Matrix account to **Telegram** and **Telegram Control**. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
 
@@ -48,23 +48,23 @@ Enter your existing Matrix operator password to link the bridge DM. The command 
 
 ## Add a Telegram contact or group
 
-Each connected Telegram conversation has its own Matrix room, called a portal. The portal appears under **Telegram** once you bind it. Your contact continues to use their existing Telegram chat. Start with one trusted contact for the first delivery test.
+1. **Element.** Open **Telegram → Telegram Bridge** and send the command for the conversation you want to open. [Bridge room commands](https://github.com/mautrix/go/blob/v0.33.0/bridgev2/commands/startchat.go)
 
-1. **Element or Telegram.** Find and verify the destination’s **peer ID**, the numeric Telegram ID of the person or group you want to connect.
+   - **Private chat.** Send `!tg pm @username` with the person's Telegram username. If you only know their name, send `!tg search <name>`, check the profile, and use `!tg pm <number>` with the matching result's Telegram ID.
+   - **Group without topics.** In Telegram, copy a link to a message in the group. For `https://t.me/c/1234567890/42`, send `!tg create-portal channel:1234567890` in Telegram Bridge. Use the first number from the link. [Telegram message links](https://core.telegram.org/api/links#message-links)
+   - **Basic group or group with a public link.** In Telegram Desktop, open the group and choose **⋯ → Export chat history → JSON**. Check the chat name in `result.json` and use the top-level `id`. Send `!tg create-portal chat:<id>` for a basic group or `!tg create-portal channel:<id>` for a supergroup without topics. [Telegram Desktop export](https://telegram.org/blog/export-and-more) · [Export fields](https://core.telegram.org/import-export#chat)
 
-   - **Private chat.** In **Telegram → Telegram Bridge**, send `!tg resolve-identifier @<telegram-username>`. The bridge uses your default connected account. To choose another connected account, get its ID with `!tg list-logins` and use `!tg resolve-identifier <login-id> @<telegram-username>`. If the reply is **Found 1001 / Sample Contact**, check the profile and use `user:1001`. If you only know the name, try `!tg search <name>` and verify the matching profile before copying its ID. [Bridge lookup commands](https://github.com/mautrix/go/blob/ef9b6a2833c4/bridgev2/commands/startchat.go)
-   - **Supergroup without topics.** In Telegram, copy a link to a message in the group. For `https://t.me/c/1234567890/42`, use `channel:1234567890`. The last number identifies the message. [Telegram message links](https://core.telegram.org/api/links#message-links)
-   - **Basic group or a group without a numeric message link.** In Telegram Desktop, open the group and choose **⋯ → Export chat history → JSON**. In the resulting `result.json`, check the chat name and copy the top-level `id`. Use `chat:<peer-id>` for a basic group and `channel:<peer-id>` for a supergroup without topics. [Telegram Desktop export](https://telegram.org/blog/export-and-more) · [Export fields](https://core.telegram.org/import-export#chat)
+2. **Element.** Click the room link in the bridge’s reply and join if prompted. Check the name and recipient, then send a message in that room. Once Telegram accepts the message, the room appears in the **Telegram** Space. Your contact receives it in their existing Telegram conversation.
 
-2. **Element.** In **Telegram → Telegram Bridge**, send `!tg list-logins` and copy the login ID for your own connected Telegram account.
-3. **VPS terminal.** Allow the verified peer for the connected login. Replace the sample values with the peer and login you recorded.
+If the bridge has not found the group yet, send `!tg sync-chats`, wait for it to finish, then retry `!tg create-portal`. If you use multiple Telegram accounts, send `!tg list-logins` to find your own account ID and put it before the username or group ID in the command. [Telegram bridge group sync](https://github.com/mautrix/telegram/blob/8d85e547208fcdeae47b08f57bca0a7c8cf910af/pkg/connector/commands.go)
 
-   ```bash
-   sudo ./constellation_matrix telegram allow 'user:1001' '2002'
-   ```
+### Open a room on an incoming message
 
-4. **Telegram and Element.** Ask the contact or a group member to send a fresh test message in Telegram. Open the resulting portal in Element, accepting the room invitation if prompted. Check its name and membership, then send a short test reply in that room and confirm it arrives in the intended Telegram conversation. [Bridge configuration](https://docs.mau.fi/configs/mautrix-telegram/v26.11.html)
-5. **VPS terminal and Element.** If this is your first chat, [start the drafting agent](#start-the-drafting-agent). Then [bind the verified portal](#bind-verified-chats-to-the-telegram-space) to add it to **Telegram**. Repeat the allow and bind steps for each additional conversation.
+To let a new incoming message open a room, allow that specific chat. In Telegram Bridge, `!tg resolve-identifier @username` looks up the recipient ID. If the reply shows `Found 1001 / Sample Contact`, use `user:1001`. Use `!tg list-logins` to find your own Telegram account ID. Run this on the VPS with those two values, then open the room when a new message arrives.
+
+```bash
+sudo ./constellation_matrix telegram allow 'user:1001' '2002'
+```
 
 ## Start the drafting agent
 
@@ -91,7 +91,7 @@ The Telegram model uses a standalone Amplifier bundle. The connector records sco
 
 **Element.** Telegram Control is encrypted, invite-only, and non-federated. Its members are the operator, the connector, and the optional configured Dot account. In the verified portal, invite `@telegram-agent:<SERVER_NAME>` and enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins the portal during binding. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
-Keep a private binding file for each selected chat. Use `mode: draft` and `trigger: inbound` for the first DM. Use `mode: draft` and `trigger: request` for an eligible group. A basic group and a supergroup without topics are supported by the admission policy. A forum or broadcast channel needs its own mapping and acceptance.
+To let the drafting agent or Dot use a room, keep a private binding file for that chat. Use `mode: draft` and `trigger: inbound` for the first DM. Use `mode: draft` and `trigger: request` for an eligible group. A basic group and a supergroup without topics are supported by the admission policy. A forum or broadcast channel needs its own mapping and acceptance.
 
 ```json
 {
@@ -105,7 +105,7 @@ Keep a private binding file for each selected chat. Use `mode: draft` and `trigg
 }
 ```
 
-**VPS terminal.** Give each chat a unique `id`, such as `sam-private` or `project-group`. Set `peer` to the value you allowed and use the connected Telegram login ID for both `login` and `receiver`. In the portal in Element, find its **Internal Room ID** under **Room settings → Advanced** and use that as `room`. Save the binding as a private file. [Element room settings](https://docs.element.io/latest/element-support/matrix-rooms/managing-a-room-room-settings/)
+**VPS terminal.** Give each chat a unique `id`, such as `sam-private` or `project-group`. Set `peer` to its verified Telegram ID with the `user:`, `chat:`, or `channel:` prefix. Use the connected Telegram login ID for both `login` and `receiver`. In the portal in Element, find its **Internal Room ID** under **Room settings → Advanced** and use that as `room`. Save the binding as a private file. [Element room settings](https://docs.element.io/latest/element-support/matrix-rooms/managing-a-room-room-settings/)
 
 ```bash
 sudo ./constellation_matrix telegram bind /path/to/pilot-dm.json

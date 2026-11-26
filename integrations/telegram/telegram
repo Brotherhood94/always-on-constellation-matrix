@@ -33,6 +33,12 @@ resolve_matrix_owner() {
 case ${1:-} in
   start-guide)
     [[ $# == 1 && -s "$TELEGRAM_DATA/guide/token" && -s "$TELEGRAM_DATA/guide/room-id" ]]
+    if [[ -n $("${compose[@]}" ps --status running --quiet telegram-bridge) ]]; then
+      "${config[@]}" database-sql "$TELEGRAM_DATA" |
+        "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d postgres
+      "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/space.sql"
+      "${config[@]}" space-reader "$TELEGRAM_DATA"
+    fi
     "${compose[@]}" up -d --no-deps --build telegram-guide
     ;;
   prepare)
@@ -171,6 +177,7 @@ PYTHON
   deactivate)
     : > "$TELEGRAM_DATA/connector/paused"
     "${compose[@]}" --profile agent stop connector telegram-engine telegram-bridge
+    rm -f -- "$TELEGRAM_DATA/guide/space-db"
     "${config[@]}" disable "$TELEGRAM_DATA"
     "${stack[@]}" restart synapse
     ;;
