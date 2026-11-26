@@ -158,17 +158,14 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(guide.body, /message box in Telegram Bridge.*\n!tg login qr\nTelegram Bridge replies.*QR code/u);
   assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
-  assert.match(guide.body, /t\.me\/c\/1234567890\/42.*\n!tg create-portal channel:1234567890/u);
-  assert.match(guide.formatted_body, /<pre><code>!tg pm @username<\/code><\/pre>/u);
-  assert.match(guide.formatted_body, /<pre><code>!tg pm 1001<\/code><\/pre>/u);
-  assert.match(guide.body, /!tg search <name>/u);
-  assert.match(guide.body, /send this in Telegram Control.*\n!tg search Sample Name/u);
-  assert.match(guide.body, /--open command.*\n!tg resolve-identifier @username\n!tg resolve-identifier channel:1234567890/u);
-  assert.match(guide.body, /telegram add user:1001/u);
-  assert.match(guide.body, /Click the chat name in the bridge’s reply/u);
-  assert.match(guide.body, /Find the chat under Telegram → Rooms.*before sending a message/u);
-  assert.match(guide.body, /Optional · Set up drafts and approvals in Telegram Control/u);
-  assert.doesNotMatch(guide.body, /login-id|telegram allow|telegram bind/u);
+  assert.match(guide.body, /4\. Element · Ask Telegram Agent/u);
+  assert.match(guide.formatted_body, /docs\/telegram\.md#start-the-drafting-agent">Finish Telegram Agent setup/u);
+  for (const sample of ['add Sam Example', 'open the private chat with @sample_contact', 'with ID 1001',
+    'add the Project Room group', 'prepare a private message', 'prepare a message for Project Room', 'summarize what I missed']) {
+    assert.ok(guide.body.includes(sample));
+  }
+  assert.doesNotMatch(guide.body, /5\. Element|6\. Element|!tg (pm|search|resolve-identifier|create-portal)|telegram bind/u);
+  assert.equal(guide['m.mentions'], undefined);
   assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
   assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram activate`));
   await reconcileTelegramPin(matrix, telegramState, command);

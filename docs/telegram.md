@@ -1,20 +1,32 @@
 # Telegram integration
 
-This optional integration adds a private, top-level **Telegram** Space with **Telegram Control**, the **Telegram Bridge** DM, and your bridged Telegram rooms. The optional drafting connector attaches over scoped ACP to one persistent Constellation Instance running Amplifier. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
+This optional integration adds a private, top-level **Telegram** Space with **Telegram Agent**, the **Telegram Bridge** DM, and your bridged Telegram rooms. The optional drafting connector attaches over scoped ACP to one persistent Constellation Instance running Amplifier. [Acceptance evidence](acceptance.md#7-verify-optional-integrations)
 
-The installer joins your Matrix account to **Telegram** and **Telegram Control**. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
+The installer joins your Matrix account to **Telegram** and **Telegram Agent**. Open **Telegram → Telegram Agent → Pinned messages → Set up Telegram** for the copyable setup steps.
 
 Already set up? [Search for a Telegram user](#search-for-a-telegram-user), [use Telegram from Office](#use-telegram-from-office), [open a contact or group in Telegram Bridge](#add-a-telegram-contact-or-group), or [send a message](#write-to-a-contact-or-group).
 
+## Ask Telegram Agent
+
+In **Telegram → Telegram Agent**, select **@Telegram Agent** from Element’s mention picker. Adapt one of these examples to your chat.
+
+- “@Telegram Agent, add Sam Example to my Telegram rooms.” You can also specify `@sample_contact`, a numeric Telegram user ID, or a known group name or ID.
+- “@Telegram Agent, prepare a private message to Sam Example saying tomorrow works for me.”
+- “@Telegram Agent, summarize what I missed today in Project Room.”
+
+The agent uses the linked Telegram account to resolve contacts and groups. When several chats match, reply to the agent’s private thread with `telegram choose 2`, using the number it displayed. Opening a chat links it under **Telegram → Rooms**. To remove the link, ask the agent to unlink the chat from Telegram. Drafts and updates require a [verified chat binding](#bind-verified-chats-to-the-telegram-space). When you ask to send a message, review the draft and choose **Approve and send** in the private thread.
+
 ## Search for a Telegram user
 
-In **Telegram → Telegram Control**, send `!tg search Sample Name` and replace `Sample Name` with a name or Telegram username. The guide replies to your message with up to 10 matching names and numeric user IDs. This command uses your linked Telegram account and works before you set up the drafting agent.
+In **Telegram → Telegram Agent**, send `!tg search Sample Name` and replace `Sample Name` with a name or Telegram username. The guide replies to your message with up to 10 matching names and numeric user IDs. This command uses your linked Telegram account and works before you set up the drafting agent.
 
 The bridge checks saved contacts by name and username, then searches Telegram usernames if none match. Check the result before opening its chat. Copy the ID into `!tg pm 1001` in **Telegram Bridge**, or use `telegram add user:1001` after mentioning **@Task Manager** in **Office**. You can also search directly in **Telegram Bridge**. [Bridge search](https://github.com/mautrix/go/blob/v0.33.0/bridgev2/commands/startchat.go#L332-L370) · [Telegram search API](https://core.telegram.org/method/contacts.search)
 
 ## Use Telegram from Office
 
 In **Agents → Office**, choose **@Task Manager** from Element’s mention picker and append one command. On an older workspace with Manager, mention **@Manager**.
+
+You can also write “Find Sam Example on Telegram and prepare a private message saying tomorrow works for me.” Task Manager delegates to Telegram Agent and posts status and a link to the private thread in Office. Contact matches, summaries, and draft text appear in **Telegram → Telegram Agent**. The drafting connector must be configured for natural-language requests. The exact commands below remain available.
 
 | Action | Text after the mention |
 | --- | --- |
@@ -27,11 +39,11 @@ In **Agents → Office**, choose **@Task Manager** from Element’s mention pick
 
 For a private chat, you can also write “Add @username to Telegram Rooms” or “Aggiungi @username alle stanze di Telegram”. Task Manager opens one bridged room for that contact under **Telegram → Rooms**.
 
-The bridge uses the operator's linked Telegram account. Open a new room from Task Manager’s reply or **Telegram → Rooms**. For an undiscovered group, send `!tg sync-chats` in Telegram Bridge and retry. A basic group can be opened with `telegram add chat:<id>`. If several rooms share a name, remove one by its Matrix room ID. Removal unlinks the room, retains its history and membership, and blocks drafts for the room while it is unlinked. An explicit add can link it again.
+The bridge uses the operator's linked Telegram account. Open the result from the private Telegram Agent thread or find the new room under **Telegram → Rooms**. For an undiscovered group, send `!tg sync-chats` in Telegram Bridge and retry. A basic group can be opened with `telegram add chat:<id>`. If several rooms share a name, remove one by its Matrix room ID. Removal unlinks the room, retains its history and membership, and blocks drafts for the room while it is unlinked. An explicit add can link it again.
 
-If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. If you only know the name, use [Telegram Control search](#search-for-a-telegram-user) to find the numeric ID. The bridge can open a numeric ID when it knows the contact through your linked Telegram account. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
+If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. If you only know the name, use [Telegram Agent search](#search-for-a-telegram-user) to find the numeric ID. The bridge can open a numeric ID when it knows the contact through your linked Telegram account. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
 
-Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office command opens a private Telegram Control thread. Only the operator can approve and send the exact text there. For text you want to keep within Control, open **Telegram → Telegram Control** and send the draft command directly without a mention. Dot is optional for both paths.
+Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office draft command opens a private Telegram Agent thread. Only the operator can approve and send the exact text there. To keep your request private from the start, open **Telegram → Telegram Agent** and mention the agent there. The exact draft command also works in that room without a mention. Dot is optional for both paths.
 
 ## Get the Telegram API credentials
 
@@ -119,7 +131,7 @@ The Telegram model uses a standalone Amplifier bundle. The connector records sco
 
 ## Bind verified chats to the Telegram Space
 
-**Element.** Telegram Control is encrypted, invite-only, and non-federated. Its members are the operator, the connector, and the optional configured Dot account. In the verified portal, invite `@telegram-agent:<SERVER_NAME>` and enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins the portal during binding. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
+**Element.** Telegram Agent is encrypted, invite-only, and non-federated. Its members are the operator, the connector, and the optional configured Dot account. In the verified portal, invite `@telegram-agent:<SERVER_NAME>` and enable the operator's Telegram login as its relay with `!tg set-relay <login-id>`. The connector joins the portal during binding. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)
 
 To let the drafting agent or Dot use a room, keep a private binding file for that chat. Use `mode: draft` and `trigger: inbound` for the first DM. Use `mode: draft` and `trigger: request` for an eligible group. A basic group and a supergroup without topics are supported by the admission policy. A forum or broadcast channel needs its own mapping and acceptance.
 
@@ -141,11 +153,11 @@ To let the drafting agent or Dot use a room, keep a private binding file for tha
 sudo ./constellation_matrix telegram bind /path/to/pilot-dm.json
 ```
 
-Keep the connector running while binding. It completes a Matrix sync after joining the portal before the binding activates. When the command succeeds, open **Telegram** in Element and look for the contact or group’s portal alongside **Telegram Control**. A later sync gap or loss of membership pauses that binding. Use `report` to see the reason for a pause recorded by the connector.
+Keep the connector running while binding. It completes a Matrix sync after joining the portal before the binding activates. When the command succeeds, open **Telegram** in Element and look for the contact or group’s portal alongside **Telegram Agent**. A later sync gap or loss of membership pauses that binding. Use `report` to see the reason for a pause recorded by the connector.
 
-**Telegram and Element.** Have the test contact send a new message. In `Telegram Control`, check that the draft cites the test portal and review its destination and text. The operator selects **Approve and send** on that draft. Confirm exactly one message arrives in the intended Telegram chat with the expected attribution.
+**Telegram and Element.** Have the test contact send a new message. In `Telegram Agent`, check that the draft cites the test portal and review its destination and text. The operator selects **Approve and send** on that draft. Confirm exactly one message arrives in the intended Telegram chat with the expected attribution.
 
-`manual` records no automatic work. `draft` sends a candidate only into Control. `auto` queues a reply only in an explicitly configured binding, within its trigger, expiry, quota, audience, and outbox checks. The pilot starts with draft mode.
+`manual` records no automatic work. `draft` posts a candidate in Telegram Agent. `auto` queues a reply only in an explicitly configured binding, within its trigger, expiry, quota, audience, and outbox checks. The pilot starts with draft mode.
 
 ## Operate in Element
 
@@ -153,7 +165,7 @@ Keep the connector running while binding. It completes a Matrix sync after joini
 
 1. In Element, open **Telegram** and select the contact or group’s portal. Check the room name and the conversation before sending.
 2. Type a new message in that portal and press Enter. To respond to a specific message, choose **Reply** on it first. Messages sent from the portal can publish immediately to Telegram using the connected login.
-3. For a reviewed reply, switch to **Telegram Control** and follow the draft steps below. If Dot is enabled, you can also ask it to draft a new message to a connected chat, then approve it in Control.
+3. For a reviewed reply, switch to **Telegram Agent** and follow the draft steps below. If Dot is enabled, you can also ask it to draft a new message to a connected chat, then approve it in Control.
 
 ### Review and manage drafts
 
@@ -177,7 +189,7 @@ A Telegram relay uses the selected Telegram login with bridge attribution. Matri
 
 ## Repair an existing Telegram layout
 
-Run this from the updated checkout to repair the top-level **Telegram** Space, refresh the guide, and enable Telegram actions for the installed Task Manager. It also moves verified bridged chats already linked in Telegram into the **Rooms** category. The first build of a new bridge image can take several minutes. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
+Run this from the updated checkout to rename the existing room to **Telegram Agent**, refresh the guide, and update the bridge, the configured Telegram Agent, and Task Manager. It also moves verified bridged chats already linked in Telegram into the **Rooms** category. The first image build can take several minutes. Use your current Matrix operator password when prompted. Your existing room history, bindings, and approvals carry over.
 
 ```sh
 ./constellation_matrix telegram layout

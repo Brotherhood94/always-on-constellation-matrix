@@ -347,7 +347,7 @@ class InstallerTest(unittest.TestCase):
                     show_element_setup({**self.settings, 'dot': dot, 'telegram': telegram})
                 rendered = output.getvalue()
                 self.assertEqual('Pinned messages → Connect Dot' in rendered, dot)
-                self.assertEqual('Telegram → Telegram Control → Pinned messages' in rendered, telegram)
+                self.assertEqual('Telegram → Telegram Agent → Pinned messages' in rendered, telegram)
                 self.assertEqual(rendered.count('💬 Element Desktop'), 1)
                 self.assertNotIn('🔌 Dot · Secure MCP Tunnel', rendered)
                 self.assertNotIn('✈️ Telegram · Bridge and drafting agent', rendered)

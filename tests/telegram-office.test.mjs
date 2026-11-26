@@ -87,6 +87,7 @@ test('the private action socket is restricted and refuses malformed requests', a
     assert.equal((await stat(socket)).mode & 0o777, 0o600);
     assert.equal((await requestTelegramOffice(socket, '$test', { action: 'remove', target: '\nother' })).ok, false);
     assert.equal((await requestTelegramOffice(socket, '$test', { action: 'approve', target: 'Sample' })).ok, false);
+    assert.match((await requestTelegramOffice(socket, '$test', { action: 'list' })).message, /private Telegram Agent room/);
   } finally {
     if (server) await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     await rm(folder, { recursive: true, force: true });

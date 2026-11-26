@@ -90,7 +90,7 @@ async function initialize() {
     const options = { client, control: roomId, owner: MATRIX_OWNER, guide: userId, domain: MATRIX_SERVER_NAME,
       readKey: async () => (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim() };
     client.on('room.decrypted_event', (room, event) => {
-      telegramControlSearch(room, event, options).catch(() => console.error('Telegram Control search could not reply.'));
+      telegramControlSearch(room, event, options).catch(() => console.error('Telegram Agent search could not reply.'));
     });
   }
   client.start().catch(error => {
@@ -203,6 +203,7 @@ async function remindOffice({ client }) {
 let spaceDatabase;
 let spaceConnection;
 let officeSocket;
+let guideSocket;
 async function telegramRooms({ client, roomId }) {
   const connection = (await readOptional(join(STATE_DIR, 'space-db')))?.trim();
   if (connection !== spaceConnection) {
@@ -220,11 +221,13 @@ async function telegramRooms({ client, roomId }) {
   const options = {
     space, domain: MATRIX_SERVER_NAME, owner: MATRIX_OWNER, guide: userId, control: roomId,
   };
+  const socketOptions = async () => ({ ...options, client, database: spaceDatabase,
+    key: (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim() });
   if (!officeSocket && process.env.TELEGRAM_OFFICE_SOCKET) {
-    officeSocket = await listenTelegramOffice(process.env.TELEGRAM_OFFICE_SOCKET, async () => ({
-      ...options, client, database: spaceDatabase,
-      key: (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim(),
-    }));
+    officeSocket = await listenTelegramOffice(process.env.TELEGRAM_OFFICE_SOCKET, socketOptions);
+  }
+  if (!guideSocket && process.env.TELEGRAM_GUIDE_SOCKET) {
+    guideSocket = await listenTelegramOffice(process.env.TELEGRAM_GUIDE_SOCKET, socketOptions, { privateLookups: true });
   }
   if (spaceDatabase) await reconcileTelegramRooms(client, spaceDatabase, options);
 }

@@ -24,9 +24,11 @@ services:
       STATE_DIR: /state
       TELEGRAM_GUIDE: 'true'
       TELEGRAM_OFFICE_SOCKET: /office/actions.sock
+      TELEGRAM_GUIDE_SOCKET: /guide-actions/actions.sock
     volumes:
       - ${TELEGRAM_DATA:?}/guide:/state
       - ${TELEGRAM_DATA:?}/office:/office
+      - ${TELEGRAM_DATA:?}/guide-actions:/guide-actions
   telegram-bridge:
     <<: *worker
     image: constellation-telegram-bridge:26.11-chat-link
@@ -47,25 +49,36 @@ services:
     <<: *worker
     profiles: [agent]
     image: matrix-telegram-connector:0.2.1
-    build: .
+    build:
+      context: ../..
+      dockerfile: integrations/telegram/Dockerfile
     mem_limit: 384m
     networks: [matrix, database, engine, memory]
     environment:
       TELEGRAM_CONTEXT_ENABLED: ${TELEGRAM_CONTEXT_ENABLED:-false}
+      TELEGRAM_GUIDE_SOCKET: /guide-actions/actions.sock
+      TELEGRAM_HANDOFF_SOCKET: /telegram-handoffs/requests.sock
+      TELEGRAM_MCP_SOCKET: /telegram-mcp/tools.sock
     volumes:
       - ${TELEGRAM_DATA:?}/connector:/state
+      - ${TELEGRAM_DATA:?}/guide-actions:/guide-actions:ro
+      - ${TELEGRAM_DATA:?}/handoffs:/telegram-handoffs
+      - ${TELEGRAM_DATA:?}/mcp:/telegram-mcp
       - ${TELEGRAM_CONTEXT_TOKEN:-/dev/null}:/context-token:ro
   telegram-engine:
     <<: *worker
     profiles: [agent]
     image: matrix-telegram-engine:0.1.2
-    build: ./engine
+    build:
+      context: ../..
+      dockerfile: integrations/telegram/engine/Dockerfile
     mem_limit: 1g
     environment:
       TELEGRAM_MODEL: ${TELEGRAM_MODEL:-gpt-6.2-sol}
     volumes:
       - ${TELEGRAM_DATA:?}/instance:/instance
       - ${TELEGRAM_DATA:?}/exchange:/exchange
+      - ${TELEGRAM_DATA:?}/mcp:/telegram-mcp:ro
     networks: [engine, provider, workshop]
     healthcheck:
       test: [CMD, curl, --fail, --silent, --cacert, /exchange/ca.pem, 'https://telegram-engine:19443/']

@@ -73,7 +73,7 @@ async function searchTelegramUsers(query, owner, key, bridgeFetch) {
   }
   if (response.status === 429) return 'Telegram Bridge is rate-limited. Wait before trying the search again.';
   if ([401, 403, 404].includes(response.status)) {
-    return 'Search is unavailable through Telegram Control. Try Telegram Bridge or run ./constellation_matrix telegram layout on the VPS.';
+    return 'Search is unavailable through Telegram Agent. Try Telegram Bridge or run ./constellation_matrix telegram layout on the VPS.';
   }
   if (!response.ok || !data || (data.results !== null && !Array.isArray(data.results))) {
     return 'Telegram Bridge could not complete the search. Try a current Telegram username.';
@@ -83,12 +83,10 @@ async function searchTelegramUsers(query, owner, key, bridgeFetch) {
     const id = contact?.id;
     if (typeof id !== 'string' || !/^[1-9][0-9]{0,18}$/u.test(id) || matches.has(id)) continue;
     const name = typeof contact.name === 'string' ? contact.name.replace(/[\p{Cc}\p{Cf}]/gu, ' ').trim().slice(0, 100) : '';
-    matches.set(id, `• ${name || 'Telegram user'} · ${id}`);
+    matches.set(id, { peer: 'user:' + id, name: name || 'Telegram user' });
     if (matches.size === 10) break;
   }
-  if (!matches.size) return 'Telegram returned no matches. Try a current Telegram username.';
-  return ['Telegram search results (up to 10)', ...matches.values(), '',
-    'Check the name before using its ID with !tg pm in Telegram Bridge.'].join('\n');
+  return [...matches.values()];
 }
 
 // Pass only events from the Matrix client's decrypted-event handler.
@@ -103,9 +101,13 @@ export async function telegramControlSearch(room, event, options) {
   const command = /^!tg[ \t]+search(?:[ \t]+([^\r\n]*))?$/iu.exec(content.body.trim());
   if (!command || !(await privateTelegramControl(client, options))) return;
   const query = command[1]?.trim();
-  const body = bounded(query, 120) && !/[\x00-\x1f\x7f]/u.test(query)
+  const result = bounded(query, 120) && !/[\x00-\x1f\x7f]/u.test(query)
     ? await searchTelegramUsers(query, owner, await readKey(), bridgeFetch)
     : 'Use !tg search followed by a name or Telegram username, for example !tg search Sample Name.';
+  const body = !Array.isArray(result) ? result : !result.length
+    ? 'Telegram returned no matches. Try a current Telegram username.'
+    : ['Telegram search results (up to 10)', ...result.map(({ name, peer }) => `• ${name} · ${peer.slice(5)}`), '',
+      'Check the name before using its ID with !tg pm in Telegram Bridge.'].join('\n');
   if (!(await privateTelegramControl(client, options))) return;
   const payload = await client.crypto.encryptRoomEvent(control, 'm.room.message', {
     msgtype: 'm.text', body, 'm.relates_to': { 'm.in_reply_to': { event_id: id } },
@@ -117,14 +119,16 @@ export async function telegramControlSearch(room, event, options) {
 export async function telegramOfficeAction(input, options) {
   const { client, database, space, control, domain, owner, key, bridgeFetch = fetch } = options;
   if (!input || typeof input.id !== 'string' || !eventId.test(input.id) ||
-      !['add', 'remove', 'draft'].includes(input.action) || !bounded(input.target, 120) ||
-      /[\x00-\x1f]/u.test(input.target)) return fail('Use a Telegram username, group ID, room ID, or exact chat name.');
-  const target = input.target.trim();
+      !['add', 'remove', 'draft', 'resolve', 'list'].includes(input.action) ||
+      (input.action !== 'list' && (!bounded(input.target, 120) || /[\x00-\x1f]/u.test(input.target)))) {
+    return fail('Use a Telegram username, group ID, room ID, or exact chat name.');
+  }
+  const target = input.target?.trim();
   if (input.action === 'draft') {
     if (!['direct', 'group'].includes(input.type) || !bounded(input.text, 3500)) {
       return fail('Specify direct or group, the chat name, and a message of up to 3,500 bytes.');
     }
-    if (!(await privateTelegramControl(client, options))) return fail('Telegram Control is not ready.');
+    if (!(await privateTelegramControl(client, options))) return fail('Telegram Agent is not ready.');
     const payload = await client.crypto.encryptRoomEvent(control, 'm.room.message', {
       msgtype: 'm.text', body: `Draft requested from Office for ${target} (${input.type === 'direct' ? 'private chat' : 'group'}).\n\n${input.text}`,
       'org.matrixconstellation.telegram.request': { origin: 'office', action: 'compose',
@@ -133,26 +137,60 @@ export async function telegramOfficeAction(input, options) {
     const transaction = 'office-telegram-' + createHash('sha256').update(input.id).digest('hex');
     const result = await client.doRequest('PUT', roomRoute(control) + '/send/m.room.encrypted/' + transaction,
       null, payload, 15_000);
-    if (!result.event_id) return fail('Matrix did not confirm the Telegram Control request.');
-    return { ok: true, message: 'Draft requested. Open the Telegram Control thread to review the result and approve delivery.\n' +
+    if (!result.event_id) return fail('Matrix did not confirm the Telegram Agent request.');
+    return { ok: true, message: 'Draft requested. Open the Telegram Agent thread to review the result and approve delivery.\n' +
       matrixLink(control, result.event_id) };
   }
   if (!database || !matrixRoom.test(space ?? '')) return fail('Activate Telegram Bridge before managing Telegram rooms.');
   const state = await telegramSpaceState(client, options);
   if (!state) return fail('The private Telegram Space is not ready.');
   const route = roomRoute(space) + '/state/m.space.child/';
-  const names = value => value?.normalize('NFKC').toLowerCase();
+  const names = value => value?.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
   const linked = new Set(state.filter(event => event.type === 'm.space.child' &&
     event.content?.via?.length).map(event => event.state_key));
   const { rows } = await database.query('SELECT room, peer, name FROM telegram_space_sent_portal WHERE owner = $1', [owner]);
   const eligible = rows.filter(({ room }) => matrixRoom.test(room) && room !== control && room !== space);
+  if (input.action === 'list') return { ok: true, rooms: eligible.filter(({ room }) => linked.has(room)).slice(0, 31)
+    .map(room => ({ ...room, name: room.name?.slice(0, 120) })) };
+  if (input.action === 'resolve') {
+    const link = groupLink.exec(target);
+    const selector = link ? 'channel:' + link[1] : target;
+    const rows = eligible.filter(({ room, peer, name }) => linked.has(room) &&
+      (peer === selector || room === selector || names(name) === names(selector)));
+    if (input.linkedOnly && !username.test(selector)) return { ok: true, rooms: rows.slice(0, 11) };
+    if (groupId.test(selector) || userPeer.test(selector)) {
+      if (rows.length) return { ok: true, rooms: rows };
+      if (input.forOpening) return { ok: true, rooms: [{ peer: selector, name: selector }] };
+      return { ok: true, rooms: [] };
+    }
+    if (username.test(selector)) {
+      if (!key) return fail('Activate Telegram Bridge before looking up a username.');
+      const response = await bridgeFetch(bridgeProvisioning + 'resolve_identifier/' + encodeURIComponent(selector) +
+        '?' + new URLSearchParams({ user_id: owner }), { redirect: 'error', headers: { authorization: 'Bearer ' + key },
+        signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) return bridgeOpenFailure(response, true);
+      const result = await response.json();
+      if (typeof result.id !== 'string' || !userPeer.test('user:' + result.id)) return fail('Telegram returned an invalid user ID.');
+      const peer = 'user:' + result.id;
+      const known = eligible.filter(row => row.peer === peer && linked.has(row.room));
+      return { ok: true, rooms: known.length || input.linkedOnly ? known : [{ peer, name: result.name || selector }] };
+    }
+    const groups = input.type === 'direct' ? [] : (await database.query(
+      'SELECT room, peer, name FROM telegram_space_known_group WHERE owner = $1 AND lower(name) = lower($2) ORDER BY peer LIMIT 11',
+      [owner, selector])).rows;
+    if (input.type === 'group') return { ok: true, rooms: [...rows, ...groups].filter(row => !row.peer.startsWith('user:')) };
+    const contacts = await searchTelegramUsers(selector, owner, key, bridgeFetch);
+    if (!Array.isArray(contacts)) return fail(contacts);
+    return { ok: true, rooms: [...rows, ...groups, ...contacts] };
+  }
   if (input.action === 'remove') {
     const exact = eligible.filter(({ room, peer }) => room === target || peer === target);
     const matches = [...new Set((exact.length ? exact : eligible.filter(({ name }) => names(name) === names(target)))
-      .filter(({ room }) => linked.has(room)).map(({ room }) => room))];
+      .filter(({ room }) => linked.has(room) || (input.retryByRoom === true && room === target &&
+        state.some(event => event.type === 'm.space.child' && event.state_key === room))).map(({ room }) => room))];
     if (matches.length !== 1) return fail(matches.length ?
       'More than one room matches. Use its Matrix room ID or Telegram peer ID.' : 'No linked Telegram room matches.');
-    await client.doRequest('PUT', route + encodeURIComponent(matches[0]), null, {}, 15_000);
+    if (linked.has(matches[0])) await client.doRequest('PUT', route + encodeURIComponent(matches[0]), null, {}, 15_000);
     return { ok: true, message: 'Room removed from the Telegram Space. Its history is retained. Draft delivery is unavailable while it is unlinked.' };
   }
   const group = groupLink.exec(target);
@@ -174,13 +212,15 @@ export async function telegramOfficeAction(input, options) {
   if (!matrixRoom.test(room ?? '') || room === space || room === control) return fail('The bridge did not return a Telegram room.');
   const verified = await database.query('SELECT peer FROM telegram_space_sent_portal WHERE owner = $1 AND room = $2', [owner, room]);
   if (!verified.rows.length) return fail('The bridge did not verify the chat as an eligible Telegram room.');
-  if (userId && !verified.rows.some(row => row.peer === peer)) return fail('The room did not match the requested Telegram user ID.');
+  if ((userId || !direct) && !verified.rows.some(row => row.peer === peer)) {
+    return fail(`The room did not match the requested Telegram ${direct ? 'user' : 'group'} ID.`);
+  }
   if (!linked.has(room)) await client.doRequest('PUT', route + encodeURIComponent(room),
     null, { via: [domain], suggested: false }, 15_000);
   return { ok: true, message: 'Room opened under Telegram → Rooms. Join if Element prompts you.\n' + matrixLink(room) };
 }
 
-export async function listenTelegramOffice(path, options) {
+export async function listenTelegramOffice(path, options, { privateLookups = false } = {}) {
   await unlink(path).catch(error => { if (error.code !== 'ENOENT') throw error; });
   let pending = Promise.resolve();
   const server = createServer(async (req, res) => {
@@ -199,7 +239,12 @@ export async function listenTelegramOffice(path, options) {
           chunks.push(chunk);
         }
         const input = JSON.parse(Buffer.concat(chunks).toString());
-        const task = pending.then(async () => telegramOfficeAction(input, await options()));
+        const task = pending.then(async () => {
+          if (!privateLookups && ['resolve', 'list'].includes(input?.action)) {
+            return fail('Chat lookup is available in the private Telegram Agent room.');
+          }
+          return telegramOfficeAction(input, await options());
+        });
         pending = task.catch(() => {});
         result = await task;
       }

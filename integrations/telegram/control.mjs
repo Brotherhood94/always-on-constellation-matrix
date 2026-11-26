@@ -93,7 +93,7 @@ export function historyRange(question, now) {
 }
 
 export function matrixLink(room, event) {
-  return 'https://matrix.to/#/' + encodeURIComponent(room) + '/' + encodeURIComponent(event);
+  return 'https://matrix.to/#/' + encodeURIComponent(room) + (event ? '/' + encodeURIComponent(event) : '');
 }
 
 function html(value) {

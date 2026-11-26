@@ -26,6 +26,9 @@ export class Store {
         PRIMARY KEY (assignment, path)
       );
       CREATE TABLE IF NOT EXISTS context_outbox (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS office_telegram (
+        id TEXT PRIMARY KEY, thread TEXT NOT NULL, status TEXT, checked INTEGER NOT NULL DEFAULT 0
+      );
     `);
     const columns = this.db.prepare('PRAGMA table_info(inbox)').all().map(column => column.name);
     if (!columns.includes('request')) this.db.exec('ALTER TABLE inbox ADD COLUMN request TEXT');
@@ -146,6 +149,32 @@ export class Store {
     return this.db.prepare('SELECT id, payload FROM context_outbox ORDER BY rowid LIMIT 1').get();
   }
 
+  trackTelegram(event) {
+    this.db.prepare('INSERT OR IGNORE INTO office_telegram(id,thread) VALUES (?,?)').run(event.id, event.thread);
+  }
+
+  nextTelegram() {
+    return this.db.prepare('SELECT * FROM office_telegram ORDER BY checked LIMIT 1').get();
+  }
+
+  telegramProgress(event, status, checked) {
+    this.db.prepare('UPDATE office_telegram SET status=?,checked=? WHERE id=?').run(status, checked, event);
+  }
+
+  finishTelegram(event, outcomeKey, evidence) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      this.db.prepare('DELETE FROM office_telegram WHERE id=?').run(event);
+      this.db.prepare('UPDATE assignment_reactions SET outcome_key=? WHERE assignment=?').run(outcomeKey, event);
+      if (evidence) this.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)')
+        .run(evidence.idempotency_key, JSON.stringify(evidence));
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
+  }
+
   evidenceSent(id) {
     this.db.prepare('DELETE FROM context_outbox WHERE id=?').run(id);
   }
@@ -156,6 +185,7 @@ export class Store {
                                   outcome_key AS outcomeKey, outcome_id AS outcomeId
                              FROM assignment_reactions JOIN inbox ON assignment=inbox.id
                              WHERE inbox.sent IS NOT NULL AND
+                               NOT EXISTS(SELECT 1 FROM office_telegram WHERE office_telegram.id=inbox.id) AND
                                ((activity_id IS NOT NULL AND activity_removed=0) OR
                                 (outcome_key IS NOT NULL AND outcome_id IS NULL))
                              ORDER BY inbox.rowid LIMIT 1`).get();

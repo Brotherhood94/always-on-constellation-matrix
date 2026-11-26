@@ -26,7 +26,7 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
   const agent = '@telegram-agent:' + serverName;
   if (!/^![^\s\x00-\x1f]{1,254}$/u.test(control.room) ||
       !/^@[a-z0-9._=/-]+:[^\s]+$/u.test(control.owner) || !control.owner.endsWith(':' + serverName) ||
-      [agent, userId].includes(control.owner)) throw new Error('Invalid Telegram Control configuration.');
+      [agent, userId].includes(control.owner)) throw new Error('Invalid Telegram Agent configuration.');
   control.members = [control.owner, userId, agent];
   db.exec(`
     CREATE TABLE IF NOT EXISTS telegram_requests (
@@ -48,7 +48,7 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
       if (!client) return failure('Dot is connecting to Matrix. Retry with the same request ID.');
       try {
         const state = await client.getRoomState(control.room);
-        if (!verifyTelegramControlState(state, control)) return failure('Telegram Control membership or encryption could not be verified.');
+        if (!verifyTelegramControlState(state, control)) return failure('Telegram Agent membership or encryption could not be verified.');
         const requestText = payload.action === 'compose' ? 'Prepare a message' : 'Request an update';
         const description = `: ${requestText} for ${payload.destination} (${payload.chat_type}).`;
         eventId = await sendEncrypted(client, control.room, hash('dot-telegram:' + requestId), {
@@ -75,14 +75,14 @@ export async function createTelegramTools({ state, serverName, userId, db, sendE
       };
       const annotations = { idempotentHint: true, destructiveHint: false, openWorldHint: false };
       server.registerTool('prepare_telegram_message', {
-        description: 'Queue an exact new or reply message in private Telegram Control for the operator to approve in Element. This tool cannot send to Telegram. Ask for one exact destination if unclear.',
+        description: 'Queue an exact new or reply message in private Telegram Agent for the operator to approve in Element. This tool cannot send to Telegram. Ask for one exact destination if unclear.',
         inputSchema: { ...shared,
           text: z.string().min(1).refine(value => !!value.trim() && Buffer.byteLength(value) <= 3500),
           source_event: z.string().regex(event).optional().describe('Optional Matrix event ID of a received message in this same connected chat.'),
         }, annotations,
       }, ({ request_id, ...input }) => queue(request_id, { action: 'compose', ...input }, response, failure));
       server.registerTool('request_telegram_update', {
-        description: 'Ask Telegram Agent for a read-only update from one connected Telegram chat. The result is posted only in Telegram Control in Element and mentions the operator and Dot. This tool does not return chat contents.',
+        description: 'Ask Telegram Agent for a read-only update from one connected Telegram chat. The result is posted only in Telegram Agent in Element and mentions the operator and Dot. This tool does not return chat contents.',
         inputSchema: { ...shared, question: z.string().trim().min(1).refine(value => Buffer.byteLength(value) <= 1000) },
         annotations,
       }, ({ request_id, ...input }) => queue(request_id, { action: 'update', ...input }, response, failure));

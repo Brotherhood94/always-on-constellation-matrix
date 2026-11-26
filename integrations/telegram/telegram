@@ -14,7 +14,9 @@ stack=(docker compose --project-directory "$stack_dir")
 compose=(docker compose -p "${TELEGRAM_PROJECT:-matrix-telegram}" -f "$dir/compose.yaml")
 config=(python3 -B "$dir/bridge_config.py")
 install -d -m 0711 "$TELEGRAM_DATA"
-install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/office"
+install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/office" "$TELEGRAM_DATA/guide-actions" \
+  "$TELEGRAM_DATA/handoffs" "$TELEGRAM_DATA/mcp"
+install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/guide-actions"
 exec 9>"$TELEGRAM_DATA/operator.lock"
 flock -n 9 || { echo 'Another Telegram operator command is running.' >&2; exit 1; }
 
@@ -59,6 +61,9 @@ case ${1:-} in
     fi
     "${compose[@]}" up -d --no-deps --build telegram-guide
     if [[ -n $("${compose[@]}" --profile agent ps --status running --quiet connector) ]]; then
+      if [[ ${2:-} == --refresh-bridge ]]; then
+        "${compose[@]}" --profile agent up -d --no-deps --build --wait --wait-timeout 120 telegram-engine
+      fi
       "${compose[@]}" --profile agent up -d --no-deps --build connector
     fi
     ;;

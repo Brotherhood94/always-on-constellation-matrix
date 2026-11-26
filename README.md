@@ -51,7 +51,7 @@ Run `./constellation_matrix setup-guide` to resume onboarding or append `--print
 ### Finish in Element
 
 - **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Telegram Control → Pinned messages.** Open **Set up Telegram**. Use **Telegram Bridge** or ask **Task Manager** in Office to open contacts and groups. Find the chats under **Telegram → Rooms** and approve outbound drafts in **Telegram Control**. [Telegram setup](docs/telegram.md)
+- **Telegram → Telegram Agent → Pinned messages.** Open **Set up Telegram**. Mention **@Telegram Agent** there or ask **@Task Manager** in Office to find a contact, open a chat, or prepare a draft. Opened chats appear under **Telegram → Rooms**, and outbound drafts are reviewed in **Telegram Agent**. [Telegram setup and examples](docs/telegram.md)
 
 ### Send your first task
 
@@ -186,7 +186,7 @@ For unattended provisioning, edit the example configuration, check it with `./co
 | Upgrade an existing team | Preview with `sudo ./constellation_matrix agent migrate-team`. [Migration and recovery](docs/team.md#upgrade-an-existing-team) |
 | Ask for VPS maintenance | Mention **VPS Manager** in Office or ask Task Manager to delegate. Review the action in the private [Root Operations chat](integrations/root/README.md). |
 | Trace an Office task | Open [Context Intelligence](integrations/context-execution/README.md) to see who handed off the work, whether the recipient accepted it, and how the original assignee closed the task. |
-| Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Control](docs/telegram.md) for drafts and updates from approved chats. |
+| Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Agent](docs/telegram.md) for drafts and updates from approved chats. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
 | Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
 
@@ -204,8 +204,8 @@ Use the same checkout on the VPS and on an Ubuntu worker joined to your tailnet.
 ## Planned features
 
 - Copy files from workspaces and approved folders to the shared desktop from local and remote agents. The plan includes approval for protected agents. [Shared desktop copy plan](next_features_plans/plan.md#shared-desktop-file-copying)
-- Match natural-language requests in ChatGPT or Element to a verified Telegram chat, and ask when several registered chats match.
-- Show the full destination in Telegram Control for 10 seconds, then send without a separate approval.
+- Route natural-language requests from ChatGPT to a verified Telegram chat and ask when several registered chats match.
+- Show the full destination in Telegram Agent for 10 seconds, then send without a separate approval.
 - Attach a named file from the VPS shared desktop to a Telegram message.
 
 [Telegram feature plan](next_features_plans/plan.md#send-telegram-messages-through-dot)

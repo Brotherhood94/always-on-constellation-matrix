@@ -150,7 +150,7 @@ def integration_status():
         return {}
     monitored = {"context": "Context Intelligence", "neo4j": "Neo4j", "synapse": "Matrix",
                  "dot": "Dot", "monitor": "VPS Alerts", "persona-workshop": "Persona Workshop",
-                 "connector": "Telegram Control", "telegram-bridge": "Telegram bridge",
+                 "connector": "Telegram Agent", "telegram-bridge": "Telegram bridge",
                  "telegram-engine": "Telegram engine", "telegram-guide": "Telegram guide"}
     status = {}
     for item in json.loads(command("docker", "inspect", *ids)):

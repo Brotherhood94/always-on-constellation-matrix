@@ -25,9 +25,9 @@ jobs:
           MATRIX_OPERATIONS_SMOKE=1 MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" tests/synapse-smoke
       - run: bash integrations/root/tests/run
       - run: MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" bash integrations/context-execution/tests/isolated
-      - run: docker build -t matrix-telegram-connector:0.2.1 integrations/telegram
+      - run: docker build -t matrix-telegram-connector:0.2.1 -f integrations/telegram/Dockerfile .
       - run: bash integrations/telegram/tests/bridge-smoke
-      - run: docker build -t matrix-telegram-engine:0.1.2 integrations/telegram/engine
+      - run: docker build -t matrix-telegram-engine:0.1.2 -f integrations/telegram/engine/Dockerfile .
       - run: bash integrations/telegram/tests/engine-smoke
       - run: sudo apt-get update && sudo apt-get install -y restic
       - run: sudo env VERIFY_RESTIC=1 bash tests/install-smoke
@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t constellation-office-connector:0.22.17 agents/connector
-      - run: docker build -t constellation-amplifier-base:0.22.17 integrations/telegram/engine
+      - run: docker build --target amplifier-base -t constellation-amplifier-base:0.22.17 -f integrations/telegram/engine/Dockerfile .
       - run: docker build -t constellation-office-engine:0.22.17 -f agents/engine/Dockerfile .
       - run: bash tests/provider-setup-smoke
       - run: docker build -t constellation-persona-workshop:0.7.4 integrations/chief-of-staff/persona

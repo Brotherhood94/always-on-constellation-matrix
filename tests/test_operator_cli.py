@@ -35,7 +35,7 @@ class OperatorCLITest(unittest.TestCase):
             self.assertNotIn('sensitive', info.read_text())
             guide = self.cli(data, 'setup-guide', '--print')
             self.assertIn('Username: operator', guide)
-            self.assertIn('Telegram → Telegram Control', guide)
+            self.assertIn('Telegram → Telegram Agent', guide)
             self.assertNotIn('sudo ', guide)
             save(data / 'dashboard/integrations.json', {'time': 100, 'services': {'Telegram guide': 'running', 'Dot': 'ready'}})
             self.assertIn('Telegram guide  running', self.cli(data, 'telegram', 'status'))

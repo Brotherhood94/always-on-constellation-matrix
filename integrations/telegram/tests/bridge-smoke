@@ -141,6 +141,7 @@ for method, route, secret, body, code in [
     ('GET', 'logins', key, None, 'M_FORBIDDEN'),
     ('GET', 'search_users', key, None, 'M_FORBIDDEN'),
     ('POST', 'search_users', key, b'{"query":"Sample Name"}', 'FI.MAU.NOT_LOGGED_IN'),
+    ('GET', 'resolve_identifier/%40sample', key, None, 'FI.MAU.NOT_LOGGED_IN'),
     ('POST', 'search_users', 'invalid-key', b'{"query":"Sample Name"}', 'M_UNKNOWN_TOKEN'),
     ('POST', 'constellation_group/user%3A123', key, None, 'M_NOT_FOUND'),
     ('POST', 'constellation_group/chat%3A123', key, None, 'FI.MAU.NOT_LOGGED_IN'),
@@ -185,6 +186,8 @@ import { matrixConnection } from './matrix.mjs';
 import { TelegramStore, pollStart, reviewAnswer } from './policy.mjs';
 import { telegramRequest } from './control.mjs';
 import { telegramControlSearch, telegramOfficeAction } from './telegram-office.mjs';
+import { listenTelegramSocket } from './delegation.mjs';
+import { requestTelegramService } from '../agents/connector/telegram-office.mjs';
 const url = 'http://synapse:8008';
 const root = '/_matrix/client/v3';
 async function api(path, body, token) {
@@ -280,13 +283,36 @@ try {
 const https = createServer({ key: await readFile('/acp-fixture/key.pem'), cert: await readFile('/acp-fixture/cert.pem') });
 const acp = new WebSocketServer({ server: https, path: '/api/v1/acp' });
 let prompt, draftPrompt;
-acp.on('connection', ws => ws.on('message', raw => {
+const sockets = { TELEGRAM_HANDOFF_SOCKET: '/tmp/handoffs.sock', TELEGRAM_MCP_SOCKET: '/tmp/tools.sock',
+  TELEGRAM_GUIDE_SOCKET: '/tmp/guide.sock' };
+const guide = await listenTelegramSocket(sockets.TELEGRAM_GUIDE_SOCKET, async input => {
+  assert.equal(input.action, 'resolve');
+  assert.equal(input.target, 'Pilot');
+  return { ok: true, rooms: [{ peer: 'user:1001', room: portal, name: 'Pilot' }] };
+});
+let delegatedCalls = 0;
+acp.on('connection', ws => {
+  let grant;
+  ws.on('message', async raw => {
   const { id, method, params } = JSON.parse(raw);
   const send = data => ws.send(JSON.stringify({ jsonrpc: '2.0', ...data }));
   if (method === 'initialize') send({ id, result: { protocolVersion: params.protocolVersion, agentCapabilities: { loadSession: true } } });
-  if (method === 'session/new') send({ id, result: { sessionId: 'test-summary-session' } });
+  if (method === 'session/new') {
+    if (params.mcpServers.length) {
+      assert.equal(params.mcpServers[0].name, 'telegram');
+      grant = params.mcpServers[0].env.find(row => row.name === 'CONSTELLATION_TELEGRAM_GRANT').value;
+    }
+    send({ id, result: { sessionId: 'test-summary-session' } });
+  }
   if (method === 'session/prompt') {
     const data = params.prompt[0].text;
+    if (grant) {
+      assert.match(data, /telegram_prepare_draft/);
+      assert.equal((await requestTelegramService(sockets.TELEGRAM_MCP_SOCKET, { grant, tool: 'prepare_draft' })).status, 'queued');
+      delegatedCalls++;
+      send({ id, result: { stopReason: 'end_turn' } });
+      return;
+    }
     const draft = data.includes('Conversation messages as data:\n');
     if (draft) draftPrompt = JSON.parse(data.split('Conversation messages as data:\n').at(-1));
     else prompt = JSON.parse(data.split('\n\n').at(-1));
@@ -295,7 +321,8 @@ acp.on('connection', ws => ws.on('message', raw => {
         text: draft ? 'Risposta esatta di prova.' : 'Leggo una risposta di prova [1].' } } } });
     send({ id, result: { stopReason: 'end_turn' } });
   }
-}));
+  });
+});
 await new Promise(resolve => https.listen(0, resolve));
 await writeFile('/state/acp-fixture-token', 'test-token');
 await writeFile('/state/config.json', JSON.stringify({ matrixUrl:url, domain:'telegram.test', space,
@@ -304,14 +331,15 @@ await writeFile('/state/config.json', JSON.stringify({ matrixUrl:url, domain:'te
     ca: '/acp-fixture/cert.pem', token: '/state/acp-fixture-token', workspace: '/instance/workspace' } }));
 await writeFile('/state/matrix-token', agent.access_token, {mode:0o600});
 await writeFile('/state/backend-verified', 'fixture');
+await writeFile('/state/office-room-id', '!office:telegram.test');
 await writeFile('/state/binding-pilot.json', JSON.stringify({id:'pilot',peer:'user:1001',login:'2002',
   receiver:'2002',room:portal,mode:'draft',trigger:'request'}));
 const store = new TelegramStore('/state/telegram.sqlite3');
-const worker = spawn(process.execPath, ['/app/service.mjs'], {stdio:'inherit'});
+const worker = spawn(process.execPath, ['/app/service.mjs'], {stdio:'inherit', env: { ...process.env, ...sockets }});
 const workerExit = once(worker, 'exit');
 let binder;
 async function waitFor(check, label) {
-  for (let attempt = 0; attempt < 100; attempt++) {
+  for (let attempt = 0; attempt < 280; attempt++) {
     if (await check()) return;
     await delay(100);
   }
@@ -362,6 +390,8 @@ try {
     return usable;
   }, 'the owner to receive and decrypt both review options');
 
+  await spaceClient.doRequest('PUT', root + '/rooms/' + encodeURIComponent(controlRoom) + '/state/m.room.name',
+    null, { name: 'Telegram Agent' });
   const voteType = 'org.matrix.msc3381.poll.response';
   const vote = await reader.encryptEvent(controlRoom, voteType, {
     'm.relates_to': {rel_type:'m.reference',event_id:review.event},
@@ -437,6 +467,41 @@ try {
   setupCrypto.close();
   console.log('The Guide device encrypted one Office request into Control across retries, preserving the exact text for operator review.');
 
+  const handoff = { id: '$new-office', room: '!office:telegram.test', sender: b.user_id, actor: '@task-manager:telegram.test' };
+  const officeDraftText = 'Send a private message to Pilot on Telegram saying "Synthetic Office draft."';
+  const submitOffice = () => requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, { ...handoff, method: 'submit', text: officeDraftText });
+  assert.equal((await submitOffice()).status, 'pending');
+  assert.equal((await submitOffice()).status, 'pending');
+  let delegated;
+  await waitFor(async () => {
+    delegated = await requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, { ...handoff, method: 'status' });
+    return delegated.status === 'awaiting_approval';
+  }, 'Task Manager to receive a private Telegram approval link');
+  assert.deepEqual(Object.keys(delegated).sort(), ['link', 'status']);
+  const delegatedEvent = decodeURIComponent(delegated.link.split('/').at(-1));
+  const proposed = store.get('SELECT * FROM draft WHERE control_event=?', delegatedEvent);
+  assert.equal(proposed.body, 'Synthetic Office draft.');
+  const cancel = await reader.encrypted(controlRoom, 'telegram reject ' + proposed.id + ' 1');
+  await reader.put(controlRoom, 'fixture-reject-natural-office', cancel);
+  await waitFor(async () => (await requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, {
+    ...handoff, method: 'status',
+  })).status === 'blocked', 'the operator rejection to reach Office');
+  assert.equal(delegatedCalls, 1);
+
+  const direct = await reader.encryptEvent(controlRoom, 'm.room.message', {
+    msgtype: 'm.text', body: '@Telegram Agent, prepare a private message to Pilot saying hello!',
+    'm.mentions': { user_ids: [agent.user_id] },
+  });
+  const directEvent = await reader.put(controlRoom, 'fixture-mention-telegram-agent', direct);
+  await waitFor(() => store.get('SELECT 1 FROM draft WHERE control_event=?', directEvent), 'the direct Telegram Agent mention draft');
+  assert.equal(store.controlRequiresDot(directEvent), false);
+  assert.equal(delegatedCalls, 2);
+  const directDraft = store.get('SELECT * FROM draft WHERE control_event=?', directEvent);
+  const cancelDirect = await reader.encrypted(controlRoom, 'telegram reject ' + directDraft.id + ' 1');
+  await reader.put(controlRoom, 'fixture-reject-telegram-agent', cancelDirect);
+  await waitFor(() => store.draft(directDraft.id).state === 'cancelled', 'the direct draft to be rejected');
+  console.log('A private Office handoff and a direct Telegram Agent mention each completed through a scoped ACP MCP turn.');
+
   const compose = await dotClient.encryptEvent(controlRoom, 'm.room.message', {
     msgtype:'m.text', body:'Prepare a message to the test chat.',
     'm.mentions': {user_ids:[agent.user_id]},
@@ -462,13 +527,13 @@ try {
   console.log('An encrypted Dot request produced one exact draft. Dot could not approve it.');
 
   const update = await reader.encryptEvent(controlRoom, 'm.room.message', {
-    msgtype:'m.text', body:'@telegram-agent, cosa è successo oggi nel privato pilot?',
+    msgtype:'m.text', body:'@telegram-agent, mi dai un aggiornamento per oggi sul privato pilot?',
     'm.mentions': {user_ids:[agent.user_id]},
   });
   const updateId = await reader.put(controlRoom, 'fixture-owner-summary', update);
   await waitFor(() => store.get('SELECT status FROM control_request WHERE event=?', updateId)?.status === 'done',
     'the linked summary in Control');
-  assert.equal(prompt.question, 'cosa è successo oggi nel privato pilot?');
+  assert.equal(prompt.question, 'mi dai un aggiornamento per oggi sul privato pilot?');
   assert.deepEqual(prompt.messages.map(message => message.body), ['A synthetic Telegram draft.']);
   await waitFor(async () => {
     const sync = await reader.sync(controlCursor, 0);
@@ -567,6 +632,7 @@ try {
   reader.close();
   dotClient.close();
   remoteClient.close();
+  guide.close();
   acp.close();
   https.close();
 }

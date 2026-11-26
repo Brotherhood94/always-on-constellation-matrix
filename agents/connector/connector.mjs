@@ -16,11 +16,13 @@ import { Store } from './store.mjs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
-import { requestTelegramOffice, telegramOfficeCommand, telegramOfficeHelp } from './telegram-office.mjs';
+import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp } from './telegram-office.mjs';
+import { telegramIntent, telegramMention } from './telegram-intent.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
   AGENT_STATE, AGENT_WORKSPACE, MATRIX_PLANNER, AGENT_INSTRUCTIONS } = process.env;
 const userId = `@${AGENT_USERNAME}:${MATRIX_SERVER_NAME}`;
+const telegramHandoff = process.env.TELEGRAM_HANDOFF_SOCKET;
 const catalog = createCatalog(MATRIX_SERVER_NAME, process.env.MATRIX_CATALOG_PATH);
 const legacy = catalog.configured ? {} : team(MATRIX_SERVER_NAME);
 const routing = () => routingFor(catalog, legacy, MATRIX_OWNER, MATRIX_PLANNER);
@@ -183,6 +185,15 @@ async function deliverAttachments(client, event, reply) {
 }
 
 async function deliver(client, event) {
+  if (telegramHandoff && event.reply === null && event.id === event.request && !event.delegator &&
+      /\btelegram\b/iu.test(event.body)) {
+    const original = await readEncryptedRoomMessage(client, roomId, event.id);
+    const text = original?.sender === MATRIX_OWNER ? telegramMention(original.content, userId, AGENT_NAME) : null;
+    if (telegramIntent(text, { office: true })) {
+      await delegateTelegram(client, event, text);
+      return;
+    }
+  }
   const { names: members } = routing();
   const peers = Object.entries(members).filter(([id]) => id !== userId).map(([id, name]) => ({ id, name }));
   let requesterName;
@@ -301,6 +312,69 @@ async function deliver(client, event) {
   console.log('Encrypted agent reply delivered.');
 }
 
+const privateTelegramReceipt = /^https:\/\/matrix\.to\/#\/(?:%21|!)[A-Za-z0-9_.:%-]+\/(?:%24|\$)[A-Za-z0-9_:%.-]+$/iu;
+const telegramStatuses = {
+  pending: 'Telegram Agent accepted the request.',
+  needs_input: 'Telegram Agent needs your input in the private thread.',
+  awaiting_approval: 'The Telegram draft is ready for your approval.',
+  sending: 'Telegram Agent is waiting for a delivery receipt.',
+  completed: 'Telegram Agent completed the request.',
+  blocked: 'Telegram Agent could not complete the request. Open the private thread for the next step.',
+  unconfirmed: 'Telegram delivery is unconfirmed. Check the private receipt before retrying.',
+};
+
+function telegramRequest(event, method, text) {
+  return requestTelegramService(telegramHandoff, { method, id: event, room: roomId, actor: userId,
+    sender: MATRIX_OWNER, ...(text && { text }) }, 5000).catch(error => {
+    if (method === 'status' || ['ENOENT', 'ECONNREFUSED'].includes(error.code)) return { status: 'unavailable' };
+    // Retry an interrupted submission with the original event ID.
+    throw error;
+  });
+}
+
+async function delegateTelegram(client, event, text) {
+  store.acceptEvidence(event.id, process.env.CONTEXT_INTELLIGENCE_URL && assignmentEvidence({ roomId, actor: userId, event }));
+  await publishActivity(client, event.id);
+  const result = await telegramRequest(event.id, 'submit', text);
+  if (!Object.hasOwn(telegramStatuses, result.status)) {
+    const sent = await sendEncrypted(client, roomId, reactionTransaction('telegram-unavailable', event.id), {
+      msgtype: 'm.text', body: 'Telegram Agent is unavailable. Check its setup or service and retry.',
+      'm.relates_to': threadRelation(event),
+    });
+    store.sent(event.id, sent, outcomeReaction.blocked, process.env.CONTEXT_INTELLIGENCE_URL &&
+      executionEvidence({ roomId, actor: userId, event, sent, status: 'blocked' }));
+    return;
+  }
+  store.trackTelegram(event);
+  store.sent(event.id, '', null);
+}
+
+async function pollTelegram(client) {
+  const row = store.nextTelegram();
+  if (!row) return;
+  store.telegramProgress(row.id, row.status, Date.now());
+  const result = await telegramRequest(row.id, 'status');
+  if (!Object.hasOwn(telegramStatuses, result.status) || !privateTelegramReceipt.test(result.link ?? '')) return;
+  const event = { id: row.id, request: row.id, thread: row.thread, number: 1 };
+  const evidence = (sent, fields) => process.env.CONTEXT_INTELLIGENCE_URL && executionEvidence({
+    roomId, actor: userId, event, sent, target: `@telegram-agent:${MATRIX_SERVER_NAME}`, ...fields,
+  });
+  const post = (status, text) => sendEncrypted(client, roomId, reactionTransaction('telegram-' + status, row.id), {
+    msgtype: 'm.text', body: text + '\n' + result.link, 'm.relates_to': threadRelation(event),
+  });
+  if (!row.status) {
+    const sent = await post('pending', telegramStatuses.pending);
+    const dispatch = evidence(sent, { flow: 'dispatch' });
+    if (dispatch) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(sent, JSON.stringify(dispatch));
+    store.telegramProgress(row.id, 'pending', Date.now());
+  }
+  if (result.status === (row.status ?? 'pending')) return;
+  const sent = await post(result.status, telegramStatuses[result.status]);
+  if (['completed', 'blocked'].includes(result.status)) {
+    store.finishTelegram(row.id, outcomeReaction[result.status], evidence(sent, { flow: 'return', status: result.status }));
+  } else store.telegramProgress(row.id, result.status, Date.now());
+}
+
 async function deliverBetweenBackups(client, event) {
   try {
     backupLock.exec('BEGIN IMMEDIATE');
@@ -310,6 +384,7 @@ async function deliverBetweenBackups(client, event) {
   }
   try {
     if (event) await deliver(client, event);
+    if (telegramHandoff) await pollTelegram(client);
     await settleReactions(client);
   } finally {
     backupLock.exec('ROLLBACK');
@@ -327,7 +402,7 @@ while (true) {
     toolCheck ??= checkTargetTools(catalog.current()?.agents.find(agent => agent.id === userId), store.db, writeExecutionEvidence)
       .catch(() => console.warn('Target tool verification will retry.')).finally(() => { toolCheck = undefined; });
     const event = store.next();
-    if (event || store.nextReactionCleanup()) await deliverBetweenBackups(client, event);
+    if (event || store.nextReactionCleanup() || telegramHandoff && store.nextTelegram()) await deliverBetweenBackups(client, event);
     const pendingEvidence = store.nextEvidence();
     if (pendingEvidence) {
       try {

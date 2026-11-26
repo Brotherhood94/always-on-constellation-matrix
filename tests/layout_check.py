@@ -76,6 +76,11 @@ class LayoutTest(unittest.TestCase):
             for room in (space, control, portal):
                 link_child(agents, room, domain, token)
             guide_token = (root / 'guide/token').read_text().strip()
+            name_route = room_route(control) + '/state/m.room.name'
+            request('PUT', name_route, {'name': 'Telegram Control'}, guide_token)
+            previous_control_event = request('PUT', room_route(control) + '/send/m.room.encrypted/old-telegram-request', {
+                'algorithm': 'm.megolm.v1.aes-sha2', 'ciphertext': 'synthetic-envelope',
+            }, guide_token)['event_id']
             request('POST', room_route(control) + '/leave', {}, token)
             invite(control, owner['user_id'], guide_token)
             event = request('PUT', room_route(bridge) + '/send/m.room.message/layout-history',
@@ -88,6 +93,9 @@ class LayoutTest(unittest.TestCase):
 
             migrated = reconcile_layout(*args, bridge_active=True, select=select)
             self.assertEqual(migrated, {**fresh, 'bridge': bridge})
+            self.assertEqual(request('GET', name_route, token=token)['name'], 'Telegram Agent')
+            self.assertEqual(request('GET', room_route(control) + '/event/' + encoded(previous_control_event), token=token)
+                             ['type'], 'm.room.encrypted')
             alias = CLIENT + '/directory/room/' + encoded(f'#telegram-control:{domain}')
             request('DELETE', alias, token=guide_token)
             self.assertEqual(reconcile_layout(*args, bridge_active=True, select=select), migrated)

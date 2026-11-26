@@ -344,10 +344,12 @@ def save_graph_password(data, supplied, *, interactive=False):
     save(path, supplied + '\n')
 
 
-def docker_build(tag, directory, *, dockerfile=None):
+def docker_build(tag, directory, *, dockerfile=None, target=None):
     args = ['docker', 'build', '-t', tag]
     if dockerfile:
         args += ['-f', str(dockerfile)]
+    if target:
+        args += ['--target', target]
     run(*args, str(directory))
 
 
@@ -355,7 +357,7 @@ def prepare_images(settings, registry):
     if registry['agents'] or settings['dot']:
         docker_build(CONNECTOR, SOURCE / 'agents/connector')
     if any(entry['placement'] == 'local' for entry in registry['agents'].values()):
-        docker_build(BASE, SOURCE / 'integrations/telegram/engine')
+        docker_build(BASE, SOURCE, dockerfile=SOURCE / 'integrations/telegram/engine/Dockerfile', target='amplifier-base')
         docker_build(ENGINE, SOURCE, dockerfile=SOURCE / 'agents/engine/Dockerfile')
 
 
@@ -973,8 +975,9 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
         sys.path.pop(0)
     root = data / 'telegram'
     directory(root, 0o711)
-    for name in ('connector', 'guide'):
+    for name in ('connector', 'guide', 'handoffs', 'mcp'):
         directory(root / name, uid=RUNTIME_UID)
+    save(root / 'connector/office-room-id', rooms['office'] + '\n', uid=RUNTIME_UID)
     save(root / 'guide/command', workspace_command(data) + '\n', uid=RUNTIME_UID)
     active = '/data/telegram-appservice.yaml' in load(data / 'synapse/homeserver.yaml').get('app_service_config_files', [])
 
@@ -1053,7 +1056,7 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
             finally:
                 if operator_token is None:
                     request('POST', CLIENT + '/logout', {}, token)
-        print('In Element, open Telegram → Telegram Control → Pinned messages.')
+        print('In Element, open Telegram → Telegram Agent → Pinned messages.')
         if rooms['bridge']:
             print('Telegram Bridge is linked under Telegram.')
         return

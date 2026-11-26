@@ -422,6 +422,7 @@ try {
   const telegramAgentToken = await login('telegram-agent', 'TELEGRAM_SETUP');
   await writeFile(join(telegramGuide, 'token'), telegramAgentToken);
   await writeFile(join(telegramGuide, 'room-id'), telegramControl);
+  await writeFile(join(telegramGuide, 'space-id'), await room('telegram'));
   await writeFile(join(telegramGuide, 'command'), 'sudo ./constellation_matrix');
   launch('/app/ops/monitor.mjs', { STATE_DIR: telegramGuide, TELEGRAM_GUIDE: 'true' });
   await eventually(async () => (await readState(join(telegramGuide, 'sync.json'))).syncToken);
@@ -479,10 +480,10 @@ try {
   const telegramInstructions = await eventually(() => readShortcut(telegramSetup, telegramControl));
   assert.match(telegramInstructions.body, /^Set up Telegram\n/u);
   assert.match(telegramInstructions.body, /REPLACE_WITH_YOUR_API_HASH/u);
-  assert.match(telegramInstructions.body, /Telegram Control and Telegram Bridge/u);
-  assert.match(telegramInstructions.formatted_body, /<pre><code>!tg pm @username<\/code><\/pre>/u);
-  assert.match(telegramInstructions.body, /Click the chat name in the bridge’s reply/u);
-  assert.match(telegramInstructions.body, /Find the chat under Telegram → Rooms.*before sending a message/u);
+  assert.match(telegramInstructions.body, /Telegram Agent and Telegram Bridge/u);
+  assert.match(telegramInstructions.body, /4\. Element · Ask Telegram Agent/u);
+  assert.match(telegramInstructions.body, /@Telegram Agent, add the Telegram user with ID 1001/u);
+  assert.doesNotMatch(telegramInstructions.body, /!tg pm|5\. Element/u);
   console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');
   const officeSetup = await eventually(async () => {
     const receipt = await readState(officeReceipt);

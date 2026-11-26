@@ -79,11 +79,15 @@ def create_room(alias, name, token, domain, owner, agent, *, space=False, dot=No
         raise SystemExit('Telegram alias does not point to a Space.')
     if not space:
         if data.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2':
-            raise SystemExit('Telegram Control must remain encrypted.')
+            raise SystemExit('Telegram Agent must remain encrypted.')
         active = {entry['state_key'] for entry in state.values() if entry['type'] == 'm.room.member' and
                   entry['content']['membership'] in ('invite', 'join')}
         if active - {agent, owner, dot}:
-            raise SystemExit('An unexpected member is present in Telegram Control.')
+            raise SystemExit('An unexpected member is present in Telegram Agent.')
+        if ('m.room.tombstone', '') in state:
+            raise SystemExit('The configured Telegram Agent room has been replaced.')
+        if data.get('m.room.name', {}).get('name') != name:
+            request('PUT', route + '/state/m.room.name', {'name': name}, token)
     creation = state['m.room.create', '']
     if creation['sender'] == agent and owner != agent and owner not in creation['content'].get('additional_creators', []):
         levels = data['m.room.power_levels']
@@ -130,8 +134,11 @@ def ensure_layout(root, domain, owner, token):
     saved = load(recorded) if recorded.exists() else {}
     dot = current.get('dot')
     if dot is not None and dot != f'@dot:{domain}':
-        raise SystemExit('Unexpected Dot identity in Telegram Control configuration.')
-    control = create_room('telegram-control', 'Telegram Control', token, domain, owner, agent, dot=dot,
+        raise SystemExit('Unexpected Dot identity in Telegram Agent configuration.')
+    profile = f'{CLIENT}/profile/{encoded(agent)}/displayname'
+    if (missing(profile, token) or {}).get('displayname') != 'Telegram Agent':
+        request('PUT', profile, {'displayname': 'Telegram Agent'}, token)
+    control = create_room('telegram-control', 'Telegram Agent', token, domain, owner, agent, dot=dot,
                           expected=current.get('controlRoom') or saved.get('control'))
     space = create_room('telegram', 'Telegram', token, domain, owner, agent, space=True,
                         expected=current.get('space') or saved.get('space'))
@@ -303,7 +310,7 @@ def configure_dot(root, dot_state, operation):
             data.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2' or
             'm.room.tombstone' in data or active.get(agent) != 'join' or active.get(owner) != 'join' or
             active.keys() - {owner, agent, dot}):
-        raise SystemExit('Telegram Control membership or encryption could not be verified.')
+        raise SystemExit('Telegram Agent membership or encryption could not be verified.')
 
     dot_token = (dot_state / 'matrix-token').read_text().strip()
     identity = request('GET', '/_matrix/client/v3/account/whoami', token=dot_token)
@@ -313,7 +320,7 @@ def configure_dot(root, dot_state, operation):
         config['dot'] = dot
         write(path, config, uid=991)
         write(dot_state / 'telegram-control.json', {'room': control, 'owner': owner}, uid=991)
-        print('Dot configuration is staged for the current Telegram Control room.')
+        print('Dot configuration is staged for the current Telegram Agent room.')
     elif operation == 'join':
         if config.get('dot') != dot or load(dot_state / 'telegram-control.json') != {'room': control, 'owner': owner}:
             raise SystemExit('Configure both connectors before adding Dot.')
@@ -325,14 +332,14 @@ def configure_dot(root, dot_state, operation):
                 raise SystemExit('Dot joined an unexpected Matrix room.')
         if membership(control, dot, token) != 'join':
             raise SystemExit('Dot membership could not be verified.')
-        print('Dot joined the encrypted Telegram Control room.')
+        print('Dot joined the encrypted Telegram Agent room.')
     elif operation == 'leave':
         if dot in active:
             request('POST', route + '/leave', {}, dot_token)
         config.pop('dot', None)
         write(path, config, uid=991)
         (dot_state / 'telegram-control.json').unlink(missing_ok=True)
-        print('Dot left Telegram Control. Restart both connectors after rolling back the code.')
+        print('Dot left Telegram Agent. Restart both connectors after rolling back the code.')
     else:
         raise SystemExit('Unknown Dot configuration operation.')
 

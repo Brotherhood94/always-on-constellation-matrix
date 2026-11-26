@@ -36,9 +36,13 @@ export function telegramOfficeCommand(body, name, id) {
 export const telegramOfficeHelp = 'Use `telegram add @username`, `telegram add user:1001`, `telegram add channel:1234567890`, ' +
   '`telegram remove "Name"`, or `telegram draft direct "Name": your message`. Use `group` for a group draft.';
 
-export async function requestTelegramOffice(socketPath, id, operation) {
+export function requestTelegramOffice(socketPath, id, operation) {
+  return requestTelegramService(socketPath, { id, ...operation });
+}
+
+export async function requestTelegramService(socketPath, input, timeout = 55_000) {
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath, method: 'POST', path: '/', signal: AbortSignal.timeout(55_000),
+    const req = request({ socketPath, method: 'POST', path: '/', signal: AbortSignal.timeout(timeout),
       headers: { 'content-type': 'application/json' } }, res => {
       let data = '';
       res.setEncoding('utf8');
@@ -52,6 +56,6 @@ export async function requestTelegramOffice(socketPath, id, operation) {
       });
     });
     req.on('error', reject);
-    req.end(JSON.stringify({ id, ...operation }));
+    req.end(JSON.stringify(input));
   });
 }

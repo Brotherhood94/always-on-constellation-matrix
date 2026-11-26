@@ -130,9 +130,13 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
         }
         if key == telegram_coordinator:
             worker['environment']['TELEGRAM_OFFICE_SOCKET'] = '/telegram-office/actions.sock'
+            worker['environment']['TELEGRAM_HANDOFF_SOCKET'] = '/telegram-handoffs/requests.sock'
             mount = volume(data / 'telegram/office', '/telegram-office', True)
             mount['bind'] = {'create_host_path': False}
             worker['volumes'].append(mount)
+            handoffs = volume(data / 'telegram/handoffs', '/telegram-handoffs', True)
+            handoffs['bind'] = {'create_host_path': False}
+            worker['volumes'].append(handoffs)
         if key == 'chief-of-staff':
             worker.update(command=['node', '/app/chief-of-staff/direct/bridge.mjs'],
                           healthcheck=health('test', '-s', '/tmp/direct-ready'))

@@ -231,14 +231,15 @@ export class TelegramStore {
     this.run("DELETE FROM control_request WHERE requested<? AND status NOT IN ('queued','ready')", now - day);
   }
 
-  queueControl(event, request, now, { requireDot = true } = {}) {
-    return this.atomic(() => {
+  queueControl(event, request, now, { requireDot = true, atomic = true } = {}) {
+    const insert = () => {
       if (!eventID.test(event) || this.paused() ||
           this.get('SELECT count(*) AS count FROM control_request WHERE requested>?', now - 60 * minimum).count >= 24) return false;
       if (request.thread && !eventID.test(request.thread)) return false;
       return !!this.run('INSERT OR IGNORE INTO control_request(event, requested, payload, thread_root, requires_dot) VALUES (?, ?, ?, ?, ?)',
         event, now, JSON.stringify(request), request.thread ?? event, Number(requireDot)).changes;
-    });
+    };
+    return atomic ? this.atomic(insert) : insert();
   }
 
   nextControl(status, now) {

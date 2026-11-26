@@ -23,7 +23,14 @@ export function summarizeWithInstance(engine, question, messages) {
   return runTurn(engine, null, instructions + '\n\n' + JSON.stringify({ question, messages }), () => {});
 }
 
-async function runTurn(engine, previous, prompt, onSession) {
+export function runDelegatedWithInstance(engine, grant, tool) {
+  const servers = [{ name: 'telegram', command: '/usr/local/bin/node', args: ['/opt/telegram-tools/telegram-mcp.mjs'],
+    env: [{ name: 'CONSTELLATION_TELEGRAM_GRANT', value: grant }] }];
+  return runTurn(engine, null, `Handle the approved Telegram task by calling telegram_${tool}. ` +
+    'The tool has no arguments. It has the verified request. Call it once, then stop.', () => {}, servers);
+}
+
+async function runTurn(engine, previous, prompt, onSession, mcpServers = []) {
   if (!engine || !/^wss:\/\/[^/]+\/api\/v1\/acp$/u.test(engine.url) || !engine.revision || !engine.workspace) {
     throw new Error('A pinned Constellation Instance ACP endpoint is required.');
   }
@@ -73,7 +80,7 @@ async function runTurn(engine, previous, prompt, onSession) {
           clientInfo: { name: 'matrix-telegram-connector', version: '0.1.0' },
         });
         if (!hello.agentCapabilities?.loadSession) throw new Error('This backend cannot load saved sessions.');
-        const options = { cwd: engine.workspace, mcpServers: [] };
+        const options = { cwd: engine.workspace, mcpServers };
         if (previous) {
           await connection.request(methods.session.load, { ...options, sessionId: previous });
           active = previous;
@@ -84,7 +91,9 @@ async function runTurn(engine, previous, prompt, onSession) {
         const result = await connection.request(methods.session.prompt, { sessionId: active, prompt: [
           { type: 'text', text: prompt },
         ] });
-        if (observedTool || result.stopReason !== 'end_turn') throw new Error('ACP did not finish a tool-free turn.');
+        if (observedTool && !mcpServers.length || result.stopReason !== 'end_turn') {
+          throw new Error('ACP did not complete the requested turn.');
+        }
         return answer.trim();
       });
     return await Promise.race([run, delay(120_000, null, { signal: controller.signal }).then(() => {

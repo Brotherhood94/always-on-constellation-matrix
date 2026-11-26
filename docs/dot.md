@@ -23,4 +23,4 @@ sudo ./constellation_matrix dot-connect tunnel_REPLACE_WITH_YOUR_ID
 2. **ChatGPT.** Ask Dot to list the Office agents through the plugin. An empty list confirms the connection during initial setup before agent selection.
 3. **ChatGPT and Element.** Once Task Manager is available, ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” Check the task and Manager’s result in **Agents → Office**. A retry with the same task ID should return the same thread link.
 
-If you enable Telegram Control later, refresh the app’s tool list to use the draft and update tools. The operator approves outbound messages in Element. [Telegram Control](telegram.md#dot-and-chat-updates)
+If you enable Telegram Agent access for Dot later, refresh the app’s tool list to use the draft and update tools. The operator approves outbound messages in Element. [Telegram Agent](telegram.md#dot-and-chat-updates)

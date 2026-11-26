@@ -5,8 +5,10 @@ import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { TelegramStore, controlCommand, digest, pollStart, pollEnd, reviewAnswer, validateBinding } from './policy.mjs';
 import { bridgeAudit, matrixConnection, statusEvidence } from './matrix.mjs';
-import { draftWithInstance, summarizeWithInstance } from './acp.mjs';
+import { draftWithInstance, runDelegatedWithInstance, summarizeWithInstance } from './acp.mjs';
 import { addressedRequest, controlThread, historyRange, isDirect, matrixLink, resolveDestination, updateReply } from './control.mjs';
+import { createTelegramDelegation, listenTelegramSocket } from './delegation.mjs';
+import { requestTelegramService } from '../../agents/connector/telegram-office.mjs';
 
 const directory = '/state';
 const configFile = join(directory, 'config.json');
@@ -53,7 +55,7 @@ if (action) {
   try {
     if (['bind', 'rotate'].includes(action)) {
       if (!argument || basename(argument) !== argument || !/^binding-[a-z0-9-]+\.json$/u.test(argument)) throw new Error('Use a private binding file.');
-      if (!(await matrix.verifyControl())) throw new Error('The private Telegram Control room is not ready.');
+      if (!(await matrix.verifyControl())) throw new Error('The private Telegram Agent room is not ready.');
       const binding = JSON.parse(await readFile(join(directory, argument), 'utf8'));
       validateBinding({ ...binding, audience: '0'.repeat(64) }, settings.controlRoom);
       if (!(await audit.verifiedTarget(binding.room, binding))) throw new Error('The bridge mapping or relay could not be verified.');
@@ -61,7 +63,7 @@ if (action) {
       if (action === 'bind') await waitForMatrixSync();
       const audience = await liveBinding(binding.room, binding);
       if (!audience) throw new Error('The portal, encrypted audience, or configured relay could not be verified.');
-      if (!(await matrix.verifyControl())) throw new Error('The private Telegram Control room is not ready.');
+      if (!(await matrix.verifyControl())) throw new Error('The private Telegram Agent room is not ready.');
       const method = action === 'rotate' ? 'reset' : 'bind';
       store[method]({ ...binding, audience, operator: settings.owner }, settings.controlRoom, Date.now());
       console.log(action === 'rotate' ? 'Telegram binding rotated while paused.' : 'Telegram binding verified and stored.');
@@ -118,6 +120,28 @@ async function run() {
   let lastCleanup = 0;
   let stopping = false;
   for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { stopping = true; });
+  const { TELEGRAM_HANDOFF_SOCKET, TELEGRAM_MCP_SOCKET, TELEGRAM_GUIDE_SOCKET } = process.env;
+  const officeRoom = (await readFile(join(directory, 'office-room-id'), 'utf8').catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return '';
+  })).trim();
+  const checkRoom = () => !pausedFile() && !store.paused() && matrix.verifyControl();
+  const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom }, checkRoom,
+    guide: input => requestTelegramService(TELEGRAM_GUIDE_SOCKET, input),
+    post: async (transaction, content) => {
+      const ciphertext = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', content);
+      if (!await checkRoom()) throw new Error('Telegram Agent room changed');
+      return matrix.put(settings.controlRoom, transaction, ciphertext);
+    },
+    runAgent: (grant, tool) => runDelegatedWithInstance(settings.engine, grant, tool),
+    getBinding: async (room, peer) => {
+      const binding = store.inRoom(room);
+      const target = binding?.active && JSON.parse(binding.target);
+      return target?.peer === peer && await liveBinding(room, target) === target.audience ? binding : null;
+    },
+  });
+  const sockets = delegation ? [await listenTelegramSocket(TELEGRAM_MCP_SOCKET, delegation.tool)] : [];
+  if (delegation && TELEGRAM_HANDOFF_SOCKET) sockets.push(await listenTelegramSocket(TELEGRAM_HANDOFF_SOCKET, delegation.office));
 
   async function dispatch(room, event, encrypted, unreadable, initial) {
     const now = Date.now();
@@ -149,7 +173,7 @@ async function run() {
       const command = controlCommand({ room, sender: event.sender, type: event.type, content: event.content, encrypted }, settings);
       if (command) {
         if (await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
-      } else {
+      } else if (!await delegation?.direct(event)) {
         const request = addressedRequest(event, settings);
         const requireDot = event.sender === settings.dot || (event.sender === settings.owner && request?.action !== 'compose');
         if (request && !pausedFile() && await matrix.verifyControl({ requireDot })) {
@@ -234,9 +258,13 @@ async function run() {
       return { binding, state, name: state?.name || binding.id };
     }));
     const available = destinations.filter(({ state }) => state);
-    const named = resolveDestination(input, available);
+    const verified = input.verifiedBinding;
+    const named = verified ? available.find(({ binding }) => binding.id === verified.id && binding.room === verified.room &&
+      binding.generation === verified.generation && binding.revision === verified.revision) : resolveDestination(input, available);
     const context = input.thread && store.controlContext(input.thread);
-    const result = (body, sources = [], binding) => store.controlResult(request, JSON.stringify({ body, sources }), binding);
+    const result = (body, sources = [], binding, success = false) =>
+      store.controlResult(request, JSON.stringify({ body, sources, success }), binding);
+    if (verified && !named) return result('The selected chat changed. Verify its binding and start a new request.');
     let selected = named;
     if (context) {
       if (named && named.binding.id !== context.binding) {
@@ -301,7 +329,7 @@ async function run() {
     }
     const coverage = `${name} · ${range.label} · ${admitted.length} readable text messages in the connected room.`;
     const partial = !history.complete || history.unreadable > 0 || admitted.length !== history.events.length;
-    if (!admitted.length) return result(coverage + '\nNo verified text messages were available for this request.', [], binding);
+    if (!admitted.length) return result(coverage + '\nNo verified text messages were available for this request.', [], binding, true);
     const messages = admitted.map((event, index) => ({
       number: index + 1,
       author: (state.names.get(event.sender) || event.sender).slice(0, 100),
@@ -318,14 +346,14 @@ async function run() {
       url: matrixLink(binding.room, admitted[number - 1].event_id),
     }));
     const accessNote = partial ? ' Coverage is partial.' : '';
-    if (!pausedFile() && !store.paused()) result(coverage + accessNote + '\n\n' + answer.slice(0, 3000), sources, binding);
+    if (!pausedFile() && !store.paused()) result(coverage + accessNote + '\n\n' + answer.slice(0, 3000), sources, binding, true);
   }
 
   async function publishControlResult(request) {
     if (!request) return;
     const requireDot = request.requires_dot !== 0;
     if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot }))) return;
-    let { body, sources } = JSON.parse(request.result);
+    let { body, sources, success } = JSON.parse(request.result);
     if (request.binding) {
       const current = store.binding(request.binding);
       const target = current && JSON.parse(current.target);
@@ -333,14 +361,18 @@ async function run() {
           await liveBinding(current.room, target) !== target.audience) {
         body = 'The selected chat changed before the update could be delivered. Request a new update.';
         sources = [];
+        success = false;
       }
     }
     if (!(await matrix.verifyControl({ requireDot }))) return;
     const encrypted = await matrix.encryptEvent(settings.controlRoom, 'm.room.message',
-      updateReply(settings, request.event, body, sources, request.thread_root ?? request.event));
+      updateReply(requireDot ? settings : { ...settings, dot: undefined }, request.event, body, sources, request.thread_root ?? request.event));
     if (pausedFile() || store.paused() || !(await matrix.verifyControl({ requireDot }))) return;
     await matrix.put(settings.controlRoom, `control-${digest(request.event)}`, encrypted);
-    store.controlDelivered(request.event);
+    store.atomic(() => {
+      store.controlDelivered(request.event);
+      delegation?.controlDelivered(request.event, success);
+    });
     if (process.env.TELEGRAM_CONTEXT_ENABLED === 'true') {
       try {
         const credential = (await readFile('/context-token', 'utf8')).trim();
@@ -458,6 +490,7 @@ async function run() {
       await closeReviewedPoll();
       await publish();
       await publishControlResult(store.nextControl('ready', now));
+      delegation?.settleDrafts();
       if (!worker && !pausedFile() && !store.paused()) {
         const work = store.nextWork(Date.now());
         if (work) worker = processWork(work).catch(() => {
@@ -467,7 +500,10 @@ async function run() {
         else {
           const request = store.nextControl('queued', now);
           if (request) worker = processControl(request).catch(() => {
-            store.controlResult(request, JSON.stringify({ body: 'The Telegram request failed. Try again from Telegram Control.' }));
+            store.controlResult(request, JSON.stringify({ body: 'The Telegram request failed. Try again from Telegram Agent.' }));
+          }).finally(() => { worker = null; });
+          else if (delegation) worker = delegation.tick().catch(() => {
+            console.warn('Telegram Agent request will retry.');
           }).finally(() => { worker = null; });
         }
       }
@@ -479,5 +515,6 @@ async function run() {
   }
   await writeFile(join(directory, 'last-stop'), new Date().toISOString(), { mode: 0o600 });
   if (worker) await worker;
+  for (const socket of sockets) await new Promise(resolve => socket.close(resolve));
   await audit.close();
 }

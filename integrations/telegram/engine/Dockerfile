@@ -1,5 +1,10 @@
 FROM ghcr.io/astral-sh/uv:0.12.17 AS uv
-FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
+FROM node:24.22.3-trixie-slim AS mcp-tools
+WORKDIR /opt/telegram-tools
+COPY agents/connector/package.json agents/connector/package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY integrations/telegram/engine/telegram-mcp.mjs agents/connector/telegram-office.mjs ./
+FROM python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90 AS amplifier-base
 ARG TARGETARCH
 COPY --from=uv /uv /usr/local/bin/uv
 RUN apt-get update \
@@ -28,9 +33,13 @@ RUN uv pip install --no-deps --python /opt/amplifier-acp/.venv/bin/python \
     && uv pip check --python /opt/amplifier-acp/.venv/bin/python \
     && rm -rf /root/.cache/uv
 RUN groupadd -g 991 telegram && useradd -M -u 991 -g 991 -d /instance telegram
-COPY --chmod=0755 start backend /usr/local/bin/
-COPY initialize.py sign_in.py /opt/telegram/
+COPY --chmod=0755 integrations/telegram/engine/start integrations/telegram/engine/backend /usr/local/bin/
+COPY integrations/telegram/engine/initialize.py integrations/telegram/engine/sign_in.py /opt/telegram/
 ENV HOME=/instance AGENT_INSTANCE_CERTIFICATE_NAMES='["telegram-engine"]' \
     TELEGRAM_CODEX_TOKEN_FILE=/instance/backend/codex-oauth.json
 USER 991:991
 ENTRYPOINT ["/usr/local/bin/start"]
+
+FROM amplifier-base
+COPY --from=mcp-tools /usr/local/bin/node /usr/local/bin/node
+COPY --from=mcp-tools /opt/telegram-tools /opt/telegram-tools
