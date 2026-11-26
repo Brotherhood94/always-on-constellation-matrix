@@ -25,9 +25,7 @@ config = yaml.safe_load(path.read_text())
 config.update(listeners=[{'type': 'http', 'port': 8008, 'tls': False, 'resources': [{'names': ['client']}]}],
               registration_shared_secret='synthetic-test-registration-secret',
               rc_message={'per_second': 25, 'burst_count': 100},
-              rc_joins={'local': {'per_second': 25, 'burst_count': 100}, 'remote': {'per_second': 25, 'burst_count': 100}},
-              rc_joins_per_room={'per_second': 25, 'burst_count': 100},
-              rc_invites={key: {'per_second': 25, 'burst_count': 100} for key in ('per_room', 'per_user', 'per_issuer')},
+              rc_room_creation={'per_second': 25, 'burst_count': 100},
               rc_login={'address': {'per_second': 50, 'burst_count': 50}, 'account': {'per_second': 50, 'burst_count': 50}})
 path.write_text(json.dumps(config))
 PY
@@ -66,6 +64,9 @@ if [[ ${MATRIX_HELPER_SMOKE:-0} == 1 ]]; then
     -v "$name:/fixture:ro" -v "$desk_tls:/helper-tls:ro" -v "$src/tests/helper-fixture.mjs:/app/helper-fixture.mjs:ro" \
     -v "$src/agents/connector/helper-dm.mjs:/app/helper-dm.mjs:ro" \
     -v "$src/agents/connector/helper-support.mjs:/app/helper-support.mjs:ro" \
+    -v "$src/agents/connector/connector.mjs:/app/connector.mjs:ro" \
+    -v "$src/agents/connector/agent-catalog.mjs:/app/agent-catalog.mjs:ro" \
+    -v "$src/agents/connector/capability-dispatch.mjs:/app/capability-dispatch.mjs:ro" \
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/helper-fixture.mjs
   rm -rf -- "$desk_tls"
   unset desk_tls

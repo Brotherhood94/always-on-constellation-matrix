@@ -112,7 +112,10 @@ with TemporaryDirectory() as temp, ExitStack() as stack:
         operator = login('operator', password, 'HELPERSMOKEOWNER', 'Helper Smoke Operator')
         # This file contains only disposable Matrix identities inside the test volume.
         save(Path('/data/helper-smoke.json'), {'operator': operator, 'owner': owner['user_id'],
-             'privateRoom': helper_dm, 'domain': server,
+             'privateRoom': helper_dm, 'office': rooms['office'], 'domain': server,
+             'managerToken': token.strip(),
+             'coachToken': (data/'state/coach/matrix/matrix-token').read_text().strip(),
+             'helperOfficeToken': (data/'state/helper/matrix/matrix-token').read_text().strip(),
              'helperToken': (data/'state/helper/dm/matrix-token').read_text().strip()})
     migrate(data,args)
     assert load(data/'agents.json') == result

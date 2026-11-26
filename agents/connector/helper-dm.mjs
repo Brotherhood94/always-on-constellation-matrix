@@ -5,6 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
 import { describeTurnFailure, runTurn } from './acp.mjs';
 import { helperIdentity, helperQuestion, privateHelperRoom, supportEvidence } from './helper-support.mjs';
+import { mentionMessage } from './matrix-format.mjs';
 import { threadRelation } from './matrix-routing.mjs';
 import { openRoomClient, readEncryptedRoomMessage, sendEncrypted } from './matrix-session.mjs';
 import { Store } from './store.mjs';
@@ -85,7 +86,7 @@ while (true) {
           }
           if (await privateRoom()) {
             const sent = await sendEncrypted(client, roomId, 'helper-reply-' + digest(event.id),
-              { msgtype: 'm.text', body: reply, 'm.relates_to': threadRelation(event) });
+              { ...mentionMessage(reply), 'm.relates_to': threadRelation(event) });
             store.sent(event.id, sent);
           }
         }
