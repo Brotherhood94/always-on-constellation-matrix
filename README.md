@@ -15,7 +15,7 @@ Start with five roles and add specialists as your work grows. Use the record of 
 | Agent | What it owns | Where to start |
 | --- | --- | --- |
 | **Task Manager** | Coordinates work, delegates by capability, and verifies the result in the original thread. | **Office** |
-| **Hiring Manager** | Spots recurring gaps in the team’s capabilities and proposes new personas or retirements. | **Hiring Manager** private chat |
+| **Hiring Manager** | Groups recurring capability gaps across differently worded assignments and proposes new personas or retirements. | **Hiring Manager** private chat |
 | **Coach** | Reviews handoffs in Context Intelligence and revises working styles and permitted contacts through Persona Workshop. | **Coach** private chat |
 | **Scouter** | Researches skills, MCP servers, and tools for existing duties and has the target agent verify approved access. | **Scouter** private chat |
 | **VPS Manager** | Prepares and verifies host maintenance. The operator votes on the exact operation before it runs. | **Office** for requests, **Root Operations** for approval |

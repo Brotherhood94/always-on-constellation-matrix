@@ -7,6 +7,7 @@ cleanup() {
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker volume rm "$name" >/dev/null 2>&1 || true
   docker network rm "$name" >/dev/null 2>&1 || true
+  if [[ -n ${desk_tls:-} ]]; then rm -rf -- "$desk_tls"; fi
 }
 trap cleanup EXIT
 docker volume create "$name" >/dev/null
@@ -55,7 +56,11 @@ docker exec -u 0 -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
   -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/workspace/deploy \
   "$name" python -B /workspace/tests/team_migration_fixture.py
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 || ${MATRIX_TEAM_DESKS_SMOKE:-0} == 1 ]]; then
+  desk_tls=$(mktemp -d)
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
+    -keyout "$desk_tls/key.pem" -out "$desk_tls/ca.pem" >/dev/null 2>&1
   docker run --rm --network "$name" --network-alias context --user 0:0 --entrypoint node \
+    -v "$desk_tls:/desk-tls:ro" \
     -v "$src/integrations/chief-of-staff:/app/chief-of-staff:ro" \
     -v "$src/tests/team-desks-fixture.mjs:/app/team-desks-fixture.mjs:ro" \
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/team-desks-fixture.mjs

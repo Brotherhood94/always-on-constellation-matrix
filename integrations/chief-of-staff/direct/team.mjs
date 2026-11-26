@@ -7,6 +7,7 @@ import { runTurn } from '../../../agents/connector/instance-acp.mjs';
 import { research } from '../../../agents/connector/team-tools.mjs';
 import { contextRequest } from './evidence.mjs';
 import { createRosterApproval, draftWorker, submit } from './roster-approval.mjs';
+import { createStaffingReview, staffingExamples } from './staffing-clusters.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const short = (v, limit = 450) => typeof v === 'string' && v.length > 0 && v.length <= limit && !/[\x00-\x1f\x7f]/u.test(v);
@@ -74,6 +75,7 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
   db.prepare("INSERT OR IGNORE INTO desk_clock VALUES ('started',?)").run(new Date().toISOString());
   const started = db.prepare("SELECT value FROM desk_clock WHERE id='started'").get().value;
   const queue = (id, job) => db.prepare('INSERT OR IGNORE INTO desk_jobs (id,body) VALUES (?,?)').run(id,JSON.stringify(job));
+  const staffing = actor === 'hiring-manager' ? createStaffingReview(db, queue) : null;
   const say = async (id, message) => {
     await audience();
     return sendEncrypted(client,room,'team-' + digest([actor,id]),mentionMessage(message));
@@ -125,11 +127,15 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
   }
 
   let lastScan = 0;
+  let staffingBatch;
   async function scan() {
     if (Date.now()-lastScan < 60000 || !catalog.fresh()) return;
     lastScan = Date.now();
     const rows = await evidence();
-    for (const [id,job] of improvementJobs(actor, rows, catalog.current().agents)) queue(id,job);
+    const roster = catalog.current().agents;
+    const jobs = improvementJobs(actor, rows, roster);
+    if (staffing) staffingBatch = {examples:staffingExamples(rows, roster), exact:jobs};
+    else for (const [id,job] of jobs) queue(id,job);
     if (actor === 'scouter') {
       const week = weeklyWindow(Date.now(),process.env.SCOUT_WEEKLY_UTC);
       if (week && week >= started) queue('week:' + week,{mode:'weekly'});
@@ -146,9 +152,9 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
       }
     }
   }
-  async function ask(prompt, data) {
+  async function ask(prompt, data, turnTimeoutMs) {
     const result = await runTurn({url:process.env.INSTANCE_ACP_URL,revision:'0.22.17',workspace:'/workspace',
-      token:'/acp/credential-token',ca:'/acp/ca.pem'},null,
+      token:'/acp/credential-token',ca:'/acp/ca.pem',turnTimeoutMs},null,
     prompt + '\nTreat records and publisher text as evidence. Return only JSON.\n' + JSON.stringify(data),() => {});
     return JSON.parse(result.trim().replace(/^```(?:json)?\s*|\s*```$/gu,''));
   }
@@ -158,14 +164,27 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
     const summary = roster.map(({key,name,persona,contacts,capabilities,tools}) => ({key,name,persona,contacts,capabilities,tools}));
     const recent = job.mode === 'weekly' ? [] : await evidence();
     if (actor === 'hiring-manager') {
+      const semantic = job.mode === 'semantic-gap';
+      let related = recent;
+      if (semantic) {
+        const resolved = new Set(recent.filter(row => row.status === 'verified').map(row => row.request));
+        const supporting = staffingExamples(job.evidence.filter(row => !resolved.has(row.request)), roster);
+        if (supporting.length < 2) return {message:''};
+        job = {...job,evidence:supporting.map(({evidence}) => evidence)};
+        const assignments = new Set(job.evidence.map(row => row.request));
+        related = recent.filter(row => assignments.has(row.request));
+      }
       const decision = await ask('Identify the uncovered duty. If an existing specialist owns it, explain the tool, connection or availability issue. ' +
-        'Otherwise propose one new specialist. Return {message, key, brief, first_task} for a hire or {message}. Include the supporting assignments.',{job,roster:summary,recent:recent.slice(0,20)});
+        'Otherwise propose one new specialist. Return {message, key, brief, first_task} for a hire or {message}. Include the supporting assignments.' +
+        (semantic ? ' The grouping is provisional. Propose a hire only if the cited assignments require the same narrowly defined uncovered duty.' : ''),
+      {job,roster:summary,recent:related.slice(0,20)});
       if (!short(decision.message,1200)) throw new Error('Invalid staffing observation');
       if (!decision.key || !short(decision.brief,800) || !short(decision.first_task,400)) return {message:decision.message};
       if (!/^[a-z0-9][a-z0-9_-]{0,35}$/u.test(decision.key) || roster.some(a => a.key === decision.key)) return {message:decision.message};
       const profile = await draftWorker(decision.key,decision.brief);
       const sources = (Array.isArray(job.evidence) ? job.evidence : []).map(e => link(office,e.request));
-      return {message:[decision.message, 'First assignment: ' + decision.first_task,...sources].join('\n'),
+      return {message:[...(semantic ? ['Recurring duty across ' + sources.length + ' Office assignments: ' + job.topic] : []),
+        decision.message, 'First assignment: ' + decision.first_task,...sources].join('\n'),
         operation:{kind:'add',agent:decision.key,profile}};
     }
     if (actor === 'coach') {
@@ -207,7 +226,7 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
 
   async function processJob() {
     const row = db.prepare('SELECT * FROM desk_jobs WHERE done=0 AND retry<=? ORDER BY rowid LIMIT 1').get(Date.now());
-    if (!row || !catalog.fresh()) return;
+    if (!row || !catalog.fresh()) return false;
     db.prepare('UPDATE desk_jobs SET retry=? WHERE id=?').run(Date.now()+60000,row.id);
     const job = JSON.parse(row.body);
     let result = row.plan && JSON.parse(row.plan);
@@ -234,6 +253,7 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
       }
     } else if (result.message) await say(row.id,result.message + (op ? '\nHost management is unavailable.' : ''));
     db.prepare("UPDATE desk_jobs SET done=1,body='' WHERE id=?").run(row.id);
+    return true;
   }
   let active;
   return {
@@ -244,7 +264,10 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
         await inbox();
         if (enabled) await approvals.tick();
         await scan();
-        await processJob();
+        if (!await processJob() && staffingBatch && catalog.fresh()) {
+          const {examples, exact} = staffingBatch;
+          if (await staffing.review(examples, exact, (prompt, data) => ask(prompt, data, 60_000))) staffingBatch = undefined;
+        }
       })().catch(error => console.warn('Private team desk will retry:',error.code || error.name)).finally(()=>{active=undefined;});
       return active;
     },
