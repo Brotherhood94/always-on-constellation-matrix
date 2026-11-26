@@ -2,12 +2,12 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { mentionMessage } from '../../../agents/connector/matrix-format.mjs';
-import { acknowledgePrivateMessage, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
+import { acknowledgePrivateMessage, readOptional, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
 import { runTurn } from '../../../agents/connector/instance-acp.mjs';
 import { research } from '../../../agents/connector/team-tools.mjs';
 import { contextRequest } from './evidence.mjs';
 import { createRosterApproval, draftWorker, submit } from './roster-approval.mjs';
-import { createStaffingReview, staffingExamples } from './staffing-clusters.mjs';
+import { createStaffingReview, staffingExamples, staffingRoster } from './staffing-clusters.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const short = (v, limit = 450) => typeof v === 'string' && v.length > 0 && v.length <= limit && !/[\x00-\x1f\x7f]/u.test(v);
@@ -29,7 +29,8 @@ export function weeklyWindow(now, schedule = 'Mon 09:00') {
 export function improvementJobs(actor, rows, roster) {
   const jobs = new Map();
   const grouped = new Map();
-  for (const row of rows) {
+  const candidates = actor === 'hiring-manager' ? staffingExamples(rows, roster).map(({evidence}) => evidence) : rows;
+  for (const row of candidates) {
     const {need, request, reply, thread} = row;
     if (!eventId(request) || !eventId(reply) || !eventId(thread) || !roster.some(a => a.id === row.actor)) continue;
     if (actor === 'coach' && (row.step === 'blocked' || row.outcome === 'blocked' ||
@@ -126,13 +127,20 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
     db.prepare('UPDATE desk_inbox SET done=1 WHERE id=?').run(row.id);
   }
 
+  async function reviewRoster() {
+    const agents = catalog.current().agents;
+    if (actor !== 'hiring-manager') return agents;
+    const raw = await readOptional('/catalog/integrations.json');
+    return staffingRoster(agents, raw ? JSON.parse(raw) : null, self.slice(self.indexOf(':') + 1));
+  }
+
   let lastScan = 0;
   let staffingBatch;
   async function scan() {
     if (Date.now()-lastScan < 60000 || !catalog.fresh()) return;
     lastScan = Date.now();
     const rows = await evidence();
-    const roster = catalog.current().agents;
+    const roster = await reviewRoster();
     const jobs = improvementJobs(actor, rows, roster);
     if (staffing) staffingBatch = {examples:staffingExamples(rows, roster), exact:jobs};
     else for (const [id,job] of jobs) queue(id,job);
@@ -159,14 +167,14 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
     return JSON.parse(result.trim().replace(/^```(?:json)?\s*|\s*```$/gu,''));
   }
 
-  async function plan(job) {
-    const roster = catalog.current().agents;
-    const summary = roster.map(({key,name,persona,contacts,capabilities,tools}) => ({key,name,persona,contacts,capabilities,tools}));
+  async function plan(job, roster) {
+    const summary = roster.map(({key,name,persona,contacts,capabilities,tools,status,limits}) =>
+      ({key,name,persona,contacts,capabilities,tools,status,limits}));
     const recent = job.mode === 'weekly' ? [] : await evidence();
     if (actor === 'hiring-manager') {
       const semantic = job.mode === 'semantic-gap';
       let related = recent;
-      if (semantic) {
+      if (semantic || job.mode === 'gap') {
         const resolved = new Set(recent.filter(row => row.status === 'verified').map(row => row.request));
         const supporting = staffingExamples(job.evidence.filter(row => !resolved.has(row.request)), roster);
         if (supporting.length < 2) return {message:''};
@@ -175,6 +183,7 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
         related = recent.filter(row => assignments.has(row.request));
       }
       const decision = await ask('Identify the uncovered duty. If an existing specialist owns it, explain the tool, connection or availability issue. ' +
+        'Read the current roster together with its service status. An Office handoff or return alone does not establish Telegram delivery. ' +
         'Otherwise propose one new specialist. Return {message, key, brief, first_task} for a hire or {message}. Include the supporting assignments.' +
         (semantic ? ' The grouping is provisional. Propose a hire only if the cited assignments require the same narrowly defined uncovered duty.' : ''),
       {job,roster:summary,recent:related.slice(0,20)});
@@ -232,9 +241,12 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
     const clearActivity = row.id.startsWith('operator:')
       ? await acknowledgePrivateMessage(client, room, job.source)
       : null;
+    const roster = await reviewRoster();
     let result = row.plan && JSON.parse(row.plan);
+    if (result && actor === 'hiring-manager' && ['gap', 'semantic-gap'].includes(job.mode) &&
+        staffingExamples(job.evidence, roster).length < 2) result = { message: '' };
     if (!result) {
-      result = await plan(job);
+      result = await plan(job, roster);
       db.prepare('UPDATE desk_jobs SET plan=? WHERE id=?').run(JSON.stringify(result),row.id);
     }
     const op = result.operation;

@@ -37,6 +37,11 @@ const host = createSocket(socket => {
 await Promise.all([new Promise(r=>graph.listen(8000,r)),new Promise(r=>host.listen('/run/office-roster.sock',r))]);
 process.env.ROSTER_MANAGEMENT='true';
 await mkdir('/state',{recursive:true});
+await mkdir('/catalog',{recursive:true});
+await writeFile('/catalog/integrations.json', JSON.stringify({
+  time: Math.floor(Date.now() / 1000),
+  services: { 'Telegram Agent': 'running', 'Telegram engine': 'healthy' },
+}));
 await writeFile('/context-token','fixture-context');
 await writeFile('/roster-key','fixture-desk');
 await mkdir('/acp');
@@ -64,6 +69,9 @@ acp.on('connection', (socket, request) => {
     } else if (prompt.startsWith('Identify the uncovered duty')) {
       assert.equal(input.job.mode, 'semantic-gap');
       assert.equal(input.job.evidence.length, 2);
+      const telegram = input.roster.find(agent => agent.key === 'telegram-agent');
+      assert.equal(telegram?.status, 'Available');
+      assert.ok(telegram.capabilities.some(skill => skill.code === 'telegram-chat-link'));
       answer = {message:'Both releases need a writer for the customer summary.', key:'release-editor',
         brief:'Write customer-facing release notes.', first_task:'Draft the next release summary.'};
     } else {
@@ -142,6 +150,16 @@ try {
               need:{kind:'role',topic,resource,reason}}})});
           }
           assignments = officeEvidence.map(record => JSON.parse(record.data).evidence.request);
+          for (const n of [1, 2]) {
+            const request = await sendEncrypted(publisher.client, office, 'link-chat-' + n,
+              mentionMessage('Synthetic Telegram chat-link request.'));
+            const reply = await sendEncrypted(publisher.client, office, 'link-chat-blocked-' + n,
+              mentionMessage('Synthetic Telegram routing blocker.'));
+            officeEvidence.push({ status:'blocked', data:JSON.stringify({evidence:{
+              actor:agent.id, request, thread:request, reply,
+              need:{kind:'role', topic:'telegram-chat-link', resource:'workspace:telegram', reason:'Link a Telegram chat.'},
+            }}) });
+          }
         } finally {publisher.client.crypto.engine.machine.close();}
         const service=await openDesk({db,client:desk.client,catalog,office,owner,actor});
         turn=await sendEncrypted(operator.client,room,'retire-coder',mentionMessage('retire coder'));

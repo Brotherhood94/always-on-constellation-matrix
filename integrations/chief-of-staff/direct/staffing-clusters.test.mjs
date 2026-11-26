@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { createStaffingReview, staffingClusters, staffingExamples } from './staffing-clusters.mjs';
+import { createStaffingReview, staffingClusters, staffingExamples, staffingRoster } from './staffing-clusters.mjs';
 
 const actor = '@coordinator:fixture.test';
 const roster = [{ id: actor, capabilities: [] }];
@@ -41,6 +41,19 @@ test('only unresolved, uncovered staffing evidence from known contributors reach
   assert.deepEqual(examples[0].description, {
     capability: 'release-notes', resource_type: 'repo', reason: notes.need.reason,
   });
+});
+
+test('service inventory supplies Telegram ownership even when its health is stale', () => {
+  const inventory = { time: now / 1000, services: { 'Telegram Agent': 'running', 'Telegram engine': 'healthy' } };
+  const team = staffingRoster(roster, inventory, 'fixture.test', now);
+  assert.equal(team.at(-1).id, '@telegram-agent:fixture.test');
+  assert.equal(team.at(-1).status, 'Available');
+  assert.equal(staffingRoster(roster, inventory, 'fixture.test', now + 4 * minute).at(-1).status, 'Status unavailable');
+  assert.equal(staffingRoster(team, inventory, 'fixture.test', now), team);
+  assert.equal(staffingRoster(roster, {services:{'Telegram guide':'running'}}, 'fixture.test', now), roster);
+  const telegram = gap('telegram', 'telegram-chat-link', 'workspace:telegram', 'Link a verified Telegram chat.');
+  assert.equal(staffingExamples([telegram], roster).length, 1);
+  assert.deepEqual(staffingExamples([telegram], team), []);
 });
 
 test('semantic clusters accept paraphrases across scopes and must cite multiple assignments', () => {

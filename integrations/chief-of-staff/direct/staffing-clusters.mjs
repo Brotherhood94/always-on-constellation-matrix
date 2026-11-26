@@ -6,6 +6,30 @@ const maxExamples = 36;
 const reviewInterval = 10 * 60_000;
 const digest = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+export function staffingRoster(agents, integrations, server, now = Date.now()) {
+  const services = integrations?.services;
+  const state = services?.['Telegram Agent'] ?? services?.['Telegram Control'];
+  if (!state || agents.some(agent => agent.key === 'telegram-agent')) return agents;
+  const fresh = Number.isSafeInteger(integrations.time) && Math.abs(now - integrations.time * 1000) <= 180_000;
+  const status = !fresh ? 'Status unavailable'
+    : state === 'healthy' || (state === 'running' && services['Telegram engine'] === 'healthy') ? 'Available'
+      : state === 'running' && services['Telegram engine'] !== 'unhealthy' ? 'Running'
+        : state === 'starting' ? 'Starting' : 'Unavailable';
+  return [...agents, {
+    key: 'telegram-agent', id: '@telegram-agent:' + server, name: 'Telegram Agent', role: 'worker', status,
+    limits: 'Uses the scoped Telegram handoff. Draft delivery requires operator approval and a verified chat binding.',
+    persona: { purpose: 'Link Telegram chats through the bridge, prepare drafts, and read verified chat updates.' },
+    capabilities: [
+      { code: 'telegram-chat-link', description: 'Find and link verified Telegram contacts and groups.',
+        resources: ['workspace:telegram', 'telegram:*'] },
+      { code: 'telegram-draft', description: 'Prepare a draft for operator approval in Telegram Bridge.',
+        resources: ['workspace:telegram', 'telegram:*'] },
+      { code: 'telegram-chat-update', description: 'Summarize recent messages from a verified Telegram chat.',
+        resources: ['workspace:telegram', 'telegram:*'] },
+    ],
+  }];
+}
+
 export function staffingExamples(rows, roster) {
   const contributors = new Set(roster.map(agent => agent.id));
   const catalog = { agents: roster.filter(agent => Array.isArray(agent.capabilities)) };

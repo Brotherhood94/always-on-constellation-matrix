@@ -31,6 +31,16 @@ test('employment, tool gaps, credentials and outages reach the appropriate desk'
   assert.equal(weeklyWindow(Date.now(),'off'),null);
 });
 
+test('two routing failures for a duty owned by Telegram Agent do not trigger a hiring review', () => {
+  const role = {...reply,need:{kind:'role',topic:'telegram-chat-link',resource:'workspace:telegram'}};
+  const telegram = { id:'@telegram-agent:fixture.test', capabilities:[
+    { code:'telegram-chat-link', description:'Link verified Telegram chats.', resources:['workspace:telegram'] },
+  ] };
+  const rows = [role, {...role, request:'$second'}];
+  assert.equal(improvementJobs('hiring-manager', rows, roster).size, 1);
+  assert.equal(improvementJobs('hiring-manager', rows, [...roster, telegram]).size, 0);
+});
+
 test('a return to the actual assigner can cross a removed contact without authorizing a new assignment', async () => {
   const names = {[actor]:'Editor',[coach]:'Coach'}, target = {id:actor,name:'Editor'};
   const task = {id:'$task', request:'$task',thread:'$task',number:1};
