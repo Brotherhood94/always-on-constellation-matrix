@@ -123,3 +123,42 @@ class StarterTeamTests(unittest.TestCase):
         registry['agents']['scouter'].update(persona_revision=9, applied_style='Follow the newly applied revision.')
         row = next(r for r in document(registry,[],'host',1,profiles)['agents'] if r['key']=='scouter')
         self.assertEqual(row['persona']['working_style'],'Follow the newly applied revision.')
+
+    def test_interrupted_undo_checks_the_snapshot_and_finishes_without_applying_twice(self):
+        from tempfile import TemporaryDirectory
+        from types import SimpleNamespace
+        from team_management import coach_change, coaching_id
+        target = 'f46311b5-1b4f-480f-a4b5-1f43095e50fc'
+        first = 'a' * 64
+        op = {'kind': 'undo', 'agent': 'scouter', 'evidence': '$proof', 'change': first, 'generation': 2}
+        current = coaching_id(op)
+        registry = {'agents': {k: {**v, 'active': True} for k, v in installer.starter_profiles().items()}}
+        registry['agents']['scouter']['last_coaching'] = current
+        with TemporaryDirectory() as folder:
+            data = Path(folder)
+            (data / 'workshop-management').mkdir()
+            journal = data / 'team-changes'
+            journal.mkdir()
+            installer.save(data / 'workshop-management/targets.json', {'scouter': {'instance': 'id', 'target': target}})
+            installer.save(journal / (first + '.json'), {
+                'before_contacts': ['task-manager', 'hiring-manager'], 'before_style': 'Describe the publisher.',
+                'before_override': None,
+            })
+            receipt = journal / (current + '.json')
+            installer.save(receipt, {
+                'target': target, 'generation': 2, 'before_snapshot': 'snapshot', 'restore': 'baseline',
+            })
+            expected = {'working-style.md': 'old-digest'}
+            actual = {'target': {'agent_id': 'id'}, 'installation': {
+                'revision': 3, 'active': {'files': {'working-style.md': 'different'}},
+                'previous': [{'id': 'baseline', 'files': expected}],
+            }}
+            with patch('team_management.compose', return_value=SimpleNamespace(stdout='workshop')), \
+                 patch('team_management.api', return_value=actual) as api, patch('team_management.publish_inventory'):
+                with self.assertRaisesRegex(ValueError, 'files do not match'):
+                    coach_change(data, {}, registry, op)
+                self.assertEqual(installer.load(receipt)['restore_files'], expected)
+                actual['installation'].update(active={'files': expected}, previous=[])
+                self.assertEqual(coach_change(data, {}, registry, op), 'applied')
+                self.assertTrue(installer.load(receipt)['done'])
+                self.assertTrue(all(call.args[1] == 'GET' for call in api.call_args_list))

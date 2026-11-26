@@ -118,7 +118,8 @@ def coach_change(data, settings, registry, operation, *, approved=False):
     old_contacts = contacts_for(key, registry['agents'])
     if kind == 'undo':
         old_id = operation.get('change', '')
-        if not re.fullmatch(r'[a-f0-9]{64}', old_id) or entry.get('last_coaching') != old_id:
+        resuming_saved_undo = bool(record) and entry.get('last_coaching') == operation_id
+        if not re.fullmatch(r'[a-f0-9]{64}', old_id) or (entry.get('last_coaching') != old_id and not resuming_saved_undo):
             raise ValueError('Only the current revision can be undone')
         old = load(journal / (old_id + '.json'))
         style, contacts = old['before_style'], old['before_contacts']
@@ -156,10 +157,16 @@ def coach_change(data, settings, registry, operation, *, approved=False):
                   'before_style': previous_style, 'before_contacts': old_contacts, 'revision': revision,
                   'before_override':entry.get('office_contacts'), 'before_snapshot': previous and previous['id'],
                   'restore':old['before_snapshot'] if kind == 'undo' else None}
-        save(path, record)
     if record['target'] != target:
         raise ValueError('Target changed before publication')
     installed = live['installation']
+    if kind == 'undo' and 'restore_files' not in record:
+        snapshots = installed.get('previous', [])
+        snapshot = next((item for item in snapshots if item['id'] == record['restore']), None)
+        if snapshot is None:
+            raise ValueError('The previous Workshop snapshot is unavailable')
+        record['restore_files'] = snapshot['files']
+    save(path, record)
     if installed['revision'] == record['generation']:
         if record['restore']:
             installed = request('POST', TARGETS + '/' + target + '/restore',
@@ -169,6 +176,8 @@ def coach_change(data, settings, registry, operation, *, approved=False):
     elif installed['revision'] != record['generation'] + 1 or (kind == 'coach' and
             ((installed.get('active') or {}).get('source') or {}).get('revision') != record['revision'].split('/')[-1]):
         raise ValueError('Another profile was installed. Review the current revision.')
+    if kind == 'undo' and (installed.get('active') or {}).get('files', {}) != record['restore_files']:
+        raise ValueError('The active Workshop files do not match the restored snapshot')
     if not record['before_snapshot'] and installed.get('previous'):
         record['before_snapshot'] = installed['previous'][0]['id']
     entry.update(office_contacts=contacts, applied_style=style, persona_revision=installed['revision'], last_coaching=operation_id)

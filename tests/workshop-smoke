@@ -61,6 +61,7 @@ second_style = apply_style(request, target, next_revision, installed['revision']
 assert [c['statement'] for c in active_claims(request, second_style) if c['collection'] == 'communication'] == ['State the deliverable.']
 restored = request('POST', TARGETS + '/' + target + '/restore', {'id':baseline, 'expected_revision':second_style['revision']})
 assert restored['installation']['revision'] > installed['revision']
+assert (restored['installation'].get('active') or {}).get('files', {}) == installed['previous'][0]['files']
 assert installed['active']['source']['revision'] == revision.split('/')[-1], installed['active']['source']
 print('Verified an actual working-style revision on the connected Instance.')
 print('The real Workshop enrolled a live Instance once and read its unchanged profile status.')
