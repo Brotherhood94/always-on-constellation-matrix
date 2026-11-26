@@ -9,6 +9,7 @@ test('the dashboard shows the Telegram specialist and its managed route when Tel
     agents: [{ key: 'task-manager', name: 'Task Manager', role: 'coordinator', contacts: [] },
       { key: 'coder', name: 'Coder', role: 'worker', contacts: [] }] };
   assert.equal(officeCatalog(catalog, { services: {} }), catalog);
+  assert.equal(officeCatalog(catalog, { services: { 'Telegram guide': 'running' } }, null, false), catalog);
   const setup = officeCatalog(catalog, { services: { 'Telegram guide': 'running' } });
   assert.deepEqual(connectionGraph(setup).edges, [['task-manager', 'telegram-agent']]);
   assert.equal(setup.agents.at(-1).status, 'Setup required');

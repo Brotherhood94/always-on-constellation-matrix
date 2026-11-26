@@ -80,7 +80,7 @@ class OperatorCLITest(unittest.TestCase):
     def test_element_and_agent_selection_use_the_operator_session_before_elevation(self):
         output = StringIO()
         with TemporaryDirectory() as work, redirect_stdout(output), patch('operator_cli.confirm_element', return_value='next'), \
-                patch('operator_cli.select_agents', return_value=['manager', 'helper']), \
+                patch('operator_cli.select_agents', return_value=['manager', 'helper', 'telegram-agent']) as picker, \
                 patch('operator_cli.request') as request, patch('operator_cli.elevate') as sudo:
             data = Path(work)
             publish_metadata(data, self.settings, {'agents': {}})
@@ -96,47 +96,59 @@ class OperatorCLITest(unittest.TestCase):
                     self.assertIn('start local Amplifier containers with Docker', notice)
                     self.assertIn('Linux password for the VPS account shown in the prompt', notice)
                     self.assertNotIn('matrix-fixture-password', notice)
-                    self.assertEqual(payload, {'selection': ['manager', 'helper'], 'token': 'matrix-session-fixture'})
+                    self.assertEqual(payload, {'selection': ['manager', 'helper', 'telegram-agent'],
+                                               'token': 'matrix-session-fixture'})
                     save(data / 'setup.json', {**initial, 'element_confirmed': True, 'select_agents': False,
-                                              'selected': payload['selection'], 'pending': payload['selection']})
+                                              'selected': ['manager', 'helper'], 'pending': ['manager', 'helper'],
+                                              'telegram_agent_pending': True})
                 if action == 'configure':
                     state = load(data / 'setup.json')
-                    state['pending'].remove(rest[0])
+                    if rest[0] == 'telegram-agent':
+                        state['telegram_agent_pending'] = False
+                    else:
+                        state['pending'].remove(rest[0])
                     save(data / 'setup.json', state)
 
             sudo.side_effect = mutate
             setup_as_operator(data, passphrase='matrix-fixture-password')
             self.assertEqual([item.args[2:] for item in sudo.call_args_list],
                              [('enroll',), ('configure', 'manager', '--pending-only'),
-                              ('configure', 'helper', '--pending-only'), ('finish',)])
+                              ('configure', 'helper', '--pending-only'),
+                              ('configure', 'telegram-agent', '--pending-only'), ('finish',)])
+            self.assertIn('telegram-agent', picker.call_args.args[0])
             self.assertIn('Amplifier will open provider and model setup', output.getvalue())
-            self.assertIn('Local agent 1 of 2', output.getvalue())
-            self.assertIn('Local agent 2 of 2', output.getvalue())
+            self.assertIn('Local agent 1 of 3', output.getvalue())
+            self.assertIn('Local agent 2 of 3', output.getvalue())
+            self.assertIn('Local agent 3 of 3', output.getvalue())
             self.assertEqual(request.call_args_list[0].args[:2], ('POST', CLIENT + '/login'))
             self.assertEqual(request.call_args_list[-1],
                              call('POST', CLIENT + '/logout', {}, 'matrix-session-fixture', local_port=18500))
 
-    def test_telegram_setup_follows_office_provider_setup_and_resumes_after_welcome(self):
-        for enabled, welcomed in ((True, False), (True, True), (False, True)):
-            with self.subTest(enabled=enabled, welcomed=welcomed), TemporaryDirectory() as work, \
-                    redirect_stdout(StringIO()), patch('operator_cli.interactive_terminal', return_value=True), \
-                    patch('operator_cli.elevate') as sudo:
+    def test_existing_telegram_install_resumes_without_configuring_office_again(self):
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output, \
+                patch('operator_cli.elevate') as sudo:
+            data = Path(work)
+            publish_metadata(data, self.settings, {'agents': {}})
+            state = {**load(data / 'setup.json'), 'element_confirmed': True, 'welcomed': True}
+            state.pop('telegram_agent_pending')  # Published by the earlier installer.
+            save(data / 'setup.json', state)
+            setup_as_operator(data)
+            sudo.assert_called_once_with(data, '_host', 'configure', 'telegram-agent', '--pending-only')
+            self.assertIn('Local agent 1 of 1', output.getvalue())
+
+    def test_telegram_disabled_and_bridge_only_setups_do_not_configure_the_agent(self):
+        for bridge in (True, False):
+            with self.subTest(bridge=bridge), TemporaryDirectory() as work, redirect_stdout(StringIO()), \
+                    patch('operator_cli.interactive_terminal', return_value=True), patch('operator_cli.elevate') as sudo:
                 data = Path(work)
-                publish_metadata(data, {**self.settings, 'telegram': enabled}, {'agents': {}})
-                state = {**load(data / 'setup.json'), 'element_confirmed': True, 'welcomed': welcomed,
-                         'pending': [] if welcomed else ['manager']}
+                publish_metadata(data, {**self.settings, 'telegram': bridge, 'telegram_agent': False}, {'agents': {}})
+                state = {**load(data / 'setup.json'), 'element_confirmed': True, 'welcomed': True}
                 save(data / 'setup.json', state)
-
-                def activate(_, group, action, *args):
-                    if group == '_host' and action == 'configure':
-                        save(data / 'setup.json', {**state, 'pending': []})
-
-                sudo.side_effect = activate
                 setup_as_operator(data)
-                expected = [] if welcomed else [('_host', 'configure'), ('_host', 'finish')]
-                if enabled:
-                    expected.append(('telegram', 'setup'))
-                self.assertEqual([item.args[1:3] for item in sudo.call_args_list], expected)
+                if bridge:
+                    sudo.assert_called_once_with(data, 'telegram', 'setup')
+                else:
+                    sudo.assert_not_called()
 
     def test_empty_selection_explains_why_saving_setup_progress_needs_sudo(self):
         output = StringIO()

@@ -49,34 +49,44 @@ configure_office_bridge() {
 
 case ${1:-} in
   setup-state)
-    if [[ -e "$TELEGRAM_DATA/connector/relocation-drain" || -e "$TELEGRAM_DATA/engine-moved" ]]; then
+    mode=${2:-agent}
+    [[ $mode == agent || $mode == bridge ]]
+    if [[ $mode == agent &&
+          ( -e "$TELEGRAM_DATA/connector/relocation-drain" || -e "$TELEGRAM_DATA/engine-moved" ) ]]; then
       echo managed
+      exit
+    fi
+    running=$("${compose[@]}" --profile agent ps --status running --services)
+    if [[ $mode == agent && ( ! -s "$TELEGRAM_DATA/connector/config.json" ||
+          ! -s "$TELEGRAM_DATA/connector/engine-token" || ! -s "$TELEGRAM_DATA/connector/engine-ca.pem" ) ]]; then
+      echo engine
+    elif [[ $mode == agent && ! -s "$TELEGRAM_DATA/connector/backend-verified" ]]; then
+      if grep -Fxq telegram-engine <<< "$running"; then
+        echo provider
+      else
+        echo engine
+      fi
     elif [[ ! -s "$TELEGRAM_DATA/bridge/registration.yaml" ]]; then
       echo credentials
+    elif ! grep -Fxq telegram-bridge <<< "$running" || [[ ! -s "$TELEGRAM_DATA/guide/space-db" ]]; then
+      echo bridge
     else
-      running=$("${compose[@]}" --profile agent ps --status running --services)
-      if ! grep -Fxq telegram-bridge <<< "$running" || [[ ! -s "$TELEGRAM_DATA/guide/space-db" ]]; then
-        echo bridge
-      else
-        resolve_matrix_owner
-        logged_in=$("${stack[@]}" exec -T postgres psql -AtqX --set ON_ERROR_STOP=1 \
-          --set "owner=$MATRIX_OWNER" -U synapse -d matrix_telegram <<'SQL'
+      resolve_matrix_owner
+      logged_in=$("${stack[@]}" exec -T postgres psql -AtqX --set ON_ERROR_STOP=1 \
+        --set "owner=$MATRIX_OWNER" -U synapse -d matrix_telegram <<'SQL'
 SELECT EXISTS (SELECT 1 FROM user_login WHERE user_mxid = :'owner');
 SQL
-        )
-        if [[ $logged_in != t ]]; then
-          echo login
-        elif [[ ! -s "$TELEGRAM_DATA/connector/config.json" ||
-                ! -s "$TELEGRAM_DATA/connector/engine-token" || ! -s "$TELEGRAM_DATA/connector/engine-ca.pem" ]] ||
-             ! grep -Fxq telegram-engine <<< "$running"; then
-          echo engine
-        elif [[ ! -s "$TELEGRAM_DATA/connector/backend-verified" ]]; then
-          echo provider
-        elif ! grep -Fxq connector <<< "$running"; then
-          echo start
-        else
-          echo ready
-        fi
+      )
+      if [[ $logged_in != t ]]; then
+        echo login
+      elif [[ $mode == bridge ]]; then
+        echo ready
+      elif ! grep -Fxq telegram-engine <<< "$running"; then
+        echo engine
+      elif ! grep -Fxq connector <<< "$running"; then
+        echo start
+      else
+        echo ready
       fi
     fi
     ;;
@@ -155,7 +165,7 @@ SQL
       echo "Activation rolled back. The previous configuration is retained at $previous." >&2
       exit 1
     fi
-    echo 'Telegram bridge is ready for the operator login. The connector remains stopped.'
+    echo 'Telegram Bridge is ready for the operator login.'
     ;;
   allow|disallow)
     [[ $# == 3 ]] || { echo 'Use telegram allow|disallow PEER LOGIN_ID' >&2; exit 2; }
@@ -175,7 +185,6 @@ SQL
     "${compose[@]}" --profile agent build connector telegram-engine
     rm -f -- "$TELEGRAM_DATA/connector/backend-verified"
     install -d -m 0700 -o 991 -g 991 "$TELEGRAM_DATA/instance" "$TELEGRAM_DATA/exchange"
-    "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/audit.sql"
     PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" bootstrap "$TELEGRAM_DATA"
     "${compose[@]}" --profile agent up -d --wait --wait-timeout 120 telegram-engine
     PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" channel "$TELEGRAM_DATA"
@@ -192,6 +201,8 @@ SQL
     ;;
   start-agent)
     [[ -s "$TELEGRAM_DATA/connector/backend-verified" ]] || { echo 'Run telegram probe first.' >&2; exit 1; }
+    [[ -s "$TELEGRAM_DATA/guide/space-db" ]] || { echo 'Activate Telegram Bridge first.' >&2; exit 1; }
+    "${stack[@]}" exec -T postgres psql -qX --set ON_ERROR_STOP=1 -U synapse -d matrix_telegram < "$dir/audit.sql"
     "${compose[@]}" --profile agent up -d --no-deps --build --wait --wait-timeout 60 connector
     ;;
   restart-connector)

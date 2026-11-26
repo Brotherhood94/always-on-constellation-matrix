@@ -61,6 +61,8 @@ PYTHON
 cp "$data/rooms.json" "$work/initial-rooms.json"
 cp "$data/telegram/layout.json" "$work/initial-telegram-layout.json"
 [[ -s "$data/telegram/guide/token" && ! -e "$data/telegram/database.json" ]]
+[[ $(TELEGRAM_STACK_DIR="$data" bash "$src/integrations/telegram/telegram" setup-state agent) == engine ]]
+[[ $(TELEGRAM_STACK_DIR="$data" bash "$src/integrations/telegram/telegram" setup-state bridge) == credentials ]]
 telegram_services=$(docker compose --env-file "$data/.env" -f "$src/integrations/telegram/compose.yaml" \
   -p "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"] + "-telegram")' "$data/settings.json")" \
   ps --services --status running)

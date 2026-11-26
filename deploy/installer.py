@@ -40,6 +40,7 @@ RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
             'telegram-agent', 'telegrambot', 'roster-inviter', 'root', 'vps-manager-ops', 'helper-dm'}
+TELEGRAM_AGENT = 'telegram-agent'
 LEGACY_CONNECTION = 'chatgpt-codex'
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
@@ -52,6 +53,25 @@ def load(path):
 
 def starter_profiles():
     return load(SOURCE / 'deploy/matrix/starter-team.json')
+
+
+def telegram_agent_selected(settings):
+    return settings.get('telegram', False) and settings.get('telegram_agent', True)
+
+
+def onboarding_profiles(settings):
+    profiles = starter_profiles()
+    if telegram_agent_selected(settings):
+        profiles[TELEGRAM_AGENT] = {
+            'name': 'Telegram Agent', 'model': 'gpt-6.2-sol', 'effort': 'low',
+            'profile': {
+                'role': 'worker',
+                'persona': {'purpose': 'Manage Telegram chats and handle Telegram assignments from Office.'},
+                'capabilities': [{'description': 'Find chats, draft messages, and summarize verified conversations.'}],
+                'limits': 'Outbound drafts require your approval in Telegram Bridge.',
+            },
+        }
+    return profiles
 
 
 def available_profiles(registry=None):
@@ -155,6 +175,8 @@ def normalized(raw, presets):
     for key in ('tailscale', 'systemd', 'dot', 'telegram'):
         if type(settings[key]) is not bool:
             raise ValueError(f'{key} must be true or false')
+    if type(settings.get('telegram_agent', True)) is not bool:
+        raise ValueError('telegram_agent must be true or false')
     for key in PORTS:
         if type(settings[key]) is not int or not 1024 <= settings[key] <= 65535:
             raise ValueError(f'{key} must be a TCP port from 1024 to 65535')
@@ -522,7 +544,7 @@ def provision_layout(settings, data, registry, passphrase, *, unattended=False, 
         if settings['dot']:
             prepare_agent_state(data, 'dot', {'name': 'Dot'}, rooms, token, settings)
         if settings['telegram']:
-            provision_telegram_layout(settings, data, rooms, token, unattended=unattended)
+            provision_telegram_layout(settings, data, rooms, token, unattended=unattended, join_office=not office_setup)
         save(data / 'rooms.json', rooms)
         prepare_management(data, settings, registry, token)
     finally:
@@ -576,8 +598,8 @@ def publish_dashboard(settings, data):
     directory(data / 'dashboard', 0o755)
     for name in ('dashboard.css', 'connections.mjs', 'dashboard.mjs', 'index.html'):
         save(data / 'dashboard' / name, (SOURCE / 'dashboard' / name).read_text(), mode=0o644)
-    save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url']},
-         mode=0o644)
+    save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url'],
+                                         'telegramAgent': telegram_agent_selected(settings)}, mode=0o644)
 
 
 def prepare_storage(settings, data):
@@ -604,7 +626,7 @@ def publish_inventory(settings, data, registry):
             row = health.get(key, {})
             integrations[key] = row.get('Health') or row.get('State') or 'unavailable'
     if settings['telegram']:
-        integrations['Telegram'] = 'configured' if (data / 'telegram/connector/config.json').exists() else 'setup required'
+        integrations['Telegram'] = 'configured' if (data / 'telegram/guide/space-db').is_file() else 'setup required'
     for key, entry in registry['agents'].items():
         row = health.get(key, {})
         status = 'Registered' if entry['placement'] == 'remote' else 'Unavailable'
@@ -883,17 +905,24 @@ def provision_selected_agents(data, settings, registry, selection, passphrase, *
     from roster import prepare_management
 
     presets = available_profiles(registry)
-    roster = normalized({**settings, 'agents': selection}, presets)
+    install_telegram = TELEGRAM_AGENT in selection
+    if install_telegram and not settings['telegram']:
+        raise ValueError('Enable the Telegram integration before selecting Telegram Agent')
+    if selection.count(TELEGRAM_AGENT) > 1:
+        raise ValueError('Specify a list of distinct available agents')
+    selection = [key for key in selection if key != TELEGRAM_AGENT]
+    roster = normalized({**settings, 'agents': selection, 'telegram_agent': install_telegram}, presets)
     for key in selection:
         if key not in registry['agents']:
             register_entry(roster, registry, key, presets[key])
-    if selection:
+    if selection or install_telegram:
         rooms = load(data / 'rooms.json')
         if operator_token is not None:
             verify_operator(rooms, operator_token)
-        # Publish config and start engines as a batch. Agent registration and Compose are safe to retry.
-        compose_config(roster, data, registry)
-        refresh_context(data)
+        if selection:
+            # Publish config and start engines as a batch. Registration and Compose are safe to retry.
+            compose_config(roster, data, registry)
+            refresh_context(data)
         if operator_token is None:
             token = login(roster['owner'], passphrase if passphrase is not None else password(roster))['access_token']
         else:
@@ -901,10 +930,14 @@ def provision_selected_agents(data, settings, registry, selection, passphrase, *
         try:
             for key in selection:
                 prepare_agent_state(data, key, registry['agents'][key], rooms, token, roster)
-            prepare_management(data, roster, registry, token)
+            if install_telegram:
+                provision_telegram_layout(roster, data, rooms, token)
+            if selection:
+                prepare_management(data, roster, registry, token)
         finally:
             if operator_token is None:
                 request('POST', CLIENT + '/logout', {}, token)
+    if selection:
         prepare_images(roster, registry)
         up(data, *(f'engine-{key}' for key in selection if registry['agents'][key]['placement'] == 'local'))
         sync_workshop(roster, data, registry)
@@ -912,6 +945,7 @@ def provision_selected_agents(data, settings, registry, selection, passphrase, *
         publish_inventory(roster, data, registry)
         configure_network(roster, data, settings)
     save(data / 'settings.json', roster)
+    publish_dashboard(roster, data)
     close_office_setup_notice(data)
 
 
@@ -982,13 +1016,26 @@ def pending_local_agents(registry):
             if entry['placement'] == 'local' and not entry['active'] and not entry.get('retirement')]
 
 
-def agent_sign_in(data, key=None, *, selection=None):
+def telegram_agent_pending(data, settings):
+    if not telegram_agent_selected(settings):
+        return False
+    telegram_data = data / 'telegram'
+    if (telegram_data / 'engine-moved').exists() or (telegram_data / 'connector/relocation-drain').exists():
+        return False
+    snapshot = data / 'dashboard/telegram.json'
+    connector = load(snapshot).get('services', {}).get('connector', {}) if snapshot.is_file() else {}
+    return not ((telegram_data / 'connector/backend-verified').is_file() and connector.get('state') == 'running')
+
+
+def agent_sign_in(data, key=None, *, selection=None, telegram_pending=False):
     if key is not None:
         agent_activate(data, key)
         return
     pending = pending_local_agents(load(data / 'agents.json'))
     if selection is not None:
         pending = [key for key in pending if key in selection]
+    if telegram_pending:
+        pending.append(TELEGRAM_AGENT)
     if not pending:
         print('All local agents are already connected.')
     for number, key in enumerate(pending, start=1):
@@ -1010,6 +1057,12 @@ def configure_amplifier(data, engine, entry):
 
 
 def agent_activate(data, key, *, pending_only=False):
+    if key == TELEGRAM_AGENT:
+        settings = load(data / 'settings.json')
+        if not telegram_agent_selected(settings):
+            raise ValueError('Select Telegram Agent in the installer first')
+        telegram(data, ['setup'])
+        return
     waiting_message = (f'Provider setup for {key} is waiting for another workspace command. '
                        'Setup will continue automatically.')
     with operator_lock(data, waiting_message=waiting_message):
@@ -1055,7 +1108,7 @@ def run_telegram(data, *args, **options):
     return run('bash', str(SOURCE / 'integrations/telegram/telegram'), *args, env=env, **options)
 
 
-def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *, unattended=False):
+def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *, unattended=False, join_office=True):
     sys.path.insert(0, str(SOURCE / 'integrations/telegram'))
     try:
         from telegram_provision import classify_telegram_rooms, reconcile_layout
@@ -1087,8 +1140,9 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
     if migrating:
         run_telegram(data, 'quiesce-layout')
     try:
+        office = rooms['office'] if join_office and telegram_agent_selected(settings) else None
         layout = reconcile_layout(root, settings['server_name'], owner, token, rooms['space'],
-                                  office=rooms['office'], bridge_active=active, select=select)
+                                  office=office, bridge_active=active, select=select)
     except BaseException:
         if migrating and not load(config).get('bridgeControl'):
             run_telegram(data, 'resume-layout')
@@ -1152,7 +1206,11 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
         raise ValueError('Specify a Telegram command. See docs/telegram.md.')
     if args[0] == 'setup':
         from telegram_setup import setup
-        setup(data, args[1:])
+        from operator_cli import publish_metadata
+        try:
+            setup(data, args[1:], install_agent=telegram_agent_selected(settings))
+        finally:
+            publish_metadata(data, settings, registry)
         return
     if args == ['status', '--refresh']:
         run_telegram(data, 'metrics')
@@ -1405,12 +1463,14 @@ def main():
             from vps_migration import migrate_root
             migrate_root(data, args.owner_password_file, args.yes)
         else:
-            agent_sign_in(data, args.key)
+            settings = load(data / 'settings.json')
+            agent_sign_in(data, args.key, telegram_pending=telegram_agent_pending(data, settings))
             if args.key in (None, 'chief-of-staff', *PRIVATE_ROLES):
                 from roster import enable_management
                 enable_management(data, automatic=True)
             selected = load(data / 'settings.json')['agents']
-            if not set(selected).intersection(pending_local_agents(load(data / 'agents.json'))):
+            if (not set(selected).intersection(pending_local_agents(load(data / 'agents.json')))
+                    and not telegram_agent_pending(data, settings)):
                 finalize_setup(data)
     elif args.command == 'remote':
         from remote import execute

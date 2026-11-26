@@ -16,8 +16,9 @@ sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, close_office_setup_notice, context_config, install, interactive, load, main,
-    normalized, operator_lock, password, prepare_graph_password, prepare_storage, provision_layout, register_entry, save,
-    show_element_setup, tailscale_dns, telegram,
+    normalized, onboarding_profiles, operator_lock, password, prepare_graph_password, prepare_storage,
+    provision_layout, provision_selected_agents, register_entry, save, show_element_setup, tailscale_dns, telegram,
+    telegram_agent_pending,
 )
 from agent_catalog import document
 from compose import definition
@@ -67,6 +68,44 @@ class InstallerTest(unittest.TestCase):
         rendered = '\n'.join(call.args[2] for call in screen.addnstr.call_args_list)
         self.assertIn('[x] Remote Worker', rendered)
         self.assertIn('Runs: remote', rendered)
+
+    def test_telegram_agent_is_preselected_only_when_telegram_is_enabled(self):
+        profiles = onboarding_profiles(self.settings)
+        self.assertIn('telegram-agent', profiles)
+        self.assertNotIn('telegram-agent', onboarding_profiles({**self.settings, 'telegram': False}))
+        screen = Mock()
+        screen.getmaxyx.return_value = (26, 92)
+        screen.getch.side_effect = [curses.KEY_UP, curses.KEY_ENTER, curses.KEY_DOWN, curses.KEY_ENTER]
+        with patch('agent_picker.terminal_picker', side_effect=lambda render, *args: render(screen, *args)):
+            self.assertEqual(select_agents(profiles), [key for key in profiles if key != 'telegram-agent'])
+        rows = [item.args[2] for item in screen.addnstr.call_args_list]
+        self.assertIn('  [x] Telegram Agent', rows)
+        self.assertIn('> [ ] Telegram Agent', rows)
+        self.assertIn('Telegram Agent (telegram-agent)', rows)
+
+    def test_telegram_selection_reuses_the_specialist_account_and_leaves_ordinary_roster_separate(self):
+        for selected in ([], ['telegram-agent']):
+            with self.subTest(selected=selected), TemporaryDirectory() as work, \
+                    patch('installer.verify_operator') as verify, patch('installer.provision_telegram_layout') as layout, \
+                    patch('installer.prepare_agent_state') as ordinary, patch('installer.publish_dashboard'), \
+                    patch('installer.close_office_setup_notice'):
+                data = Path(work)
+                rooms = {'office': '!fixture:fixture.test', 'owner': '@operator:fixture.test'}
+                save(data / 'rooms.json', rooms)
+                registry = {'agents': {}}
+                initial = {key: value for key, value in self.settings.items() if key != 'subscriptions'}
+                provision_selected_agents(data, initial, registry, selected, None, operator_token='fixture-session')
+                settings = load(data / 'settings.json')
+                self.assertTrue(settings['telegram'])
+                self.assertEqual(settings['telegram_agent'], bool(selected))
+                self.assertEqual(settings['agents'], [])
+                self.assertEqual(telegram_agent_pending(data, settings), bool(selected))
+                self.assertEqual(layout.call_count, int(bool(selected)))
+                if selected:
+                    verify.assert_called_once_with(rooms, 'fixture-session')
+                    layout.assert_called_once_with(settings, data, rooms, 'fixture-session')
+                ordinary.assert_not_called()
+                self.assertEqual(registry, {'agents': {}})
 
     def test_integration_checklist_opens_with_all_selected_and_done_highlighted(self):
         screen = Mock()
@@ -515,7 +554,7 @@ class InstallerTest(unittest.TestCase):
                 provision.side_effect = enroll
                 guide(data, settings, 'fixture', 'fixture-password')
             pick.assert_called_once()
-            sign_in.assert_called_once_with(data, selection=['manager'])
+            sign_in.assert_called_once_with(data, selection=['manager'], telegram_pending=False)
             welcome.assert_called_once_with(data, 'fixture')
             self.assertFalse(load(state).get('select_agents'))
 
@@ -570,7 +609,7 @@ class InstallerTest(unittest.TestCase):
             save(data / 'agents.json', {'agents': {'chief-of-staff': {'active': False, 'placement': 'local'}}})
             save(data / 'onboarding.json', {'confirmed': ['element', 'dashboard', 'context']})
             guide(data, settings, 'fixture', None)
-            sign_in.assert_called_once_with(data, selection=['chief-of-staff'])
+            sign_in.assert_called_once_with(data, selection=['chief-of-staff'], telegram_pending=False)
             enable.assert_called_once_with(data, automatic=True)
             welcome.assert_not_called()
             self.assertIn('Resume setup with fixture setup-guide', output.getvalue())
@@ -700,9 +739,10 @@ class InstallerTest(unittest.TestCase):
             data = Path(work).resolve()
             registry_path = data / 'agents.json'
             save(registry_path, self.registry)
-            save(data / 'settings.json', self.settings)
+            save(data / 'settings.json', {**self.settings, 'telegram': False})
 
-            def activate(directory, key):
+            def activate(directory, key, *, telegram_pending):
+                self.assertFalse(telegram_pending)
                 self.assertEqual(data, directory)
                 registry = load(registry_path)
                 registry['agents'][key]['active'] = True

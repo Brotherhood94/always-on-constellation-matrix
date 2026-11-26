@@ -31,7 +31,7 @@ The installer automatically opens Amplifier’s provider and model setup for eac
 
 ## 📨 Configure Telegram Agent
 
-If you selected Telegram, the terminal opens the Telegram setup after the Office agents. Prepare your private API credentials file. Follow the terminal’s instructions to activate the bridge, scan the QR code in Element, and sign in to the dedicated Telegram Agent provider. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.
+When Telegram is enabled, **Telegram Agent** is preselected in the agent checklist. The terminal registers it in Office and opens its Codex provider setup in the numbered agent sequence. Then follow the bridge activation and QR sign-in prompts. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix. Deselect Telegram Agent to link the bridge for manual use.
 
 If you closed the installer, resume the Telegram step on its own.
 

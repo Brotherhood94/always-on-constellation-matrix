@@ -66,7 +66,7 @@ Find the deployment URLs and the password retrieval command for your data direct
 
 ## Connect Dot and Telegram
 
-For Dot, open **Agents → VPS Alerts → Pinned messages → Connect Dot**. Set up the OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. If you selected Telegram, its setup opens in the VPS terminal after the Office agents. To resume it independently, run `./constellation_matrix telegram setup`. After linking your Telegram account in Element and configuring Telegram Agent’s Amplifier provider, follow the Telegram guide to verify a chat and enable drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
+For Dot, open **Agents → VPS Alerts → Pinned messages → Connect Dot**. Set up the OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. If you enabled Telegram, Telegram Agent is preselected and its Amplifier sign-in runs in the same terminal sequence as the other agents. To resume it independently, run `./constellation_matrix telegram setup`. After linking your Telegram account in Element and configuring Telegram Agent’s Amplifier provider, follow the Telegram guide to verify a chat and enable drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
 
 ## Boot and service placement
 

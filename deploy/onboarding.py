@@ -6,11 +6,11 @@ from shutil import rmtree
 from subprocess import SubprocessError
 from urllib.parse import parse_qsl, urlsplit
 
-from installer import available_profiles, starter_profiles
 from agent_picker import select_agents
-from installer import (CLIENT, CONNECTOR, PRESETS, RUNTIME_UID, SOURCE, agent_sign_in, directory,
-                       encoded, load, open_existing, operator_lock, pending_local_agents,
-                       provision_selected_agents, read_password_file, request, save, run)
+from installer import (CLIENT, CONNECTOR, RUNTIME_UID, SOURCE, agent_sign_in, directory,
+                       encoded, load, onboarding_profiles, open_existing, operator_lock, pending_local_agents,
+                       provision_selected_agents, read_password_file, request, save, run, telegram,
+                       telegram_agent_pending, telegram_agent_selected)
 from layout import room_route
 from provision import MatrixError
 from roster import enable_management
@@ -50,9 +50,12 @@ def guide(data, settings, command, passphrase):
     settings = load(data / 'settings.json')
     selected = settings['agents']
     pending = pending_local_agents(load(data / 'agents.json'))
-    if set(selected).intersection(pending):
+    telegram_pending = interactive_terminal() and telegram_agent_pending(data, settings)
+    if set(selected).intersection(pending) or telegram_pending:
         try:
-            agent_sign_in(data, selection=selected)
+            agent_sign_in(data, selection=selected, telegram_pending=telegram_pending)
+            if telegram_pending and telegram_agent_pending(data, settings):
+                return
         except (KeyboardInterrupt, OSError, ValueError, SubprocessError) as error:
             if not isinstance(error, KeyboardInterrupt):
                 print(f'Provider setup could not be completed. {error}')
@@ -66,9 +69,8 @@ def guide(data, settings, command, passphrase):
         print(f'Resume setup with {command} setup-guide')
         return
     deliver_welcome(data, command)
-    if settings['telegram'] and interactive_terminal():
-        from telegram_setup import setup
-        setup(data)
+    if settings['telegram'] and not telegram_agent_selected(settings) and interactive_terminal():
+        telegram(data, ['setup'])
 
 
 def confirm_sign_in(data):
@@ -86,7 +88,7 @@ def select_roster(data, path, passphrase, *, selection=CHOOSE_AGENTS, operator_t
         return
     selection = current.get('selection', selection)
     if selection is CHOOSE_AGENTS:
-        selection = select_agents(starter_profiles())
+        selection = select_agents(onboarding_profiles(load(data / 'settings.json')))
     with operator_lock(data):
         current = progress(path)
         if not current.get('select_agents'):

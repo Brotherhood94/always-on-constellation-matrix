@@ -26,7 +26,7 @@ export function freshness(timestamp, now = Date.now()) {
   return `${label} ${new Date(timestamp * 1000).toLocaleString()}`;
 }
 
-export function officeCatalog(catalog, integrations, telegram) {
+export function officeCatalog(catalog, integrations, telegram, selected) {
   const services = integrations?.services ?? {};
   const connector = telegram?.services?.connector;
   const lastCheck = Date.parse(telegram?.generatedAt) / 1000;
@@ -35,7 +35,7 @@ export function officeCatalog(catalog, integrations, telegram) {
     (lastCheck > integrations?.time || (!monitored && !Number.isFinite(integrations?.time)));
   const enabled = fromTelegram || ['Telegram', 'Telegram guide', 'Telegram Agent', 'Telegram Control']
     .some(name => Object.hasOwn(services, name));
-  if (!enabled || !catalog?.agents || catalog.agents.some(agent => agent.key === 'telegram-agent')) return catalog;
+  if (!(selected ?? enabled) || !catalog?.agents || catalog.agents.some(agent => agent.key === 'telegram-agent')) return catalog;
   const manager = ['task-manager', 'manager'].find(key => catalog.agents.some(agent => agent.key === key));
   const agents = catalog.agents.map(agent => agent.key === manager ? {
     ...agent, contacts: [...new Set([...(agent.contacts ?? []), 'telegram-agent'])],
@@ -210,7 +210,7 @@ function showView(metrics, catalog, connections) {
 }
 
 function render(metrics, roster, links, integrationStates, connections, telegram) {
-  const catalog = officeCatalog(roster, integrationStates, telegram);
+  const catalog = officeCatalog(roster, integrationStates, telegram, links?.telegramAgent);
   const now = Date.now();
   const el = id => document.getElementById(id);
   const make = (tag, text, className) => Object.assign(document.createElement(tag), { textContent: text, className });
@@ -308,7 +308,7 @@ if (typeof document !== 'undefined') {
   document.getElementById('range').addEventListener('change', () => render(...state));
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render(...state));
   window.addEventListener('hashchange', () => {
-    showView(state[0], officeCatalog(state[1], state[3], state[5]), state[4]);
+    showView(state[0], officeCatalog(state[1], state[3], state[5], state[2]?.telegramAgent), state[4]);
     const heading = document.querySelector('#connection-details:not([hidden]) h2, #persona-view:not([hidden]) h2');
     if (heading) {
       heading.tabIndex = -1;

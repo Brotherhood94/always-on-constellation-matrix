@@ -5,11 +5,11 @@ from subprocess import SubprocessError
 from types import SimpleNamespace
 import sys
 
-from installer import available_profiles, starter_profiles
 from agent_picker import select_agents
-from installer import (CLIENT, PRESETS, SOURCE, agent_activate, agent_add, install, interactive, load, password,
-                       pending_local_agents, prompt_graph_password, request, run, save, show_element_setup,
-                       telegram, telegram_layout_options, workspace_command, workspace_layout)
+from installer import (CLIENT, SOURCE, TELEGRAM_AGENT, agent_activate, agent_add, available_profiles, install,
+                       interactive, load, onboarding_profiles, password, pending_local_agents, prompt_graph_password,
+                       request, run, save, show_element_setup, telegram, telegram_agent_pending,
+                       telegram_agent_selected, telegram_layout_options, workspace_command, workspace_layout)
 from onboarding import confirm_sign_in, deliver_welcome, progress, select_roster
 from roster import enable_management
 from setup_guide import confirm_element, element_page, interactive_terminal
@@ -31,13 +31,15 @@ def publish_metadata(data, settings=None, registry=None):
         registry = load(registry_path) if registry_path.is_file() else {'agents': {}}
     state = progress(data / 'onboarding.json')
     save(data / 'setup.json', {
-        'settings': {name: settings[name] for name in GUIDE_FIELDS},
+        'settings': {**{name: settings[name] for name in GUIDE_FIELDS},
+                     'telegram_agent': telegram_agent_selected(settings)},
         'matrix_port': settings['matrix_port'],
         'element_confirmed': 'element' in state['confirmed'],
         'select_agents': bool(state.get('select_agents')),
         'selection': state.get('selection'),
         'pending': pending_local_agents(registry),
         'selected': settings['agents'],
+        'telegram_agent_pending': not state.get('select_agents') and telegram_agent_pending(data, settings),
         'welcomed': 'welcome' in state,
         'graph_password_configured': (data / 'context/neo4j-password').is_file(),
     }, mode=0o644)
@@ -120,7 +122,7 @@ def setup_as_operator(data, *, passphrase=None):
         if not confirmed or current['select_agents']:
             selection = current['selection']
             if current['select_agents'] and selection is None:
-                selection = select_agents(starter_profiles())
+                selection = select_agents(onboarding_profiles(settings))
             payload = {'selection': selection}
             if selection and passphrase is None:
                 passphrase = password(settings)
@@ -137,7 +139,8 @@ def setup_as_operator(data, *, passphrase=None):
                 elevate(data, '_host', 'enroll', payload=payload)
             current = metadata(data)
         configure_as_operator(data, current=current, selection=current['selected'])
-        if settings['telegram'] and interactive_terminal():
+        if (settings['telegram'] and not telegram_agent_selected(current['settings'])
+                and interactive_terminal()):
             telegram_setup_as_operator(data)
     except KeyboardInterrupt:
         print(f'\nResume setup with {command} setup-guide')
@@ -149,9 +152,9 @@ def setup_as_operator(data, *, passphrase=None):
 def configure_as_operator(data, key=None, *, current=None, selection=None):
     if current is None:
         current = metadata(data, refresh_legacy=True)
-    pending = current['pending']
-    if selection is not None:
-        pending = [name for name in pending if name in selection]
+    pending = [name for name in current['pending'] if selection is None or name in selection]
+    if not current['select_agents'] and current.get('telegram_agent_pending', telegram_agent_selected(current['settings'])):
+        pending.append(TELEGRAM_AGENT)
     if key is not None:
         elevate(data, '_host', 'configure', key)
     else:
@@ -163,14 +166,16 @@ def configure_as_operator(data, key=None, *, current=None, selection=None):
     current = metadata(data)
     if current['welcomed']:
         print('Office setup complete.')
-    elif current['element_confirmed'] and not current['select_agents'] and not set(current['selected']).intersection(current['pending']):
+    elif (current['element_confirmed'] and not current['select_agents']
+          and not set(current['selected']).intersection(current['pending'])
+          and not current.get('telegram_agent_pending', telegram_agent_selected(current['settings']))):
         elevate(data, '_host', 'finish')
 
 
 def telegram_setup_as_operator(data, options=()):
     if not interactive_terminal():
         raise ValueError(f'Run {workspace_command(data, elevated=False)} telegram setup from an interactive terminal')
-    print('Telegram setup uses sudo to check the bridge and start Telegram Agent in Docker.', flush=True)
+    print('Telegram setup uses sudo to manage the bridge and its Docker services.', flush=True)
     elevate(data, 'telegram', 'setup', *options)
 
 

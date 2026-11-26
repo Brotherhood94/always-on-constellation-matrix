@@ -74,7 +74,7 @@ nano "$HOME/telegram-api.json"
 
 ## Install the bridge
 
-**VPS terminal.** The installer starts the Telegram step after Office agent setup. If the installer is closed, run this from the VPS checkout to start or resume Telegram setup.
+**VPS terminal.** When you enable Telegram, the installer preselects **Telegram Agent** in the agent checklist. It configures the agent’s Amplifier provider in the numbered agent sequence before opening the bridge login. Deselect the agent to use Telegram Bridge manually. For unattended bridge-only deployments, set `"telegram": true` and `"telegram_agent": false` in the install configuration. To start or resume the Telegram step from the VPS checkout, run:
 
 ```sh
 ./constellation_matrix telegram setup
@@ -96,7 +96,7 @@ Press Enter to use `~/telegram-api.json` or enter the path to your private file.
    ```
 
    If the login expires, send `!tg cancel`, then `!tg login qr` for a fresh code. Wait for the bot to confirm that you are logged in.
-4. **VPS terminal.** Press Enter in the wizard after Telegram Bridge confirms sign-in. The terminal checks the saved login and continues to Telegram Agent provider setup.
+4. **VPS terminal.** Press Enter in the wizard after Telegram Bridge confirms sign-in. The terminal checks the saved login and starts Telegram Agent if you selected it.
 
 ## Add a Telegram contact or group
 
@@ -125,7 +125,7 @@ sudo ./constellation_matrix telegram allow 'user:1001' '2002'
 
 The dedicated Constellation Instance runs Amplifier ACP with the Amplifier ChatGPT provider in `chatgpt_codex` mode. It uses the Codex subscription through device sign-in. The default model is `gpt-6.2-sol` with low reasoning effort for drafting. On first provisioning, set `TELEGRAM_MODEL` if the subscription needs a different supported model. [Amplifier ChatGPT provider](https://github.com/microsoft/amplifier-module-provider-openai-chatgpt)
 
-**VPS terminal.** The wizard registers Telegram Agent, starts its dedicated Instance, and opens Codex device sign-in in the same terminal. It verifies the provider with a synthetic draft and starts the agent. For manual recovery, run the following commands in order using an interactive session for `sign-in`.
+**VPS terminal.** The wizard registers Telegram Agent, starts its dedicated Instance, and opens Codex device sign-in in the same terminal. It verifies the provider with a synthetic draft before the bridge login and starts the agent once that login is confirmed. For manual recovery, run the following commands in order using an interactive session for `sign-in`.
 
 ```bash
 sudo ./constellation_matrix telegram prepare-agent

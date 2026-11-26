@@ -51,7 +51,7 @@ Run `./constellation_matrix setup-guide` to resume onboarding or append `--print
 
 ### Finish Telegram setup
 
-If you selected Telegram, the installer opens its setup in the same VPS terminal after the Office agents. Have your private `telegram-api.json` ready. The terminal guides you through activating the bridge, linking your Telegram account in Element, and signing in to Telegram Agent’s dedicated Amplifier Instance. If interrupted, resume just that step.
+If you enabled Telegram, **Telegram Agent** is preselected in **Select agents to install**. The installer opens its dedicated Amplifier sign-in as part of the same numbered agent setup. Then it uses your private `telegram-api.json` to activate the bridge and guides you through QR sign-in in Element. Deselect Telegram Agent if you want to use the bridge manually. If interrupted, resume the Telegram step.
 
 ```sh
 ./constellation_matrix telegram setup
