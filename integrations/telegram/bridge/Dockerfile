@@ -6,16 +6,19 @@ WORKDIR /bridge
 RUN git init -q \
     && git fetch -q --depth=1 https://github.com/mautrix/telegram.git 8d85e547208fcdeae47b08f57bca0a7c8cf910af \
     && git checkout -q --detach FETCH_HEAD
-COPY chat-link.patch chat-link_test.go office-portal.patch /tmp/
+COPY chat-link.patch chat-link_test.go office-portal.patch contact-search.patch contact-search_test.go /tmp/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go mod download maunium.net/go/mautrix \
     && cp -r "$(go env GOMODCACHE)/maunium.net/go/mautrix@v0.33.0" /mautrix \
     && chmod -R u+w /mautrix \
     && patch -d /mautrix -p1 < /tmp/chat-link.patch \
     && patch -d /mautrix -p1 < /tmp/office-portal.patch \
+    && patch -p1 < /tmp/contact-search.patch \
     && cp /tmp/chat-link_test.go /mautrix/bridgev2/commands/ \
+    && cp /tmp/contact-search_test.go pkg/connector/ \
     && go mod edit -replace=maunium.net/go/mautrix=/mautrix \
     && go test maunium.net/go/mautrix/bridgev2/commands -run '^TestOpenedChatLink$' \
+    && GOFLAGS='-p=2 -gcflags=go.mau.fi/mautrix-telegram/pkg/gotd/tg=-l' go test ./pkg/connector -run '^TestMatchingSavedContacts$' \
     && GOFLAGS='-p=2 -gcflags=go.mau.fi/mautrix-telegram/pkg/gotd/tg=-l' ./build.sh
 
 FROM ${MAUTRIX_IMAGE}

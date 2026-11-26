@@ -5,7 +5,7 @@ import matrix from '@vector-im/matrix-bot-sdk';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
 import { officeSetupNotice, reconcilePins, reconcileTelegramPin, shortcutRecipientDevices, shortcutRecipientKey } from './pins.mjs';
 import { reconcileTelegramRooms } from './telegram-space.mjs';
-import { listenTelegramOffice, privateTelegramControl } from './telegram-office.mjs';
+import { listenTelegramOffice, privateTelegramControl, telegramControlSearch } from './telegram-office.mjs';
 
 const {
   LogService, LogLevel, MatrixClient, RustSdkCryptoStorageProvider,
@@ -85,6 +85,13 @@ async function initialize() {
   if (!telegram && !(await client.crypto.isRecoveryAvailable())) {
     const key = await client.crypto.createIdentity();
     await writeAtomic(join(STATE_DIR, 'bot-recovery-key'), key);
+  }
+  if (telegram) {
+    const options = { client, control: roomId, owner: MATRIX_OWNER, guide: userId, domain: MATRIX_SERVER_NAME,
+      readKey: async () => (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim() };
+    client.on('room.decrypted_event', (room, event) => {
+      telegramControlSearch(room, event, options).catch(() => console.error('Telegram Control search could not reply.'));
+    });
   }
   client.start().catch(error => {
     console.error('Matrix sync stopped:', error.body?.errcode || error.code || error.name);

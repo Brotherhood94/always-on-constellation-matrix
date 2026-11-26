@@ -1,0 +1,68 @@
+--- a/pkg/connector/startchat.go
++++ b/pkg/connector/startchat.go
+@@ -196,0 +197,26 @@
++const userSearchLimit = 10
++
++func matchingSavedContacts(users []tg.UserClass, query string) []tg.UserClass {
++	query = strings.ToLower(strings.Join(strings.Fields(query), " "))
++	usernameOnly := strings.HasPrefix(query, "@")
++	query = strings.TrimPrefix(query, "@")
++	if query == "" {
++		return nil
++	}
++	var matches []tg.UserClass
++	for _, candidate := range users {
++		user, ok := candidate.(*tg.User)
++		if !ok || user.Deleted {
++			continue
++		}
++		name := strings.ToLower(strings.Join(strings.Fields(user.FirstName+" "+user.LastName), " "))
++		if (!usernameOnly && strings.Contains(name, query)) || strings.Contains(strings.ToLower(user.Username), query) {
++			matches = append(matches, user)
++			if len(matches) == userSearchLimit {
++				break
++			}
++		}
++	}
++	return matches
++}
++
+@@ -197,0 +224,15 @@
++	query = strings.TrimSpace(query)
++	contacts, err := tc.cachedContactList(ctx)
++	if err != nil {
++		return nil, err
++	}
++	for _, user := range matchingSavedContacts(contacts.GetUsers(), query) {
++		match, err := tc.resolveUser(ctx, user)
++		if err != nil {
++			return nil, err
++		}
++		resp = append(resp, match)
++	}
++	if len(resp) > 0 {
++		return resp, nil
++	}
+@@ -199 +240 @@
+-		return tc.client.API().ContactsSearch(ctx, &tg.ContactsSearchRequest{Q: query})
++		return tc.client.API().ContactsSearch(ctx, &tg.ContactsSearchRequest{Q: strings.TrimPrefix(query, "@"), Limit: userSearchLimit})
+@@ -237 +278 @@
+-func (tc *TelegramClient) GetContactList(ctx context.Context) (resp []*bridgev2.ResolveIdentifierResponse, err error) {
++func (tc *TelegramClient) cachedContactList(ctx context.Context) (*tg.ContactsContacts, error) {
+@@ -240,3 +281,2 @@
+-	var contacts *tg.ContactsContacts
+-	if time.Since(tc.lastContactReq) > 10*time.Minute {
+-		contacts, err = APICallWithOnlyUserUpdates(ctx, tc, func() (*tg.ContactsContacts, error) {
++	if tc.cachedContacts == nil || time.Since(tc.lastContactReq) > 10*time.Minute {
++		_, err := APICallWithOnlyUserUpdates(ctx, tc, func() (*tg.ContactsContacts, error) {
+@@ -266,2 +306,8 @@
+-	} else {
+-		contacts = tc.cachedContacts
++	}
++	return tc.cachedContacts, nil
++}
++
++func (tc *TelegramClient) GetContactList(ctx context.Context) (resp []*bridgev2.ResolveIdentifierResponse, err error) {
++	contacts, err := tc.cachedContactList(ctx)
++	if err != nil {
++		return nil, err

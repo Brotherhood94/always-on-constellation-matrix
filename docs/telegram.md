@@ -4,7 +4,13 @@ This optional integration adds a private, top-level **Telegram** Space with **Te
 
 The installer joins your Matrix account to **Telegram** and **Telegram Control**. Open **Telegram → Telegram Control → Pinned messages → Set up Telegram** for the copyable setup steps.
 
-Already set up? [Use Telegram from Office](#use-telegram-from-office), [open a contact or group in Telegram Bridge](#add-a-telegram-contact-or-group), or [send a message](#write-to-a-contact-or-group).
+Already set up? [Search for a Telegram user](#search-for-a-telegram-user), [use Telegram from Office](#use-telegram-from-office), [open a contact or group in Telegram Bridge](#add-a-telegram-contact-or-group), or [send a message](#write-to-a-contact-or-group).
+
+## Search for a Telegram user
+
+In **Telegram → Telegram Control**, send `!tg search Sample Name` and replace `Sample Name` with a name or Telegram username. The guide replies to your message with up to 10 matching names and numeric user IDs. This command uses your linked Telegram account and works before you set up the drafting agent.
+
+The bridge checks saved contacts by name and username, then searches Telegram usernames if none match. Check the result before opening its chat. Copy the ID into `!tg pm 1001` in **Telegram Bridge**, or use `telegram add user:1001` after mentioning **@Task Manager** in **Office**. You can also search directly in **Telegram Bridge**. [Bridge search](https://github.com/mautrix/go/blob/v0.33.0/bridgev2/commands/startchat.go#L332-L370) · [Telegram search API](https://core.telegram.org/method/contacts.search)
 
 ## Use Telegram from Office
 
@@ -23,7 +29,7 @@ For a private chat, you can also write “Add @username to Telegram Rooms” or 
 
 The bridge uses the operator's linked Telegram account. Open a new room from Task Manager’s reply or **Telegram → Rooms**. For an undiscovered group, send `!tg sync-chats` in Telegram Bridge and retry. A basic group can be opened with `telegram add chat:<id>`. If several rooms share a name, remove one by its Matrix room ID. Removal unlinks the room, retains its history and membership, and blocks drafts for the room while it is unlinked. An explicit add can link it again.
 
-If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. If you only know the name, send `!tg search <name>` and check the matching profile for its numeric Telegram user ID. The bridge can open a numeric ID when it knows the contact through your linked Telegram account. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
+If opening a private chat fails, send `!tg resolve-identifier @username` in **Telegram Bridge** to check the exact username. If you only know the name, use [Telegram Control search](#search-for-a-telegram-user) to find the numeric ID. The bridge can open a numeric ID when it knows the contact through your linked Telegram account. If the bridge asks you to sign in, use `!tg login qr` and scan the code from your Telegram app. If the lookup succeeds and Office reports a connection that needs repair, run `./constellation_matrix telegram layout` on the VPS.
 
 Drafting requires the [drafting connector](#start-the-drafting-agent) and a [verified binding](#bind-verified-chats-to-the-telegram-space) for the destination. An Office command opens a private Telegram Control thread. Only the operator can approve and send the exact text there. For text you want to keep within Control, open **Telegram → Telegram Control** and send the draft command directly without a mention. Dot is optional for both paths.
 

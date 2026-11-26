@@ -137,21 +137,25 @@ assert bridge_dm('telegram.test', owner['user_id'], token, room, select=lambda _
 print('Pinned mautrix joined the installer-created encrypted Telegram Bridge DM.')
 
 key = Path('/state/guide/office-bridge-key').read_text().strip()
-for method, route, secret, code in [
-    ('GET', 'logins', key, 'M_FORBIDDEN'),
-    ('POST', 'constellation_group/user%3A123', key, 'M_NOT_FOUND'),
-    ('POST', 'constellation_group/chat%3A123', key, 'FI.MAU.NOT_LOGGED_IN'),
-    ('POST', 'create_dm/%40sample', key, 'FI.MAU.NOT_LOGGED_IN'),
-    ('POST', 'create_dm/%40sample', 'invalid-key', 'M_UNKNOWN_TOKEN'),
+for method, route, secret, body, code in [
+    ('GET', 'logins', key, None, 'M_FORBIDDEN'),
+    ('GET', 'search_users', key, None, 'M_FORBIDDEN'),
+    ('POST', 'search_users', key, b'{"query":"Sample Name"}', 'FI.MAU.NOT_LOGGED_IN'),
+    ('POST', 'search_users', 'invalid-key', b'{"query":"Sample Name"}', 'M_UNKNOWN_TOKEN'),
+    ('POST', 'constellation_group/user%3A123', key, None, 'M_NOT_FOUND'),
+    ('POST', 'constellation_group/chat%3A123', key, None, 'FI.MAU.NOT_LOGGED_IN'),
+    ('POST', 'create_dm/%40sample', key, None, 'FI.MAU.NOT_LOGGED_IN'),
+    ('POST', 'create_dm/%40sample', 'invalid-key', None, 'M_UNKNOWN_TOKEN'),
 ]:
     endpoint = 'http://telegram-bridge:29317/_matrix/provision/v3/' + route + '?user_id=%40operator%3Atelegram.test'
     try:
-        urlopen(Request(endpoint, method=method, headers={'Authorization': 'Bearer ' + secret}), timeout=5)
+        urlopen(Request(endpoint, method=method, data=body,
+                        headers={'Authorization': 'Bearer ' + secret, 'Content-Type': 'application/json'}), timeout=5)
     except HTTPError as error:
         assert json.load(error)['errcode'] == code, (route, error.code)
     else:
         raise AssertionError('Provisioning unexpectedly succeeded without an operator Telegram login')
-print('Bridge Office provisioning is scoped to opening chats and requires the operator Telegram login.')
+print('Bridge provisioning is scoped to opening chats and searching users and requires the operator Telegram login.')
 PY
 # Leave the AppService identity available, but isolate the following synthetic room from bridge automation.
 docker stop --timeout 3 "$bridge" >/dev/null
@@ -180,7 +184,7 @@ import matrix from '@vector-im/matrix-bot-sdk';
 import { matrixConnection } from './matrix.mjs';
 import { TelegramStore, pollStart, reviewAnswer } from './policy.mjs';
 import { telegramRequest } from './control.mjs';
-import { telegramOfficeAction } from './telegram-office.mjs';
+import { telegramControlSearch, telegramOfficeAction } from './telegram-office.mjs';
 const url = 'http://synapse:8008';
 const root = '/_matrix/client/v3';
 async function api(path, body, token) {
@@ -373,7 +377,8 @@ try {
   const setup = await api('/login', {type:'m.login.password', identifier:{type:'m.id.user',user:'telegram-agent'},
     password:'fixture-long-password', device_id:setupDevice});
   const setupCrypto = await connect({...setup, device:setupDevice}, 'setup-guide');
-  await setupCrypto.applySync(await setupCrypto.sync(null,0), async () => {});
+  const setupInitial = await setupCrypto.sync(null,0);
+  await setupCrypto.applySync(setupInitial, async () => {});
   const setupSdk = new matrix.MatrixClient(url, setup.access_token);
   const setupClient = {getRoomState: room => setupSdk.getRoomState(room), doRequest: (...args) => setupSdk.doRequest(...args),
     crypto: {encryptRoomEvent: async (room, type, content) => JSON.parse(await setupCrypto.encryptEvent(room, type, content))}};
@@ -392,6 +397,43 @@ try {
   const officeReject = await reader.encrypted(controlRoom, 'telegram reject ' + fromOffice.id + ' 1');
   await reader.put(controlRoom, 'fixture-owner-reject-office-draft', officeReject);
   await waitFor(() => store.draft(fromOffice.id).state === 'cancelled', 'the operator decision on the Office draft');
+  const syncedOwner = await reader.sync(controlCursor, 0);
+  controlCursor = syncedOwner.next_batch;
+  await reader.applySync(syncedOwner, async () => {});
+  const searchInput = await reader.encrypted(controlRoom, '!tg search Sample Name');
+  const searchEvent = await reader.put(controlRoom, 'fixture-search', searchInput);
+  let setupCursor = setupInitial.next_batch;
+  let searchRequests = 0;
+  await waitFor(async () => {
+    const sync = await setupCrypto.sync(setupCursor, 0);
+    setupCursor = sync.next_batch;
+    await setupCrypto.applySync(sync, async (roomId, event, encrypted, failed) => {
+      if (!encrypted || failed || event.event_id !== searchEvent) return;
+      await telegramControlSearch(roomId, event, { ...officeOptions, readKey: async () => 'fixture',
+        bridgeFetch: async (url, request) => {
+          searchRequests += 1;
+          assert.equal(new URL(url).searchParams.get('user_id'), b.user_id);
+          assert.deepEqual(JSON.parse(request.body), { query: 'Sample Name' });
+          return Response.json({ results: [{ id: '1001', name: 'Sample Person' }] });
+        } });
+    });
+    return searchRequests === 1;
+  }, 'the guide to decrypt and handle the operator search');
+  await waitFor(async () => {
+    const sync = await reader.sync(controlCursor, 0);
+    controlCursor = sync.next_batch;
+    let received = false;
+    await reader.applySync(sync, async (roomId, event, encrypted, failed) => {
+      if (roomId === controlRoom && encrypted && !failed &&
+          event.content?.['m.relates_to']?.['m.in_reply_to']?.event_id === searchEvent) {
+        assert.equal(event.sender, agent.user_id);
+        assert.match(event.content.body, /Sample Person.*1001/);
+        received = true;
+      }
+    });
+    return received;
+  }, 'the owner to decrypt the Telegram search results');
+  console.log('Telegram Control returned an encrypted user search result in reply to the operator’s command.');
   setupCrypto.close();
   console.log('The Guide device encrypted one Office request into Control across retries, preserving the exact text for operator review.');
 

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { requestTelegramOffice, telegramOfficeCommand } from '../agents/connector/telegram-office.mjs';
 import { acceptedMessage } from '../agents/connector/matrix-routing.mjs';
-import { listenTelegramOffice, telegramOfficeAction } from '../deploy/matrix/bot/telegram-office.mjs';
+import { listenTelegramOffice, telegramControlSearch, telegramOfficeAction } from '../deploy/matrix/bot/telegram-office.mjs';
 import { addressedRequest, telegramRequest } from '../integrations/telegram/control.mjs';
 
 const owner = '@operator:sample.test';
@@ -104,6 +104,72 @@ test('an unexpected Control member blocks the Office draft before encryption', a
   const result = await telegramOfficeAction({ id: '$test', action: 'draft', type: 'direct', target: 'Sample', text },
     { client, owner, guide: agent, domain: 'sample.test', control: '!control:sample.test' });
   assert.equal(result.ok, false);
+});
+
+test('Telegram Control publishes an encrypted, bounded reply to an operator search', async () => {
+  const control = '!control:sample.test';
+  const event = { event_id: '$search', type: 'm.room.message', sender: owner, origin_server_ts: Date.now(),
+    content: { msgtype: 'm.text', body: '!tg search Sample Name' } };
+  const state = [{ type: 'm.room.create', state_key: '', content: { 'm.federate': false } },
+    { type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } },
+    { type: 'm.room.join_rules', state_key: '', content: { join_rule: 'invite' } },
+    ...[owner, agent].map(state_key => ({ type: 'm.room.member', state_key, content: { membership: 'join' } }))];
+  const transactions = [];
+  const bodies = [];
+  let requests = 0;
+  const client = { getRoomState: async () => state,
+    crypto: { encryptRoomEvent: async (room, type, content) => {
+      assert.equal(room, control);
+      assert.equal(type, 'm.room.message');
+      assert.deepEqual(content['m.relates_to'], { 'm.in_reply_to': { event_id: '$search' } });
+      bodies.push(content.body);
+      return { ciphertext: 'synthetic' };
+    } },
+    doRequest: async (method, route, query, payload) => {
+      assert.equal(method, 'PUT');
+      assert.match(route, /\/send\/m\.room\.encrypted\/telegram-search-[a-f0-9]{64}$/u);
+      assert.deepEqual(payload, { ciphertext: 'synthetic' });
+      transactions.push(route);
+    },
+  };
+  const options = { client, control, owner, guide: agent, domain: 'sample.test', readKey: async () => 'secret',
+    bridgeFetch: async (url, request) => {
+      requests += 1;
+      assert.equal(new URL(url).pathname, '/_matrix/provision/v3/search_users');
+      assert.equal(new URL(url).searchParams.get('user_id'), owner);
+      assert.equal(request.method, 'POST');
+      assert.deepEqual(JSON.parse(request.body), { query: 'Sample Name' });
+      return Response.json({ results: [{ id: '1001', name: 'Sample Person', identifiers: ['+12555550100'] },
+        { id: '1001', name: 'Duplicate' }, ...Array.from({ length: 11 }, (_, id) => ({ id: String(2001 + id), name: 'Other' }))] });
+    },
+  };
+  await telegramControlSearch('!office:sample.test', event, options);
+  await telegramControlSearch(control, { ...event, sender: '@dot:sample.test' }, options);
+  await telegramControlSearch(control, { ...event, content: { ...event.content, 'm.new_content': {} } }, options);
+  await telegramControlSearch(control, { ...event, origin_server_ts: 0 }, options);
+  assert.equal(requests, 0);
+  await telegramControlSearch(control, event, options);
+  await telegramControlSearch(control, event, options);
+  assert.equal(requests, 2);
+  assert.equal(new Set(transactions).size, 1);
+  assert.match(bodies[0], /Sample Person.*1001/u);
+  assert.doesNotMatch(bodies[0], /Duplicate|12555550100/u);
+  assert.equal(bodies[0].split('\n').filter(line => line.startsWith('•')).length, 10);
+
+  await telegramControlSearch(control, event, { ...options, bridgeFetch: async () =>
+    Response.json({ errcode: 'FI.MAU.NOT_LOGGED_IN', error: 'do not echo this' }, { status: 400 }) });
+  assert.match(bodies.at(-1), /!tg login qr/u);
+  assert.doesNotMatch(bodies.at(-1), /do not echo/u);
+
+  await telegramControlSearch(control, { ...event, content: { msgtype: 'm.text', body: '!tg search' } }, options);
+  assert.match(bodies.at(-1), /followed by a name or Telegram username/u);
+  await telegramControlSearch(control, event, { ...options, bridgeFetch: async () => Response.json({ results: [] }) });
+  assert.match(bodies.at(-1), /Telegram returned no matches/u);
+
+  state.push({ type: 'm.room.member', state_key: '@unexpected:sample.test', content: { membership: 'invite' } });
+  await telegramControlSearch(control, event, options);
+  assert.equal(requests, 2);
+  assert.equal(bodies.length, 5);
 });
 
 test('Office reports bridge sign-in, unresolved usernames, and provisioning failures separately', async () => {
