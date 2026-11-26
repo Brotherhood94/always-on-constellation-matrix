@@ -18,4 +18,6 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     && GOFLAGS='-p=2 -gcflags=go.mau.fi/mautrix-telegram/pkg/gotd/tg=-l' ./build.sh
 
 FROM ${MAUTRIX_IMAGE}
+RUN apk add --no-cache olm
 COPY --from=build /bridge/mautrix-telegram /usr/bin/mautrix-telegram
+RUN /usr/bin/mautrix-telegram --version
