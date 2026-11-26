@@ -58,6 +58,8 @@ acp.on('connection', (socket, request) => {
 await new Promise(resolve => https.listen(19443, resolve));
 const client = await openRoomClient({ url, state: '/operator', roomId: privateRoom,
   userId: owner, deviceId: operator.device_id, name: 'Fixture Operator' });
+client.syncingTimeout = 250;
+const clients = [client];
 const observed = [];
 const officeEvents = [];
 client.on('room.decrypted_event', (room, event) => {
@@ -106,6 +108,7 @@ try {
       await writeFile(state + '/matrix-token', peer.token);
       peer.id = '@' + peer.key + ':' + domain;
       peer.client = await openRoomClient({ url, state, roomId: office, userId: peer.id, deviceId: peer.device, name: peer.name });
+      clients.push(peer.client);
     }
     const [manager, coach] = peers;
     const helperPeer = { key: 'helper', name: 'Helper', id: '@helper:' + domain };
@@ -157,6 +160,8 @@ try {
   helper.kill();
   await helperExit;
   client.stop();
+  await delay(1000);
+  for (const peer of clients) peer.crypto.engine.machine.close();
   for (const socket of sockets) socket.terminate();
   acp.close();
   https.close();
