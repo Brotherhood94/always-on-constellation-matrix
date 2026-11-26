@@ -185,6 +185,31 @@ test('Task Manager can relay a Dot assignment to queue one operator-approved Tel
   assert.equal(telegramReceipt({ status: 'completed' }), null);
 });
 
+test('a structured Dot send survives multiline Office prose and preserves the exact message', async () => {
+  const f = fixture();
+  const binding = { id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 };
+  f.setBinding(binding);
+  const planner = '@dot:sample.test';
+  const target = { id: caller.actor, name: 'Task Manager' };
+  const telegram = { target: 'Sam Example', type: 'direct', text: 'Ciao «Sam»!\nA domani.' };
+  const content = { ...mentionMessage('Telegram request\n\nPrepare this for review.\nReport progress in Office.', target),
+    [dotPlanKey]: { task_id: 'telegram-structured', telegram } };
+  const context = { owner, planner, userId: target.id, name: target.name };
+  const assignment = telegramOfficeAssignment({ sender: planner, content }, context);
+  assert.deepEqual(assignment, { sender: planner, telegram });
+  assert.equal(telegramOfficeAssignment({ sender: '@someone:sample.test', content }, context), null);
+  assert.equal(telegramOfficeAssignment({ sender: planner, content: { ...content, 'm.mentions': {} } }, context), null);
+  const input = { ...caller, ...assignment, id: '$structured', method: 'submit' };
+  assert.equal((await f.broker().office({ ...input, sender: owner })).status, 'forbidden');
+  assert.equal((await f.broker().office(input)).status, 'pending');
+  assert.equal((await f.broker().office(input)).status, 'pending');
+  await f.broker().tick();
+  const drafts = f.store.all('SELECT payload FROM control_request');
+  assert.deepEqual(drafts.map(({ payload }) => JSON.parse(payload)), [{ action: 'compose', destination: 'sam',
+    verifiedBinding: binding, chatType: 'direct', text: telegram.text }]);
+  assert.equal(f.effects.length, 0);
+});
+
 test('Telegram Agent accepts a direct mention with the exact text before the named private chat', async () => {
   const f = fixture();
   f.setBinding({ id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 });

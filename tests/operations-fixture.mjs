@@ -178,7 +178,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   const ws = new WebSocketServer({ server, path: '/api/v1/acp' });
   const records = [];
   const telegramSocket = join(base, 'telegram-fixture.sock');
-  const telegramPlan = 'Telegram: Send a private message to Sample Contact saying «Exact fixture text.»';
+  const telegramMessage = { target: 'Sample Contact', type: 'direct', text: 'Exact «fixture» text.\nSecond line.' };
   const telegramLink = 'https://matrix.to/#/!private%3Afixture.test/%24approval';
   let telegramStatus = 'awaiting_approval';
   const telegramSubmissions = [];
@@ -334,9 +334,11 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     if (process.env.MATRIX_TOPOLOGY_EVIDENCE) {
       await writeFile(process.env.MATRIX_TOPOLOGY_EVIDENCE, JSON.stringify(acceptedEvidence));
     }
-    const telegramTask = { task_id: 'fixture-dot-telegram', title: 'Telegram fixture', plan: telegramPlan, first_agent: manager.key };
+    const availableAgents = (await tool('list_agents', {})).result.structuredContent.agents;
+    assert.equal(availableAgents.find(agent => agent.key === manager.key).telegram_route, 'publish_telegram_task');
+    const telegramTask = { task_id: 'fixture-dot-telegram', ...telegramMessage };
     const telegramTaskStatus = async () => (await tool('get_task', { task_id: telegramTask.task_id })).result.structuredContent;
-    const published = (await tool('publish_plan', telegramTask)).result.structuredContent;
+    const published = (await tool('publish_telegram_task', telegramTask)).result.structuredContent;
     const requestId = decodeURIComponent(published.thread_url.split('/').at(-1));
     const waiting = await eventually(async () => {
       const status = await telegramTaskStatus();
@@ -345,7 +347,11 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     assert.equal(waiting.outcome, null);
     assert.equal(waiting.telegram.bridge_thread_url, telegramLink);
     assert.deepEqual(telegramSubmissions, [{ method: 'submit', id: requestId, room: office, actor: manager.id,
-      sender: '@dot:' + domain, text: telegramPlan }]);
+      sender: '@dot:' + domain, telegram: telegramMessage }]);
+    const duplicate = (await tool('publish_telegram_task', telegramTask)).result.structuredContent;
+    assert.equal(duplicate.thread_url, published.thread_url);
+    const changed = await tool('publish_telegram_task', { ...telegramTask, text: 'Different text' });
+    assert.equal(changed.result.isError, true);
     telegramStatus = 'completed';
     await eventually(async () => (await telegramTaskStatus())?.outcome?.status === 'completed');
     console.log('Dot routed an encrypted Telegram task through Manager and observed approval and completion in its own thread.');

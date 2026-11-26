@@ -46,7 +46,7 @@ for module in connector matrix-routing telegram-intent telegram-office; do
   office_connector_mounts+=(-v "$src/agents/connector/$module.mjs:/app/$module.mjs:ro")
 done
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
-  mounts=(--tmpfs /welcome)
+  mounts=(--tmpfs /welcome --tmpfs /telegram-dot)
   if [[ -n ${MATRIX_TOPOLOGY_DIR:-} ]]; then
     mounts+=(-v "$MATRIX_TOPOLOGY_DIR:/topology" -e 'MATRIX_TOPOLOGY_EVIDENCE=/topology/office-evidence.json')
   fi

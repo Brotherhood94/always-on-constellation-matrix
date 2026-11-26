@@ -42,6 +42,14 @@ function destination(value, type) {
   return { target, ...(type && { type }) };
 }
 
+export function telegramSendPayload(input) {
+  if (!input || !['direct', 'group'].includes(input.type) || typeof input.target !== 'string' ||
+      typeof input.text !== 'string' || !input.text.trim() || Buffer.byteLength(input.text) > 3500) return null;
+  const target = input.target.trim();
+  if (!target || Buffer.byteLength(target) > 120 || /[\p{Cc}\p{Cf}]/u.test(target)) return null;
+  return { target, type: input.type, text: input.text };
+}
+
 export function telegramIntent(body, { office = false } = {}) {
   if (typeof body !== 'string' || Buffer.byteLength(body) > 4800 || /^\s*[>`]/u.test(body)) return null;
   let input = body.trim();

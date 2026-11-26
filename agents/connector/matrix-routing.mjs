@@ -3,7 +3,7 @@ import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
 import { acceptedManaged, managedReply, replyLimit } from './managed-task.mjs';
 import { acceptsContact } from './agent-catalog.mjs';
 import { applyDispatch } from './capability-dispatch.mjs';
-import { telegramIntent, telegramMention } from './telegram-intent.mjs';
+import { telegramIntent, telegramMention, telegramSendPayload } from './telegram-intent.mjs';
 
 export { mentionMessage, replyLimit };
 
@@ -21,7 +21,12 @@ export function telegramOfficeAssignment(event, { owner, planner, userId, name }
   if (text === null) return null;
   if (sender !== owner) {
     const { content } = event;
-    if (content['m.relates_to'] || !/^[a-z0-9_-]{8,80}$/iu.test(content[dotPlanKey]?.task_id ?? '')) return null;
+    const plan = content[dotPlanKey];
+    if (content['m.relates_to'] || typeof plan?.task_id !== 'string' || !/^[a-z0-9_-]{8,80}$/iu.test(plan.task_id)) return null;
+    if (Object.hasOwn(plan, 'telegram')) {
+      const telegram = telegramSendPayload(plan.telegram);
+      return telegram && { sender, telegram };
+    }
     const start = text.indexOf('\n\n');
     if (start === -1) return null;
     text = text.slice(start + 2).trim();

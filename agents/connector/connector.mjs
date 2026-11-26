@@ -325,9 +325,9 @@ async function deliver(client, event) {
   console.log('Encrypted agent reply delivered.');
 }
 
-function telegramRequest(event, method, { sender = MATRIX_OWNER, text } = {}) {
+function telegramRequest(event, method, { sender = MATRIX_OWNER, text, telegram } = {}) {
   return requestTelegramService(telegramHandoff, { method, id: event, room: roomId, actor: userId,
-    sender, ...(text && { text }) }, 5000).catch(error => {
+    sender, text, telegram }, 5000).catch(error => {
     if (method === 'status' || ['ENOENT', 'ECONNREFUSED'].includes(error.code)) return { status: 'unavailable' };
     // Retry an interrupted submission with the original event ID.
     throw error;

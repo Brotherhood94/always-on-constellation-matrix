@@ -463,8 +463,8 @@ try {
   console.log('The Guide device encrypted one Office request into Control across retries, preserving the exact text for operator review.');
 
   const handoff = { id: '$new-office', room: officeRoom, sender: dot.user_id, actor: '@task-manager:telegram.test' };
-  const officeDraftText = 'Send a private message to Pilot on Telegram saying "Synthetic Office draft."';
-  const submitOffice = () => requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, { ...handoff, method: 'submit', text: officeDraftText });
+  const officeMessage = { target: 'Pilot', type: 'direct', text: 'Synthetic Office draft.\nExact second line.' };
+  const submitOffice = () => requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, { ...handoff, method: 'submit', telegram: officeMessage });
   assert.equal((await submitOffice()).status, 'pending');
   assert.equal((await submitOffice()).status, 'pending');
   let delegated;
@@ -475,7 +475,7 @@ try {
   assert.deepEqual(Object.keys(delegated).sort(), ['link', 'status']);
   const delegatedEvent = decodeURIComponent(delegated.link.split('/').at(-1));
   const proposed = store.get('SELECT * FROM draft WHERE control_event=?', delegatedEvent);
-  assert.equal(proposed.body, 'Synthetic Office draft.');
+  assert.equal(proposed.body, officeMessage.text);
   await castVote(reader, proposed, 'reject', 'fixture-reject-natural-office');
   await waitFor(async () => (await requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, {
     ...handoff, method: 'status',

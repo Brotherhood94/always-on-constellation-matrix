@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { chmod, unlink } from 'node:fs/promises';
 import { digest } from './policy.mjs';
 import { controlThread, matrixLink } from './control.mjs';
-import { matchTelegramName, telegramIntent, telegramMention } from '../../agents/connector/telegram-intent.mjs';
+import { matchTelegramName, telegramIntent, telegramMention, telegramSendPayload } from '../../agents/connector/telegram-intent.mjs';
 import { telegramTaskStatus } from '../../agents/connector/telegram-office.mjs';
 
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
@@ -116,6 +116,10 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       return row?.office ? receipt(row) : { status: 'missing' };
     }
     if (input.method !== 'submit' || !await checkOffice() || !await checkRoom()) return { status: 'unavailable' };
+    if (Object.hasOwn(input, 'telegram')) {
+      const telegram = input.sender === `@dot:${settings.domain}` && input.text === undefined && telegramSendPayload(input.telegram);
+      return telegram ? submit(input.id, true, { action: 'send', ...telegram }) : { status: 'forbidden' };
+    }
     const intent = telegramIntent(input.text, { office: true });
     return intent ? submit(input.id, true, intent) : { status: 'forbidden' };
   }
