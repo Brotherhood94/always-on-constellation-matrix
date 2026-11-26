@@ -177,6 +177,20 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   const server = createServer({ key: await readFile(key), cert: await readFile(ca) });
   const ws = new WebSocketServer({ server, path: '/api/v1/acp' });
   const records = [];
+  const telegramSocket = join(base, 'telegram-fixture.sock');
+  const telegramPlan = 'Telegram: Send a private message to Sample Contact saying «Exact fixture text.»';
+  const telegramLink = 'https://matrix.to/#/!private%3Afixture.test/%24approval';
+  let telegramStatus = 'awaiting_approval';
+  const telegramSubmissions = [];
+  const telegram = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const input = JSON.parse(Buffer.concat(chunks));
+    if (input.method === 'submit') telegramSubmissions.push(input);
+    response.end(JSON.stringify(input.method === 'submit' ? { status: 'pending' } : { status: telegramStatus, link: telegramLink }));
+  });
+  telegram.listen(telegramSocket);
+  await once(telegram, 'listening');
   const context = createHttpServer(async (request, response) => {
     assert.equal(request.url, '/events');
     assert.equal(request.headers.authorization, 'Bearer office-evidence-fixture');
@@ -237,6 +251,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       launch('/app/connector.mjs', { AGENT_STATE: agentState, AGENT_WORKSPACE: base, AGENT_NAME: agent.name,
         AGENT_USERNAME: agent.key, MATRIX_CATALOG_PATH: catalog,
         MATRIX_PLANNER: '@dot:' + domain,
+        ...(agent === manager && { TELEGRAM_HANDOFF_SOCKET: telegramSocket }),
         CONTEXT_INTELLIGENCE_URL: 'http://127.0.0.1:' + context.address().port,
         INSTANCE_ACP_URL: 'wss://localhost:' + server.address().port + '/api/v1/acp' });
     }
@@ -319,6 +334,21 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     if (process.env.MATRIX_TOPOLOGY_EVIDENCE) {
       await writeFile(process.env.MATRIX_TOPOLOGY_EVIDENCE, JSON.stringify(acceptedEvidence));
     }
+    const telegramTask = { task_id: 'fixture-dot-telegram', title: 'Telegram fixture', plan: telegramPlan, first_agent: manager.key };
+    const telegramTaskStatus = async () => (await tool('get_task', { task_id: telegramTask.task_id })).result.structuredContent;
+    const published = (await tool('publish_plan', telegramTask)).result.structuredContent;
+    const requestId = decodeURIComponent(published.thread_url.split('/').at(-1));
+    const waiting = await eventually(async () => {
+      const status = await telegramTaskStatus();
+      return status?.status === 'awaiting_approval' && status;
+    });
+    assert.equal(waiting.outcome, null);
+    assert.equal(waiting.telegram.bridge_thread_url, telegramLink);
+    assert.deepEqual(telegramSubmissions, [{ method: 'submit', id: requestId, room: office, actor: manager.id,
+      sender: '@dot:' + domain, text: telegramPlan }]);
+    telegramStatus = 'completed';
+    await eventually(async () => (await telegramTaskStatus())?.outcome?.status === 'completed');
+    console.log('Dot routed an encrypted Telegram task through Manager and observed approval and completion in its own thread.');
     const unverified = await sendEncrypted(reader, office, 'fixture-unverified',
       mentionMessage('Unverified fixture. Draft a three-step checklist.', manager));
     const progress = await eventually(() => findMessage(item => item.content['m.relates_to']?.event_id === unverified &&
@@ -369,13 +399,14 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     ws.close();
     await new Promise(resolve => server.close(resolve));
     await new Promise(resolve => context.close(resolve));
+    await new Promise(resolve => telegram.close(resolve));
   }
 }
 
 try {
   const alerts = await room('vps-alerts');
   const office = await room('office');
-  const telegramControl = await room('telegram-control');
+  const telegramControl = await room('telegram-workspace');
   const token = await login('operator', 'PINREAD');
   const preexisting = await api('/_matrix/client/v3/rooms/' + encodeURIComponent(alerts) + '/send/m.room.message/operator-pin',
     { method: 'PUT', token, body: { msgtype: 'm.text', body: 'Existing fixture pin' } });
@@ -480,8 +511,8 @@ try {
   const telegramInstructions = await eventually(() => readShortcut(telegramSetup, telegramControl));
   assert.match(telegramInstructions.body, /^Set up Telegram\n/u);
   assert.match(telegramInstructions.body, /REPLACE_WITH_YOUR_API_HASH/u);
-  assert.match(telegramInstructions.body, /Telegram Agent and Telegram Bridge/u);
   assert.match(telegramInstructions.body, /4\. Element · Ask Telegram Agent/u);
+  assert.match(telegramInstructions.body, /mention Task Manager and say “Telegram:/u);
   assert.match(telegramInstructions.body, /@Telegram Agent, add the Telegram user with ID 1001/u);
   assert.doesNotMatch(telegramInstructions.body, /!tg pm|5\. Element/u);
   console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');

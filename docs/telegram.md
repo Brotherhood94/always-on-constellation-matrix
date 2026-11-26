@@ -33,6 +33,8 @@ Choose **@Task Manager** when you want the coordinator to hand off the request o
 
 You can also write “Find Sam Example on Telegram and prepare a private message saying tomorrow works for me.” Task Manager delegates to Telegram Agent and posts status and a link to the private thread in Office. Contact matches, summaries, and draft text appear in **Telegram → Rooms → Telegram Bridge**. The drafting connector must be configured for natural-language requests. The exact commands below remain available.
 
+From ChatGPT with **Constellation Office**, try “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example with the exact text «Hello».” Dot posts one explicit Telegram instruction. Open the private approval thread linked from the Office reply or Dot’s task status. Check the recipient and message, then vote **✅ Accept** or **❌ Decline** in Element.
+
 | Action | Text after the mention |
 | --- | --- |
 | Open a private chat | `telegram add @username` |

@@ -98,6 +98,7 @@ function telegramGuide(command, legacy) {
     ['4. Element · Ask Telegram Agent', [
       'Once the agent is configured, open this room, type @, and select Telegram Agent from Element’s mention picker. Adapt one example and send it.',
       'You can also mention Telegram Agent in Agents → Office. Open the private thread linked in its reply to review the result or approve a draft.',
+      'To hand off through Office, mention Task Manager and say “Telegram: Send a private message to Sam Example saying «Hello».” You can also ask Dot to submit that request to Task Manager. Review the approval poll here in Telegram Bridge.',
       '@Telegram Agent, add Sam Example to my Telegram rooms.',
       '@Telegram Agent, open the private chat with @sample_contact.',
       '@Telegram Agent, add the Telegram user with ID 1001 to my rooms.',

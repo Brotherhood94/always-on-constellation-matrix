@@ -107,14 +107,15 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
   }
   async function office(input) {
     if (!input || !eventId.test(input.id ?? '') || !settings.officeRoom || input.room !== settings.officeRoom ||
-        input.sender !== settings.owner || !['task-manager', 'manager'].some(key => input.actor === `@${key}:${settings.domain}`)) {
+        ![settings.owner, `@dot:${settings.domain}`].includes(input.sender) ||
+        !['task-manager', 'manager'].some(key => input.actor === `@${key}:${settings.domain}`)) {
       return { status: 'forbidden' };
     }
     if (input.method === 'status') {
       const row = load(input.id);
       return row?.office ? receipt(row) : { status: 'missing' };
     }
-    if (input.method !== 'submit' || !await checkRoom()) return { status: 'unavailable' };
+    if (input.method !== 'submit' || !await checkOffice() || !await checkRoom()) return { status: 'unavailable' };
     const intent = telegramIntent(input.text, { office: true });
     return intent ? submit(input.id, true, intent) : { status: 'forbidden' };
   }
@@ -270,7 +271,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       return;
     }
     const scope = JSON.parse(row.intent);
-    if (scope.action === 'clarify') return feedback(row, 'Ask to find a chat, open or unlink a room, read an update, or prepare a draft for a named chat.', 'blocked');
+    if (scope.action === 'clarify') return feedback(row, 'Send one request at a time. For example, say “Send a private message to Sample Contact saying ‘Hello’.” I’ll show a preview and ask for your approval here. You can also ask to find a chat, open or unlink a room, or read an update.', 'blocked');
     const grant = randomBytes(32).toString('hex');
     grants.set(grant, { id: row.id, until: Math.min(row.created + jobAge, now() + 120_000) });
     try {

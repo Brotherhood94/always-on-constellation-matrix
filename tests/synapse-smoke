@@ -41,13 +41,18 @@ done
 docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
   -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/deploy:/telegram \
   "$name" python -B /test.py
+office_connector_mounts=()
+for module in connector matrix-routing telegram-intent telegram-office; do
+  office_connector_mounts+=(-v "$src/agents/connector/$module.mjs:/app/$module.mjs:ro")
+done
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
   mounts=(--tmpfs /welcome)
   if [[ -n ${MATRIX_TOPOLOGY_DIR:-} ]]; then
     mounts+=(-v "$MATRIX_TOPOLOGY_DIR:/topology" -e 'MATRIX_TOPOLOGY_EVIDENCE=/topology/office-evidence.json')
   fi
   docker run --rm --network "$name" --user 0:0 --entrypoint node \
-    "${mounts[@]}" -v "$src/agents/connector/welcome.mjs:/app/welcome.mjs:ro" \
+    "${mounts[@]}" "${office_connector_mounts[@]}" -v "$src/agents/connector/welcome.mjs:/app/welcome.mjs:ro" \
+    -v "$src/agents/connector/dot-bridge.mjs:/app/dot-bridge.mjs:ro" \
     -v "$src/integrations/chief-of-staff:/app/chief-of-staff:ro" \
     -v "$src/deploy/retire-worker.sql:/app/retire-worker.sql:ro" \
     -v "$src/deploy/matrix/bot:/app/ops:ro" -v "$src/tests/operations-fixture.mjs:/app/operations.mjs:ro" \
@@ -63,9 +68,10 @@ if [[ ${MATRIX_HELPER_SMOKE:-0} == 1 ]]; then
   docker run --rm --network "$name" --user 0:0 --entrypoint node \
     -v "$name:/fixture:ro" -v "$desk_tls:/helper-tls:ro" -v "$src/tests/helper-fixture.mjs:/app/helper-fixture.mjs:ro" \
     -v "$src/agents/connector/helper-dm.mjs:/app/helper-dm.mjs:ro" \
+    -v "$src/agents/connector/helper-hints.mjs:/app/helper-hints.mjs:ro" \
     -v "$src/agents/connector/move-probe.mjs:/app/move-probe.mjs:ro" \
     -v "$src/agents/connector/helper-support.mjs:/app/helper-support.mjs:ro" \
-    -v "$src/agents/connector/connector.mjs:/app/connector.mjs:ro" \
+    "${office_connector_mounts[@]}" \
     -v "$src/agents/connector/agent-catalog.mjs:/app/agent-catalog.mjs:ro" \
     -v "$src/agents/connector/capability-dispatch.mjs:/app/capability-dispatch.mjs:ro" \
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/helper-fixture.mjs

@@ -177,6 +177,7 @@ docker run --rm -i --network "$network" --user 991:991 --tmpfs /state:uid=991,gi
   -v "$src/../../deploy/matrix/bot/telegram-office.mjs:/app/telegram-office.mjs:ro" \
   -v "$src/acp.mjs:/app/acp.mjs:ro" -v "$src/control.mjs:/app/control.mjs:ro" -v "$src/service.mjs:/app/service.mjs:ro" \
   -v "$src/delegation.mjs:/app/delegation.mjs:ro" \
+  -v "$src/../../agents/connector/telegram-intent.mjs:/agents/connector/telegram-intent.mjs:ro" \
   --entrypoint node "$connector_image" --input-type=module - <<'JS'
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -253,8 +254,9 @@ async function privateRoom(token, invite, asUser) {
 const controlRoom = await privateRoom(agent.access_token, [b.user_id, bridgeBot]);
 await api('/join/' + encodeURIComponent(controlRoom), {}, b.access_token);
 await api('/join/' + encodeURIComponent(controlRoom) + '?user_id=' + encodeURIComponent(bridgeBot), {}, botToken);
-const officeRoom = await privateRoom(b.access_token, [agent.user_id]);
+const officeRoom = await privateRoom(b.access_token, [agent.user_id, dot.user_id]);
 await api('/join/' + encodeURIComponent(officeRoom), {}, agent.access_token);
+await api('/join/' + encodeURIComponent(officeRoom), {}, dot.access_token);
 const {room_id: space} = await api('/createRoom', {preset:'private_chat', visibility:'private',
   creation_content:{type:'m.space','m.federate':false}, invite:[b.user_id]}, agent.access_token);
 await api('/join/' + encodeURIComponent(space), {}, b.access_token);
@@ -460,7 +462,7 @@ try {
   setupCrypto.close();
   console.log('The Guide device encrypted one Office request into Control across retries, preserving the exact text for operator review.');
 
-  const handoff = { id: '$new-office', room: officeRoom, sender: b.user_id, actor: '@task-manager:telegram.test' };
+  const handoff = { id: '$new-office', room: officeRoom, sender: dot.user_id, actor: '@task-manager:telegram.test' };
   const officeDraftText = 'Send a private message to Pilot on Telegram saying "Synthetic Office draft."';
   const submitOffice = () => requestTelegramService(sockets.TELEGRAM_HANDOFF_SOCKET, { ...handoff, method: 'submit', text: officeDraftText });
   assert.equal((await submitOffice()).status, 'pending');
@@ -481,7 +483,7 @@ try {
   assert.equal(delegatedCalls, 1);
 
   const direct = await reader.encryptEvent(controlRoom, 'm.room.message', {
-    msgtype: 'm.text', body: '@Telegram Agent: manda messaggio a Pilot "ciao bello"',
+    msgtype: 'm.text', body: '@Telegram Agent: Invia una sola volta il testo esatto «ciao bello» alla chat privata di Pilot.',
     'm.mentions': { user_ids: [agent.user_id] },
   });
   const directEvent = await reader.put(controlRoom, 'fixture-mention-telegram-agent', direct);
@@ -494,7 +496,7 @@ try {
   assert.equal(directDraft.event, null);
   await castVote(reader, directDraft, 'reject', 'fixture-reject-telegram-agent');
   await waitFor(() => store.draft(directDraft.id).state === 'cancelled', 'the direct draft to be rejected');
-  console.log('A private Office handoff and a direct Telegram Agent mention each completed through a scoped ACP MCP turn.');
+  console.log('A Dot request relayed by Task Manager and a direct Telegram Agent mention each produced an encrypted approval poll through a scoped ACP MCP turn.');
 
   const dotRequest = { id:'fixture-dot-compose', action:'compose', destination:'pilot', chat_type:'direct',
     text:'Exact test text from Dot' };
