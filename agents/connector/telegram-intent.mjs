@@ -62,7 +62,10 @@ export function telegramTaskPayload(input) {
   if (!['open', 'unlink', 'lookup', 'read', 'create_group', 'add_members'].includes(action) ||
       typeof input.target !== 'string' ||
       (input.type !== undefined && !['direct', 'group'].includes(input.type))) return null;
-  const target = destination(input.target, input.type);
+  const title = compact(input.target).replace(/^[“"]|[”"]$/gu, '');
+  const target = action === 'create_group'
+    ? (title && Buffer.byteLength(title) <= 120 && !/[\p{Cc}\p{Cf}]/u.test(title) && { target: title, type: 'group' })
+    : destination(input.target, input.type);
   if (!target) return null;
   if (action === 'read') {
     if (typeof input.question !== 'string' || !input.question.trim() || Buffer.byteLength(input.question) > 1000) return null;

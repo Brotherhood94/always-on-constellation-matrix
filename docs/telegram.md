@@ -1,6 +1,6 @@
 # Telegram integration
 
-The optional integration creates a private, top-level **Telegram** Space. **Rooms → Telegram Bridge** contains setup, bridge commands, recipient selection, drafts, updates, and approvals. **People** contains bridged contacts and groups. Only the operator, `@telegrambot`, and `@telegram-agent` join Telegram Bridge. Open its **Set up Telegram** pin to get started.
+The optional integration creates a private, top-level **Telegram** Space. **Rooms → Telegram Bridge** contains account setup, bridge commands, and private requests. **People** contains bridged contacts and groups. Only the operator, `@telegrambot`, and `@telegram-agent` join Telegram Bridge. Open its **Set up Telegram** pin to get started.
 
 Telegram Agent also joins **Agents → Office** as the Telegram specialist. Its dedicated Constellation Instance runs Amplifier over scoped ACP. [Acceptance scenarios](acceptance.md#7-verify-optional-integrations)
 

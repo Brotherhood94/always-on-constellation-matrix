@@ -220,7 +220,7 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
             ('telegram-draft', 'Prepare a preview or send an explicitly requested message to a verified chat.'),
             ('telegram-chat-update', 'Read and summarize the requested conversations in Office.'),
         ]
-        result.append(dict(key='telegram-agent', id=f'@telegram-agent:{server_name}', name='Telegram Agent',
+        specialist = dict(key='telegram-agent', id=f'@telegram-agent:{server_name}', name='Telegram Agent',
                            role='worker',
                            status='Available' if ready else 'Telegram setup pending', active=ready, contacts=[],
                            capabilities=[dict(code=code, description=description, resources=['workspace:telegram', 'telegram:*'])
@@ -230,7 +230,10 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
                                     'working_style': 'Use verified recipients, ask about ambiguous matches, and report the outcome in the original thread.'},
                            tools=['Scoped Telegram MCP'], model=status.get('agent', {}).get('model'),
                            effort=status.get('agent', {}).get('effort'),
-                           **(integration or {'server': registry['local_server'], 'placement': 'local'})))
+                           server=registry['local_server'], placement='local')
+        specialist.update(integration or {})
+        specialist['active'] = specialist['status'] == 'Available'
+        result.append(specialist)
     return dict(version=1, contactPolicy=governed, time=now, telegramPlacement=integration, dynamicHandoffs=registry.get('dynamic_handoffs') is True,
                 agents=result, **({'policyRevision': revision} if revision else {}))
 

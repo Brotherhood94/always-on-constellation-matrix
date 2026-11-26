@@ -28,7 +28,7 @@ def element_locations(settings):
     if settings['dot']:
         lines.append('  • Agents → VPS Alerts → Pinned messages → Connect Dot has the tunnel setup.')
     if settings['telegram']:
-        lines.append('  • Telegram Agent is preselected in the agent checklist when you enable Telegram.\n'
+        lines.append('  • Enabling Telegram also installs Telegram Agent automatically.\n'
                      '    In Element, see Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.')
     return '\n'.join(lines)
 

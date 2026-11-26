@@ -132,6 +132,11 @@ test('a short contact name resolves only linked direct chats for drafting and pr
   assert.deepEqual((await telegramOfficeAction({ ...request, target: sam.name }, options)).rooms, [sam]);
   assert.deepEqual((await telegramOfficeAction({ ...request, type: 'group' }, options)).rooms, []);
   assert.deepEqual((await telegramOfficeAction({ ...request, allowGivenName: false }, options)).rooms, []);
+  assert.deepEqual((await telegramOfficeAction({ ...request, bestMatch: true }, options)).rooms,
+    [second, sam, group].map(room => ({ ...room, needsChoice: true })));
+  assert.deepEqual((await telegramOfficeAction({ ...request, target: 'Sample Project', bestMatch: true }, {
+    ...options, database: { query: async () => ({ rows: [{ ...sam, name: 'Sample Project 2026' }] }) },
+  })).rooms, [{ ...sam, name: 'Sample Project 2026' }]);
 });
 
 test('an Italian exact-text request resolves an exact Telegram username with or without @', async () => {

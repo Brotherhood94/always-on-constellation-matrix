@@ -66,7 +66,7 @@ Find the deployment URLs and the password retrieval command for your data direct
 
 ## Connect Dot and Telegram
 
-For Dot, open **Agents → VPS Alerts → Pinned messages → Connect Dot**. Set up the OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. If you enabled Telegram, Telegram Agent is preselected and its Amplifier sign-in runs in the same terminal sequence as the other agents. To resume it independently, run `./constellation_matrix telegram setup`. After linking your Telegram account in Element and configuring Telegram Agent’s Amplifier provider, follow the Telegram guide to verify a chat and enable drafts and updates. [Dot setup](dot.md) · [Telegram setup](telegram.md)
+For Dot, open **Agents → VPS Alerts → Pinned messages → Connect Dot**. Set up the OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. If you enabled Telegram, Telegram Agent installs automatically and its Amplifier sign-in runs in the same terminal sequence as the other agents. To resume it independently, run `./constellation_matrix telegram setup`. After linking your Telegram account in Element and configuring Telegram Agent’s Amplifier provider, follow the Telegram guide to open a test chat and verify a request from Office. [Dot setup](dot.md) · [Telegram setup](telegram.md)
 
 ## Boot and service placement
 
@@ -179,7 +179,7 @@ Run these commands from the VPS checkout. Omitting `--to` opens a host picker. T
 
 The old agent remains available during destination preflight. It then drains its current work while routing pauses. The destination gets the workspace, Matrix device and encryption state, Amplifier sessions, and any supported credentials over an authenticated, encrypted connection. Matrix and the shared desktop stay on the VPS. The dashboard shows **Draining** or **Moving** during the interruption. Check **Persona and duties** afterwards for the health time and move outcome.
 
-Task Manager, Hiring Manager, Coach, Scouter, Helper, and general Office workers can move. For Telegram Agent, the Amplifier Instance moves while the VPS retains the Matrix connector, approvals, pending drafts, delivery receipts, and mautrix bridge. VPS Manager stays on the host it administers. Context Intelligence, Persona Workshop, and Dot’s tunnel also stay on the VPS.
+Task Manager, Hiring Manager, Coach, Scouter, Helper, and general Office workers can move. For Telegram Agent, the Amplifier Instance moves while the VPS retains the Matrix connector, pending requests, delivery receipts, and mautrix bridge. VPS Manager stays on the host it administers. Context Intelligence, Persona Workshop, and Dot’s tunnel also stay on the VPS.
 
 ### Resume or roll back
 

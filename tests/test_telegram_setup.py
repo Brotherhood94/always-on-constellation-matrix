@@ -1,6 +1,7 @@
 from contextlib import redirect_stdout
 from importlib.util import module_from_spec, spec_from_file_location
 from io import StringIO
+import json
 from pathlib import Path
 from subprocess import CalledProcessError
 import sys
@@ -38,6 +39,30 @@ class TelegramSetupTest(unittest.TestCase):
         self.assertEqual(prompts, 1)
         self.assertIn('!tg <your Telegram two-step verification password>', output)
         self.assertIn('Telegram Agent is running', output)
+
+    def test_missing_api_file_opens_a_private_prompt_and_removes_the_temporary_file(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            digest = 'a' * 32
+            prepared = []
+
+            def consume(workspace, arguments):
+                self.assertEqual(workspace, data)
+                self.assertEqual(arguments[0], 'prepare')
+                path = Path(arguments[1])
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(json.loads(path.read_text()), {'api_id': 1234, 'api_hash': digest})
+                prepared.append(path)
+
+            stages = [SimpleNamespace(stdout=stage) for stage in ('credentials', 'ready', '')]
+            with redirect_stdout(StringIO()) as output, patch('telegram_setup.interactive_terminal', return_value=True), \
+                    patch('telegram_setup.Path.home', return_value=data), patch.dict('os.environ', {'SUDO_USER': ''}), \
+                    patch('telegram_setup.run_telegram', side_effect=stages), patch('telegram_setup.telegram', side_effect=consume), \
+                    patch('builtins.input', return_value='1234'), patch('telegram_setup.getpass.getpass', return_value=digest):
+                setup(data)
+            self.assertEqual(len(prepared), 1)
+            self.assertFalse(prepared[0].exists())
+            self.assertNotIn(digest, output.getvalue())
 
     def test_qr_can_pause_and_requires_confirmed_login_to_continue(self):
         data = Path('/srv/isolated-fixture')

@@ -510,3 +510,20 @@ test('a lost group mutation response is reported as unconfirmed and is never bli
   assert.equal(reply[telegramReceiptKey].status, 'unconfirmed');
   assert.match(reply.body, /has not confirmed/u);
 });
+
+test('Office adds a verified person to the selected registered group', async () => {
+  const f = fixture({ officeFirst: true });
+  f.resolved.push({ peer: 'chat:2001', name: 'Project', room: '!project:sample.test' });
+  const id = '$office-add-member';
+  const handoff = officeHandoff(f, id, 'Telegram: add @sample_contact to the group Project.');
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  await f.broker().tick();
+  await f.broker().tick();
+  assert.deepEqual(f.effects, [{ id, action: 'add-members', target: '!project:sample.test', peer: 'chat:2001', members: ['user:1001'] }]);
+});
+
+test('new groups retain the requested title including conjunctions', () => {
+  const intent = telegramIntent('Telegram: create a group called Research and Development with @sample_contact.', { office: true });
+  assert.equal(intent.target, 'Research and Development');
+  assert.deepEqual(intent.members, ['@sample_contact']);
+});
