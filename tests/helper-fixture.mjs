@@ -15,6 +15,8 @@ const url = 'http://synapse:8008';
 const clientSecret = 'synthetic-helper-acp';
 const sockets = new Set();
 const turns = [];
+let releaseSetupReply;
+const setupReply = new Promise(resolve => { releaseSetupReply = resolve; });
 const environment = { ...process.env, MATRIX_URL: url, MATRIX_SERVER_NAME: domain, MATRIX_OWNER: owner,
   INSTANCE_ACP_URL: 'wss://localhost:19443/api/v1/acp', AGENT_STATE: '/state' };
 for (const path of ['/state', '/operator', '/workspace', '/catalog', '/support', '/acp']) await mkdir(path, { recursive: true });
@@ -37,7 +39,7 @@ acp.on('connection', (socket, request) => {
   assert.equal(request.headers.authorization, 'Bearer ' + clientSecret);
   sockets.add(socket);
   socket.once('close', () => sockets.delete(socket));
-  socket.on('message', raw => {
+  socket.on('message', async raw => {
     const { id, method, params } = JSON.parse(raw);
     const send = message => socket.send(JSON.stringify({ jsonrpc: '2.0', ...message }));
     if (method === 'initialize') send({ id, result: { protocolVersion: params.protocolVersion, agentCapabilities: { loadSession: true } } });
@@ -45,6 +47,7 @@ acp.on('connection', (socket, request) => {
     if (method === 'session/prompt') {
       const prompt = params.prompt[0].text;
       turns.push(prompt);
+      if (prompt.includes('Element Desktop?')) await setupReply;
       const text = prompt.includes('Element Desktop?')
         ? 'Click Edit and enter the workspace homeserver. See https://example.test/docs/setup-guide.md'
         : 'Context Intelligence was healthy in the stale snapshot.';
@@ -62,6 +65,10 @@ client.syncingTimeout = 250;
 const clients = [client];
 const observed = [];
 const officeEvents = [];
+const activity = [];
+client.on('room.event', (room, event) => {
+  if (room === privateRoom && event.type === 'm.reaction' && event.sender === '@helper:' + domain) activity.push(event);
+});
 client.on('room.decrypted_event', (room, event) => {
   if (room === privateRoom) observed.push(event);
   if (room === office) officeEvents.push(event);
@@ -88,9 +95,15 @@ try {
   }, 'the single welcome pin');
   const ask = (txn, body) => sendEncrypted(client, privateRoom, txn, { msgtype: 'm.text', body });
   const setup = await ask('fixture-helper-setup', 'How do I set up Element Desktop?');
+  const eyes = await until(() => activity.find(event => event.content['m.relates_to']?.event_id === setup &&
+    event.content['m.relates_to']?.key === '👀'), 'Helper’s acknowledgment of the pending private question');
+  releaseSetupReply();
   const answer = await until(() => byBody('Click Edit'), 'the decrypted setup answer');
   assert.match(answer.content.body, /setup-guide\.md/u);
   assert.equal(answer.content['m.relates_to'].event_id, setup);
+  await until(async () => (await client.getRawEvent(privateRoom, eyes.event_id)).unsigned?.redacted_because,
+    'removal of Helper’s acknowledgment after the answer');
+  assert.equal(activity.filter(event => event.content['m.relates_to']?.event_id === setup).length, 1);
   const status = await ask('fixture-helper-health', 'Is Context Intelligence healthy?');
   const health = await until(() => byBody('stale snapshot'), 'the decrypted health answer');
   assert.equal(health.content['m.relates_to'].event_id, status);

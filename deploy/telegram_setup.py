@@ -3,10 +3,13 @@ import argparse
 import os
 from pathlib import Path
 from pwd import getpwnam
-from subprocess import PIPE
+from subprocess import CalledProcessError, PIPE
 
 from installer import run_telegram, telegram, workspace_command
 from setup_guide import heading, interactive_terminal
+
+
+PROBE_AUTHENTICATION_ERROR = 42
 
 
 def setup(data, arguments=(), *, install_agent=True):
@@ -72,7 +75,14 @@ def setup(data, arguments=(), *, install_agent=True):
             elif stage == 'provider':
                 print('Telegram Agent · Sign in with ChatGPT Codex and verify the Amplifier connection.', flush=True)
                 telegram(data, ['sign-in'])
-                telegram(data, ['probe'])
+                try:
+                    telegram(data, ['probe'])
+                except CalledProcessError as error:
+                    if error.returncode != PROBE_AUTHENTICATION_ERROR:
+                        raise
+                    input('Press Enter to open a fresh Codex device sign-in, or Ctrl+C to pause. ')
+                    telegram(data, ['sign-in', '--reauthenticate'])
+                    telegram(data, ['probe'])
             elif stage == 'start':
                 print('Starting Telegram Agent.', flush=True)
                 telegram(data, ['start-agent'])

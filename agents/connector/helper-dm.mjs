@@ -8,7 +8,7 @@ import { helperIdentity, helperQuestion, privateHelperRoom, supportEvidence } fr
 import { dailyHints, hintPreference } from './helper-hints.mjs';
 import { mentionMessage } from './matrix-format.mjs';
 import { threadRelation } from './matrix-routing.mjs';
-import { openRoomClient, readEncryptedRoomMessage, readOptional, sendEncrypted } from './matrix-session.mjs';
+import { acknowledgePrivateMessage, openRoomClient, readEncryptedRoomMessage, readOptional, sendEncrypted } from './matrix-session.mjs';
 import { Store } from './store.mjs';
 
 const { MATRIX_URL: url, MATRIX_OWNER: owner, MATRIX_SERVER_NAME: server, AGENT_STATE: state } = process.env;
@@ -83,6 +83,7 @@ while (true) {
         if (original?.sender !== owner || original.content.msgtype !== 'm.text') {
           store.ignoreAssignment(event.id);
         } else {
+          const clearActivity = await acknowledgePrivateMessage(client, roomId, event.id);
           let reply = event.reply;
           if (reply === null) {
             const preference = hintPreference(event.body);
@@ -100,6 +101,7 @@ while (true) {
           if (await privateRoom()) {
             const sent = await sendEncrypted(client, roomId, 'helper-reply-' + digest(event.id),
               { ...mentionMessage(reply), 'm.relates_to': threadRelation(event) });
+            await clearActivity();
             store.sent(event.id, sent);
           }
         }

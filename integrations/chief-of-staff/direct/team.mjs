@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { mentionMessage } from '../../../agents/connector/matrix-format.mjs';
-import { sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
+import { acknowledgePrivateMessage, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
 import { runTurn } from '../../../agents/connector/instance-acp.mjs';
 import { research } from '../../../agents/connector/team-tools.mjs';
 import { contextRequest } from './evidence.mjs';
@@ -229,6 +229,9 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
     if (!row || !catalog.fresh()) return false;
     db.prepare('UPDATE desk_jobs SET retry=? WHERE id=?').run(Date.now()+60000,row.id);
     const job = JSON.parse(row.body);
+    const clearActivity = row.id.startsWith('operator:')
+      ? await acknowledgePrivateMessage(client, room, job.source)
+      : null;
     let result = row.plan && JSON.parse(row.plan);
     if (!result) {
       result = await plan(job);
@@ -252,6 +255,7 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
         approvals.enqueue(source,op,result.message,'agent');
       }
     } else if (result.message) await say(row.id,result.message + (op ? '\nHost management is unavailable.' : ''));
+    await clearActivity?.();
     db.prepare("UPDATE desk_jobs SET done=1,body='' WHERE id=?").run(row.id);
     return true;
   }

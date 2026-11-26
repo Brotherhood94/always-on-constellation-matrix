@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { mentionMessage } from '../../../agents/connector/matrix-format.mjs';
-import { sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
+import { acknowledgePrivateMessage, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
 import { runTurn } from '../../../agents/connector/instance-acp.mjs';
 import { contextRequest } from './evidence.mjs';
 
@@ -150,7 +150,12 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
         raw.unsigned?.redacted_because) return null;
     const request = command(event);
     if (request && ['chief-of-staff', 'hiring-manager'].includes(actor)) {
-      if (db.prepare('SELECT 1 FROM roster_requests WHERE request=?').get(raw.event_id)) return '';
+      if (db.prepare('SELECT 1 FROM roster_requests WHERE request=?').get(raw.event_id)) {
+        await checkDestination();
+        const clearActivity = await acknowledgePrivateMessage(client, room, raw.event_id);
+        await clearActivity();
+        return '';
+      }
       const roster = currentAgents();
       if (!roster) return 'The worker roster is unavailable. Try the command again when it is current.';
       const target = roster.find(agent => agent.key === request.key);
@@ -159,16 +164,22 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       if (!starterRetirement && (protectedKeys.has(request.key) || starter || (request.kind === 'retire' && (!target ||
           target.role !== 'worker' || target.placement !== 'local')))) return 'Choose an ordinary local Office worker.';
       if (request.kind === 'add' && target) return 'That worker ID is already registered. Choose a fresh ID.';
-      let operation = { kind: request.kind, agent: request.key };
-      if (request.kind === 'add') {
-        try {
-          operation = { ...operation, profile: await draft(request.key, request.brief) };
-        } catch {
-          return 'The hire profile could not be prepared. Try again with a short description of the new agent’s duties.';
+      await checkDestination();
+      const clearActivity = await acknowledgePrivateMessage(client, room, raw.event_id);
+      try {
+        let operation = { kind: request.kind, agent: request.key };
+        if (request.kind === 'add') {
+          try {
+            operation = { ...operation, profile: await draft(request.key, request.brief) };
+          } catch {
+            return 'The hire profile could not be prepared. Try again with a short description of the new agent’s duties.';
+          }
         }
+        const summary = request.kind === 'retire' && describeRetirement ? await describeRetirement(target) : '';
+        enqueue(raw.event_id, operation, summary);
+      } finally {
+        await clearActivity();
       }
-      const summary = request.kind === 'retire' && describeRetirement ? await describeRetirement(target) : '';
-      enqueue(raw.event_id, operation, summary);
       return '';
     }
     if (![pollResponse, 'm.poll.response'].includes(event.type)) return null;

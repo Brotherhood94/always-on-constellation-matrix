@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import matrix from '@vector-im/matrix-bot-sdk';
 import { mentionMessage } from '../../../agents/connector/matrix-format.mjs';
-import { openRoomClient, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
+import { acknowledgePrivateMessage, openRoomClient, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
 import { observationMessage, parseObservation, validateRoomId } from '../observation.mjs';
 import { contextRequest, interaction, writeInteraction } from './evidence.mjs';
 import { isTeamReview, reportId, workshopObservation } from './review.mjs';
@@ -222,10 +222,13 @@ async function drainReviewRequest() {
       finish.run(row.event);
       return;
     } else {
+      const clearActivity = await acknowledgePrivateMessage(client, destination, row.event);
       try {
         response = await reviewTeam();
       } catch {
         response = 'Chief of Staff could not complete the review. Send “review team” again after checking Workshop and Context Intelligence.';
+      } finally {
+        await clearActivity();
       }
     }
     db.prepare('UPDATE review_requests SET response=?,raw=NULL WHERE event=?').run(response, row.event);

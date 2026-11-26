@@ -142,6 +142,14 @@ The release pins mautrix Telegram `v26.11` with a small patch that displays a si
 
 The Telegram model uses a standalone Amplifier bundle. The connector records scoped delivery metadata in Context Intelligence. Dependencies are prepared when the engine image is built. If an older engine failed to activate `hook-context-intelligence`, rerun `prepare-agent` with the updated release and then rerun `probe`. A completed Codex sign-in is reused.
 
+If the probe reports that Codex rejected the saved sign-in, open a fresh device login for Telegram Agent. Complete it with the account intended for this agent, then verify and start the connector.
+
+```sh
+sudo ./constellation_matrix telegram sign-in --reauthenticate
+sudo ./constellation_matrix telegram probe
+sudo ./constellation_matrix telegram start-agent
+```
+
 ## Bind verified chats to the Telegram Space
 
 **Element.** Telegram Agent automatically joins eligible chats after you open and join them. In the verified portal, enable the operator’s Telegram login as its relay with `!tg set-relay <login-id>`. Configure a per-chat binding to enable reading and drafting. Dot submits private requests to the connector through a local socket. [Relay mode](https://docs.mau.fi/bridges/general/relay-mode.html)

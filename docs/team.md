@@ -6,7 +6,7 @@ On the dashboard, open **Persona and duties** next to any agent. Its page shows 
 
 ## Ask Helper
 
-In Element, open **Agents → People → Helper** and ask a plain-language question. For example, “How do I set up Element Desktop?” or “Is Context Intelligence healthy, and when was it last checked?” Helper cites the deployed guide and identifies stale or unavailable health data.
+In Element, open **Agents → People → Helper** and ask a plain-language question. For example, “How do I set up Element Desktop?” or “Is Context Intelligence healthy, and when was it last checked?” Helper cites the deployed guide and identifies stale or unavailable health data. In People, Helper and the management agents add 👀 when they begin handling your message.
 
 For a question that belongs in an Office task, ask **@Task Manager** to consult Helper. Task Manager is the only agent that can initiate this handoff. The answer returns to the original Office thread. Helper’s private chat uses a separate session and accepts questions from the operator.
 

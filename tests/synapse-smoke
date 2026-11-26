@@ -42,7 +42,7 @@ docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
   -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/deploy:/telegram \
   "$name" python -B /test.py
 office_connector_mounts=()
-for module in connector matrix-routing telegram-intent telegram-office; do
+for module in connector matrix-routing matrix-session telegram-intent telegram-office; do
   office_connector_mounts+=(-v "$src/agents/connector/$module.mjs:/app/$module.mjs:ro")
 done
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
@@ -85,6 +85,7 @@ if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 || ${MATRIX_TEAM_DESKS_SMOKE:-0} == 1 ]
   docker run --rm --network "$name" --network-alias context --user 0:0 --entrypoint node \
     -v "$desk_tls:/desk-tls:ro" \
     -v "$src/integrations/chief-of-staff:/app/chief-of-staff:ro" \
+    -v "$src/agents/connector/matrix-session.mjs:/app/matrix-session.mjs:ro" \
     -v "$src/tests/team-desks-fixture.mjs:/app/team-desks-fixture.mjs:ro" \
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/team-desks-fixture.mjs
 fi

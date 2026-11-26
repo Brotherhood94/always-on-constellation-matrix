@@ -193,11 +193,24 @@ SQL
   sign-in)
     [[ ! -e "$TELEGRAM_DATA/connector/relocation-drain" ]] || { echo 'Finish the pending Telegram Agent move first.' >&2; exit 1; }
     [[ ! -e "$TELEGRAM_DATA/engine-moved" ]] || { echo 'Use host configure telegram-agent on the active worker.' >&2; exit 1; }
-    [[ $# == 1 && -t 0 && -t 1 ]] || { echo 'Run telegram sign-in from an interactive terminal.' >&2; exit 2; }
-    "${compose[@]}" --profile agent exec telegram-engine /opt/amplifier-acp/.venv/bin/python -B /opt/telegram/sign_in.py
+    [[ $# == 1 || ( $# == 2 && $2 == --reauthenticate ) ]] || { echo 'Use telegram sign-in [--reauthenticate].' >&2; exit 2; }
+    [[ -t 0 && -t 1 ]] || { echo 'Run telegram sign-in from an interactive terminal.' >&2; exit 2; }
+    shift
+    if [[ $# == 1 ]]; then
+      configured_model=$(python3 -B -c 'import json, sys; print(json.load(open(sys.argv[1]))["model"])' \
+        "$TELEGRAM_DATA/connector/config.json")
+      export TELEGRAM_MODEL="$configured_model"
+      "${compose[@]}" --profile agent up -d --no-deps --build --wait --wait-timeout 120 telegram-engine
+    fi
+    "${compose[@]}" --profile agent exec telegram-engine /opt/amplifier-acp/.venv/bin/python -B /opt/telegram/sign_in.py "$@"
+    if [[ $# == 1 ]]; then
+      rm -f -- "$TELEGRAM_DATA/connector/backend-verified"
+      "${compose[@]}" --profile agent restart telegram-engine
+      "${compose[@]}" --profile agent up -d --no-deps --wait --wait-timeout 120 telegram-engine
+    fi
     ;;
   probe)
-    "${compose[@]}" --profile agent run --rm --no-deps connector probe
+    "${compose[@]}" --profile agent run --rm --no-deps --build connector probe
     ;;
   start-agent)
     [[ -s "$TELEGRAM_DATA/connector/backend-verified" ]] || { echo 'Run telegram probe first.' >&2; exit 1; }

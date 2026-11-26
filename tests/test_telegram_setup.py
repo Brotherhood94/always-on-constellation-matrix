@@ -1,4 +1,5 @@
 from contextlib import redirect_stdout
+from importlib.util import module_from_spec, spec_from_file_location
 from io import StringIO
 from pathlib import Path
 from subprocess import CalledProcessError
@@ -6,7 +7,7 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import call, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy'))
 from telegram_setup import setup
@@ -54,6 +55,16 @@ class TelegramSetupTest(unittest.TestCase):
         self.assertEqual(actions, [call(data, ['sign-in']), call(data, ['probe']), call(data, ['start-agent'])])
         self.assertEqual(prompts, 0)
 
+    def test_authentication_rejection_offers_fresh_login_and_retries_the_probe(self):
+        data = Path('/srv/isolated-fixture')
+        failure = CalledProcessError(42, ['probe'])
+        _, actions, _, prompts = self.run_setup(data, ['provider', 'start', 'ready', ''], inputs=[''],
+                                                failure=[None, failure, None, None, None])
+        self.assertEqual(actions, [call(data, ['sign-in']), call(data, ['probe']),
+                                  call(data, ['sign-in', '--reauthenticate']), call(data, ['probe']),
+                                  call(data, ['start-agent'])])
+        self.assertEqual(prompts, 1)
+
     def test_bridge_only_setup_completes_without_configuring_amplifier(self):
         data = Path('/srv/isolated-fixture')
         output, actions, shell, prompts = self.run_setup(
@@ -70,3 +81,22 @@ class TelegramSetupTest(unittest.TestCase):
                 _, actions, _, prompts = self.run_setup(Path('/srv/isolated-fixture'), stages)
                 self.assertEqual(actions, [])
                 self.assertEqual(prompts, 0)
+
+
+class TelegramProviderLoginTest(unittest.IsolatedAsyncioTestCase):
+    async def test_forced_login_bypasses_locally_valid_credentials(self):
+        provider = Mock(auth_status=Mock(return_value='authenticated'), login=AsyncMock(), close=AsyncMock())
+        provider_type = Mock(return_value=provider)
+        source = Path(__file__).resolve().parents[1] / 'integrations/telegram/engine/sign_in.py'
+        spec = spec_from_file_location('telegram_sign_in', source)
+        module = module_from_spec(spec)
+        with patch.dict(sys.modules, {'amplifier_module_provider_openai_chatgpt':
+                                      SimpleNamespace(ChatGPTProvider=provider_type)}), \
+                patch.dict('os.environ', {'TELEGRAM_CODEX_TOKEN_FILE': '/fixture/codex-oauth.json'}), \
+                redirect_stdout(StringIO()):
+            spec.loader.exec_module(module)
+            await module.sign_in()
+            provider.login.assert_not_awaited()
+            await module.sign_in(reauthenticate=True)
+            provider.login.assert_awaited_once()
+            self.assertEqual(provider.close.await_count, 2)

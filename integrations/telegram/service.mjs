@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { TelegramStore, controlCommand, digest, pollStart, pollEnd, reviewAnswer, validateBinding } from './policy.mjs';
@@ -10,6 +10,7 @@ import { addressedRequest, controlThread, historyRange, isDirect, matrixLink, op
 import { createTelegramDelegation, listenTelegramSocket } from './delegation.mjs';
 import { requestTelegramService } from '../../agents/connector/telegram-office.mjs';
 
+const probeAuthenticationError = 42;
 const directory = '/state';
 const configFile = join(directory, 'config.json');
 const settings = JSON.parse(await readFile(configFile, 'utf8'));
@@ -93,6 +94,13 @@ if (action) {
       interrupted: store.all(`SELECT binding, COUNT(*) AS count FROM work WHERE state IN ('interrupted','backend_failed') GROUP BY binding`),
     }, null, 2));
     } else throw new Error('Unknown connector operator command.');
+  } catch (error) {
+    if (action !== 'probe' || (error.data?.error_category !== 'authentication' &&
+        error.data?.error_type !== 'AuthenticationError')) throw error;
+    await rm(join(directory, 'backend-verified'), { force: true });
+    console.error('The Codex provider rejected Telegram Agent’s saved sign-in. ' +
+      'Run telegram sign-in --reauthenticate, then rerun telegram probe.');
+    process.exitCode = probeAuthenticationError;
   } finally {
     await audit.close();
   }

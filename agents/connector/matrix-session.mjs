@@ -1,8 +1,10 @@
+import { createHash } from 'node:crypto';
 import { open, readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
 import matrix from '@vector-im/matrix-bot-sdk';
+import { activityReaction } from './office-policy.mjs';
 
 const { MatrixClient, RustSdkCryptoStorageProvider, SimpleFsStorageProvider, LogService, LogLevel } = matrix;
 LogService.setLevel(LogLevel.WARN);
@@ -120,4 +122,10 @@ export async function redactReaction(client, roomId, transaction, reactionId) {
   const endpoint = `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/redact/${encodeURIComponent(reactionId)}/${transaction}`;
   const result = await client.doRequest('PUT', endpoint, null, {}, 15000);
   if (!result.event_id) throw new Error('Matrix did not confirm the reaction removal');
+}
+
+export async function acknowledgePrivateMessage(client, roomId, eventId) {
+  const id = createHash('sha256').update(JSON.stringify([roomId, eventId])).digest('hex');
+  const activity = await sendReaction(client, roomId, 'dm-activity-' + id, eventId, activityReaction);
+  return () => redactReaction(client, roomId, 'dm-activity-clear-' + id, activity);
 }

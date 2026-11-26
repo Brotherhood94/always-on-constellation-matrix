@@ -301,6 +301,7 @@ const guide = await listenTelegramSocket(sockets.TELEGRAM_GUIDE_SOCKET, async in
   return { ok: true, rooms: [{ peer: 'user:1001', room: portal, name: 'Pilot' }] };
 });
 let delegatedCalls = 0;
+let probeAuthenticated = false;
 acp.on('connection', ws => {
   let grant;
   ws.on('message', async raw => {
@@ -314,8 +315,20 @@ acp.on('connection', ws => {
     }
     send({ id, result: { sessionId: 'test-summary-session' } });
   }
+  if (method === 'session/load') send({ id, result: {} });
   if (method === 'session/prompt') {
     const data = params.prompt[0].text;
+    if (data.includes('Connectivity test only. Answer with TELEGRAM_READY.')) {
+      if (!probeAuthenticated) {
+        send({ id, error: { code: -32000, message: 'Native generation failed; no work replayed.',
+          data: { error_type: 'AuthenticationError', error_category: 'authentication', retryable: false } } });
+        return;
+      }
+      send({ method: 'session/update', params: { sessionId: params.sessionId,
+        update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'TELEGRAM_READY' } } } });
+      send({ id, result: { stopReason: 'end_turn' } });
+      return;
+    }
     if (grant) {
       if (data.includes('telegram_list_rooms')) {
         assert.equal((await requestTelegramService(sockets.TELEGRAM_MCP_SOCKET, { grant, tool: 'list_rooms' })).status, 'completed');
@@ -349,6 +362,23 @@ await writeFile('/state/backend-verified', 'fixture');
 await writeFile('/state/office-room-id', officeRoom);
 await writeFile('/state/binding-pilot.json', JSON.stringify({id:'pilot',peer:'user:1001',login:'2002',
   receiver:'2002',room:portal,mode:'draft',trigger:'request'}));
+async function probe() {
+  const child = spawn(process.execPath, ['/app/service.mjs', 'probe'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
+  const [code] = await once(child, 'close');
+  return { code, stderr };
+}
+const rejected = await probe();
+assert.equal(rejected.code, 42);
+assert.match(rejected.stderr, /sign-in --reauthenticate/u);
+assert.doesNotMatch(rejected.stderr, /RequestError|jsonrpc\.js/u);
+await assert.rejects(readFile('/state/backend-verified'), { code: 'ENOENT' });
+probeAuthenticated = true;
+assert.equal((await probe()).code, 0);
+assert.equal(await readFile('/state/backend-verified', 'utf8'), 'fixture');
+console.log('A rejected Codex probe proposed reauthentication, and the next two-turn probe restored the verification receipt.');
+
 const store = new TelegramStore('/state/telegram.sqlite3');
 const worker = spawn(process.execPath, ['/app/service.mjs'], {stdio:'inherit', env: { ...process.env, ...sockets }});
 const workerExit = once(worker, 'exit');

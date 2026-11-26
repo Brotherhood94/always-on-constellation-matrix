@@ -123,10 +123,10 @@ test('encrypted shortcuts wait for operator device keys and update only their ow
   const previousPins = [...pinned];
   devices = 'two-devices';
   await reconcilePins(matrix, updated, state);
-  assert.equal(messages.size, 3);
-  assert.deepEqual(pinned.filter(event => previousPins.includes(event)), [operator]);
+  assert.equal(messages.size, 2);
+  assert.deepEqual(pinned, previousPins);
   await reconcilePins(matrix, updated, state);
-  assert.equal(writes, 3);
+  assert.equal(writes, 2);
 });
 
 test('shortcut recipients use stable public device keys', () => {
@@ -148,8 +148,9 @@ test('Element guides include copyable commands and manage optional pins independ
   const telegramState = { entries: {}, replaced: [] };
   const messages = new Map();
   let pinned = ['$operator'];
+  let devices = 'device-key';
   const matrix = {
-    recipientKey: async () => 'device-key', getPinned: async () => pinned,
+    recipientKey: async () => devices, getPinned: async () => pinned,
     send: async (txn, content) => { messages.set('$' + txn, content); return '$' + txn; },
     setPinned: async events => { pinned = events; }, save: async () => {},
   };
@@ -167,6 +168,11 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(dot.body, /list_agents/);
   assert.ok(dot.body.includes(`${command} dot-connect tunnel_REPLACE_WITH_YOUR_ID`));
   assert.equal(pinned.length, 3);
+  const originalPins = [...pinned];
+  devices = 'later-device';
+  await reconcilePins(matrix, links, state, { command, graphPassword, dot: true, systemd: true });
+  assert.deepEqual(pinned, originalPins);
+  assert.equal(messages.size, 2);
   await reconcilePins(matrix, links, state, { command, graphPassword, dot: false });
   assert.deepEqual(pinned, ['$operator', state.entries.dashboard.event]);
   assert.equal(messages.size, 2);

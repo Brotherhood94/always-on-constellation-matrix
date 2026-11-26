@@ -144,7 +144,7 @@ export function shortcutRecipientDevices(owner, devices) {
   return recipientKeys(owner, devices).map(recipientHash).sort();
 }
 
-async function reconcile({ recipientKey, getPinned, send, setPinned, save }, groups, state) {
+async function reconcile({ recipientKey, getPinned, send, setPinned, save }, groups, state, { refreshDevices }) {
   const recipients = await recipientKey();
   if (!recipients || !recipients.length) return false;
   const devices = Array.isArray(recipients) ? recipients : null;
@@ -163,11 +163,12 @@ async function reconcile({ recipientKey, getPinned, send, setPinned, save }, gro
     const revision = createHash('sha256').update(JSON.stringify(content)).digest('hex');
     if (previous.length !== 1 || entries.some(([name, body]) => {
       const entry = state.entries[name];
-      return entry?.body !== body || entry.revision !== revision || (devices ?
-        devices.some(device => !entry.devices?.includes(device)) : entry.recipients !== recipients);
+      if (entry?.body !== body || entry.revision !== revision) return true;
+      if (!refreshDevices) return false;
+      return devices ? devices.some(device => !entry.devices?.includes(device)) : entry.recipients !== recipients;
     })) {
       const transaction = createHash('sha256')
-        .update(JSON.stringify([key, previous, revision, recipients])).digest('hex');
+        .update(JSON.stringify([key, previous, revision, ...(refreshDevices ? [recipients] : [])])).digest('hex');
       event = await send(transaction, content);
       state.replaced.push(...previous);
       for (const [name, body] of entries) {
@@ -204,10 +205,10 @@ export function reconcilePins(matrix, links, state, options = {}) {
     { key: 'workspace-shortcuts', content: shortcuts, entries: Object.entries({ dashboard, context })
       .map(([key, { label, url }]) => [key, `${label} — ${url}`]) },
     { key: 'dot-setup', content: options.dot ? dotGuide(options) : null, entries: [['dot-setup', 'Connect Dot']] },
-  ], state);
+  ], state, { refreshDevices: false });
 }
 
 export function reconcileTelegramPin(matrix, state, command, legacy) {
   return reconcile(matrix, [{ key: 'telegram-setup', content: telegramGuide(command, legacy),
-    entries: [['telegram-setup', 'Set up Telegram']] }], state);
+    entries: [['telegram-setup', 'Set up Telegram']] }], state, { refreshDevices: true });
 }

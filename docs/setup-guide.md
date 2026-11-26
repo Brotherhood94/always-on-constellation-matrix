@@ -21,7 +21,7 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 - **Agents → VPS Alerts → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. An empty list is expected before you activate any Office agents. [Dot setup](dot.md)
 - **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Follow the QR sign-in steps when the terminal asks you to link Telegram. After setup, use this room for requests and approvals. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
 
-The pins are published after you join the room and Element has registered your device’s encryption keys. You can finish these steps while the agents are being configured.
+VPS Alerts publishes its pins after you join and Element registers your first device’s encryption keys. Later sign-ins reuse the same pins. On a new device, restore your Matrix encryption keys if Element cannot show the original messages.
 
 ## 🤖 Select agents
 
