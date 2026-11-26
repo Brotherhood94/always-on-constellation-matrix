@@ -5,7 +5,7 @@
 On Ubuntu 24.04, install standard Docker Engine with Compose V2, Python 3, curl, and Restic. For Tailscale Serve, join the VPS to your tailnet, enable HTTPS certificates, and use the node's tailnet DNS name for Matrix. Serve gives authorized devices private HTTPS access to the deployment. [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
 
 ```sh
-sudo ./constellation_matrix install
+./constellation_matrix install
 ```
 
 Choose the suggested Tailscale DNS name if available. On the next screen, type the Matrix username you want to use in Element and press Enter. When rerunning setup, press Enter with the field empty to keep the existing username. Terminals without full-screen support use line prompts.
@@ -19,20 +19,26 @@ After the workspace boots, sign in to Element and confirm sign-in in the termina
 The installer starts the selected local Amplifier Instances together and opens provider setup one at a time. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.
 
 ```sh
-sudo ./constellation_matrix agent configure
+./constellation_matrix agent configure
 ```
 
 Each agent runs Amplifier’s own provider manager. It offers Anthropic for Claude, OpenAI with an API key, and ChatGPT for Codex sign-in. The terminal clears between provider selection, credential prompts, sign-in, and model selection. Add or edit a provider, follow its login prompts, pick the model, and choose **Done**. Amplifier keeps credentials and settings in that Instance’s private persistent home. Constellation starts the agent’s Matrix connector after its request and session-resume checks pass. [Amplifier provider setup](https://github.com/microsoft/amplifier-app-cli#readme)
 
 Check the agent name at the top of each page. **Add a provider** creates an additional connection for that agent. Choose **Done** to verify that agent and move to the next one in batch setup. Each agent can use a different provider and model.
 
-After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Chief of Staff uses its private chat when selected. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `sudo ./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the sign-in instructions and guide locations.
+After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Chief of Staff uses its private chat when selected. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the sign-in instructions and guide locations.
 
 Pass an agent ID to `agent configure` to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow.
 
 State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, provide `owner_password_file` and optionally `neo4j_password_file`. Keep both files outside the checkout with mode `0600`. The installer generates a Neo4j password when the file is omitted and preserves an existing Neo4j password on reruns. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
 
-`./constellation_matrix status` reads dashboard snapshots as a regular user. Run `sudo ./constellation_matrix status --refresh` to publish current Docker inventory.
+## Host privileges
+
+Run `install`, `setup-guide`, and `agent configure` from a regular shell. The CLI invokes sudo for the deployment steps that use Docker, protected files, or system services. Matrix operator sign-in for roster registration and Telegram layout runs in your regular session. Amplifier provider setup runs as the container’s ordinary user.
+
+`status`, `telegram status`, and `setup-guide --print` read published information without sudo. Upgraded deployments can publish the setup information once with `sudo ./constellation_matrix status --refresh`. The same command refreshes Docker inventory. Pass your usual `--data-dir` when using a custom deployment directory.
+
+Use explicit sudo for administrative operations such as uninstall, backup, host timers, remote mounts, and Dot tunnel installation. This workflow keeps standard Docker and the existing Docker socket permissions.
 
 The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 8444 for Neo4j Browser, and TLS TCP 17687 for Bolt. For a different private proxy, set `tailscale` to false and provide the dashboard and browser URLs in the install config. Serve the deployment’s `dashboard/` directory and proxy to the configured loopback ports, which default to 18008 for Matrix, 17474 for Neo4j Browser, and 17688 for Bolt.
 
@@ -105,7 +111,7 @@ sudo ./constellation_matrix agent add --profile /path/to/qa.json --configure
 Run the command from the VPS checkout. Omit `--configure` to provision first, then use the command below to finish or resume native Amplifier sign-in.
 
 ```sh
-sudo ./constellation_matrix agent configure qa
+./constellation_matrix agent configure qa
 ```
 
 The registry has one active coordinator and observer when those roles are enabled. Pending workers become available for routing after provider sign-in, an ACP session restore probe, and connector startup.
@@ -128,7 +134,7 @@ From the updated VPS checkout, run the migration, then complete VPS Manager’s 
 
 ```sh
 sudo ./constellation_matrix agent migrate-root
-sudo ./constellation_matrix agent configure vps-manager
+./constellation_matrix agent configure vps-manager
 ```
 
 Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. VPS Manager joins the existing encrypted **Root Operations** chat with a new Matrix identity. Update saved install configurations to use `vps-manager` where they previously listed `root`. [VPS Manager guide](../integrations/root/README.md)

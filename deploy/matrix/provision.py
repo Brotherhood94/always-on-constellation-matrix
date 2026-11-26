@@ -20,8 +20,9 @@ class MatrixError(Exception):
         super().__init__(f"{method} {path}: HTTP {status} {self.code or ''}")
 
 
-def request(method, path, body=None, token=None):
-    url = f"http://127.0.0.1:{os.environ['MATRIX_LOCAL_PORT']}{path}"
+def request(method, path, body=None, token=None, *, local_port=None):
+    port = os.environ['MATRIX_LOCAL_PORT'] if local_port is None else local_port
+    url = f'http://127.0.0.1:{port}{path}'
     headers = {"Content-Type": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"

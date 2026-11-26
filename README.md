@@ -113,10 +113,10 @@ An agent adds 👀 when it accepts an assignment and clears it after delivery. A
 
 ## Quick start
 
-On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Run setup with sudo so the installer can set file ownership and enable the host services. For private access from your devices, connect the VPS to your tailnet and enable Tailscale HTTPS. [VPS setup](docs/runbook.md#initial-setup) · [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
+On an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Start setup as your regular user. The installer invokes sudo for Docker, protected deployment files, and host services. For private access from your devices, connect the VPS to your tailnet and enable Tailscale HTTPS. [VPS setup](docs/runbook.md#initial-setup) · [Docker Engine](https://docs.docker.com/engine/install/ubuntu/) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
 
 ```sh
-sudo ./constellation_matrix install
+./constellation_matrix install
 ```
 
 Choose your network and Matrix username, then enter and confirm your Matrix password. Choose your integrations and set a dedicated Context Intelligence password. The installer deploys the workspace and shows how to sign in to Element Desktop.
@@ -128,10 +128,10 @@ On a standard systemd VPS, setup automatically enables Office roster management 
 If agent sign-in was interrupted, resume it from the same checkout.
 
 ```sh
-sudo ./constellation_matrix agent configure
+./constellation_matrix agent configure
 ```
 
-Run `sudo ./constellation_matrix setup-guide` to resume or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
+Run `./constellation_matrix setup-guide` to resume or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md) · [Element setup](docs/runbook.md#connect-in-element)
 
 ### Finish in Element
 

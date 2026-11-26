@@ -3,10 +3,10 @@
 The terminal opens the Element sign-in screen after deploying the workspace. Press Enter once you have signed in. Press Ctrl+C to pause. Resume from the VPS checkout or append `--print` to print the sign-in instructions and guide locations. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
 
 ```sh
-sudo ./constellation_matrix setup-guide
+./constellation_matrix setup-guide
 ```
 
-Enter passwords, API keys, and verification codes in their destination app or private VPS terminal.
+Enter passwords, API keys, and verification codes in their destination app or private VPS terminal. The guide asks for sudo when it needs to change deployment state. The printable guide reads setup information without sudo.
 
 ## 💬 Element Desktop
 
@@ -25,7 +25,7 @@ The pins are published after you join the room and Element has registered your d
 
 ## 🤖 Select agents
 
-After confirming Element sign-in, use the arrow keys and Enter to select your roster. Choose **Done** to register the agents. Complete Amplifier sign-in for each selected local agent. If provider setup is interrupted, use `sudo ./constellation_matrix agent configure` to resume. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
+After confirming Element sign-in, use the arrow keys and Enter to select your roster. Choose **Done** to register the agents. Complete Amplifier sign-in for each selected local agent. If provider setup is interrupted, use `./constellation_matrix agent configure` to resume. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
 
 ## 👋 Receive the welcome and send a task
 

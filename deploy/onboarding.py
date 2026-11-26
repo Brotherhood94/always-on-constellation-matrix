@@ -16,6 +16,7 @@ from roster import enable_management
 from setup_guide import confirm_element, element_page
 
 
+CHOOSE_AGENTS = object()
 DEVICE = 'CONSTELLATIONWELCOME'
 SHORTCUTS = {
     'dashboard': ('Open dashboard', 'dashboard_url'),
@@ -34,11 +35,7 @@ def guide(data, settings, command, passphrase):
             if confirm_element(*element_page(settings)) is None:
                 print(f'\nResume setup with {command} setup-guide')
                 return
-            with operator_lock(data):
-                current = progress(path)
-                if 'element' not in current['confirmed']:
-                    current['confirmed'].append('element')
-                    save(path, current)
+            confirm_sign_in(data)
 
         select_roster(data, path, passphrase)
     except (OSError, MatrixError, ValueError, SubprocessError) as error:
@@ -70,12 +67,21 @@ def guide(data, settings, command, passphrase):
     deliver_welcome(data, command)
 
 
-def select_roster(data, path, passphrase):
+def confirm_sign_in(data):
+    path = data / 'onboarding.json'
+    with operator_lock(data):
+        current = progress(path)
+        if 'element' not in current['confirmed']:
+            current['confirmed'].append('element')
+            save(path, current)
+
+
+def select_roster(data, path, passphrase, *, selection=CHOOSE_AGENTS, operator_token=None):
     current = progress(path)
     if not current.get('select_agents'):
         return
-    selection = current.get('selection')
-    if selection is None:
+    selection = current.get('selection', selection)
+    if selection is CHOOSE_AGENTS:
         selection = select_agents(load(PRESETS))
     with operator_lock(data):
         current = progress(path)
@@ -86,7 +92,8 @@ def select_roster(data, path, passphrase):
             raise ValueError('Confirm Element sign-in first')
         selection = current.setdefault('selection', selection)
         save(path, current)
-        provision_selected_agents(data, settings, registry, selection, passphrase)
+        authenticated = {'operator_token': operator_token} if operator_token is not None else {}
+        provision_selected_agents(data, settings, registry, selection, passphrase, **authenticated)
         current.pop('select_agents')
         current.pop('selection')
         save(path, current)

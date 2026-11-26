@@ -333,7 +333,7 @@ class InstallerTest(unittest.TestCase):
             lines = [line.strip() for line in rendered.splitlines()]
             for secret in secrets.values():
                 self.assertNotIn(secret, rendered)
-            invocation = f"sudo ./constellation_matrix --data-dir '{data}'"
+            invocation = f"./constellation_matrix --data-dir '{data}'"
             self.assertNotIn('dot-connect', rendered)
             self.assertNotIn('telegram prepare', rendered)
             self.assertNotIn('neo4j-password', rendered)

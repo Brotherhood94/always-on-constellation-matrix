@@ -116,7 +116,7 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
   assert.match(guide.body, /Approve and send/);
   assert.match(guide.body, /"api_hash": "REPLACE_WITH_YOUR_API_HASH"/);
-  assert.ok(guide.body.includes(`${command} telegram activate`));
+  assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram activate`));
   assert.match(guide.formatted_body, /&lt;login-id&gt;/);
   await reconcileTelegramPin(matrix, telegramState, command);
   assert.equal(messages.size, 3);

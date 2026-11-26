@@ -32,11 +32,11 @@ nano "$HOME/telegram-api.json"
 
 ```bash
 sudo ./constellation_matrix telegram prepare "$HOME/telegram-api.json"
-sudo ./constellation_matrix telegram activate
-sudo ./constellation_matrix telegram status
+./constellation_matrix telegram activate
+./constellation_matrix telegram status
 ```
 
-When activation prompts, enter your existing Matrix operator password to link the bridge DM. For unattended activation, pass a private `--owner-password-file`. If more than one verified private bridge DM exists, select the room you already use.
+Enter your existing Matrix operator password to link the bridge DM. The command asks for sudo when it needs to update Synapse or Docker. For unattended activation, pass a private `--owner-password-file`. If more than one verified private bridge DM exists, select the room you already use.
 
 1. **Element.** In the top-level **Telegram** Space, open **Telegram Bridge**, the private chat with `@telegrambot:<SERVER_NAME>`. Copy this line, paste it into that chat’s message box, and press Enter. The bridge replies in the same chat with a QR code.
 
@@ -149,12 +149,14 @@ A Telegram relay uses the selected Telegram login with bridge attribution. Matri
 Run this from the updated checkout to move the existing Space, Control room, bridge DM, and verified chats to the top-level **Telegram** Space. Use your current Matrix operator password when prompted. Your existing room history and bindings carry over.
 
 ```sh
-sudo ./constellation_matrix telegram layout
+./constellation_matrix telegram layout
 ```
 
 If multiple verified bridge DMs match, choose the room you already use. For an unattended repair, pass a private `--owner-password-file` and, when needed, `--bridge-room` with the chosen Matrix room ID.
 
 ## Recovery and monitoring
+
+Run `./constellation_matrix telegram status` to read the published health snapshot. Use `sudo ./constellation_matrix telegram status --refresh` to collect a new snapshot from Docker.
 
 The Compose services use the existing Matrix cgroup and restart with Docker. `telegram metrics` exports sanitized health and queue counts to `telegram.json` under the private resource dashboard origin. `telegram enable-operations` installs backup and metrics timers for the selected deployment. Enable the timers after accepting the Telegram setup. Scheduled Telegram backups begin once the workspace has an encrypted Restic repository.
 

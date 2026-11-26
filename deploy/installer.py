@@ -288,8 +288,27 @@ def read_password_file(path, label):
 
 
 def prepare_graph_password(data, source, *, interactive):
-    path = data / 'context/neo4j-password'
     supplied = read_password_file(Path(source), 'Context Intelligence') if source else None
+    save_graph_password(data, supplied, interactive=interactive)
+
+
+def graph_password_error(value):
+    if len(value) < 12 or not value.isprintable():
+        return 'Use at least 12 printable characters for the Context Intelligence password'
+    if '/' in value or value.startswith('-'):
+        return 'Choose a Context Intelligence password without / or a leading -'
+    return None
+
+
+def prompt_graph_password():
+    supplied = prompt_text('🧠 Context Intelligence password', graph_password_error, masked=True,
+                           notice='Save this password for Neo4j Browser.')
+    confirm_password('Context Intelligence password', supplied)
+    return supplied
+
+
+def save_graph_password(data, supplied, *, interactive=False):
+    path = data / 'context/neo4j-password'
     if path.exists() or path.is_symlink():
         if supplied is not None and supplied != read_password_file(path, 'Context Intelligence'):
             raise ValueError('Use the existing Context Intelligence password for this workspace')
@@ -297,22 +316,13 @@ def prepare_graph_password(data, source, *, interactive):
     if (data / 'context/graph/data').exists() or (data / 'context/graph/databases').exists():
         raise ValueError('Recover the existing Context Intelligence password before reinstalling')
 
-    def validate(value):
-        if len(value) < 12 or not value.isprintable():
-            return 'Use at least 12 printable characters for the Context Intelligence password'
-        if '/' in value or value.startswith('-'):
-            return 'Choose a Context Intelligence password without / or a leading -'
-        return None
-
     directory(path.parent)
     if interactive:
-        supplied = prompt_text('🧠 Context Intelligence password', validate, masked=True,
-                               notice='Save this password for Neo4j Browser.')
-        confirm_password('Context Intelligence password', supplied)
+        supplied = prompt_graph_password()
     if supplied is None:
         save(path, secrets.token_hex(32) + '\n')
         return
-    if error := validate(supplied):
+    if error := graph_password_error(supplied):
         raise ValueError(error)
     save(path, supplied + '\n')
 
@@ -486,6 +496,7 @@ def prepare_storage(settings, data):
 
 def publish_inventory(settings, data, registry):
     from agent_catalog import document
+    from operator_cli import publish_metadata
     observed = []
     result = compose(data, '--profile', 'agents', 'ps', '-a', '--format', 'json', stdout=subprocess.PIPE, text=True)
     raw = result.stdout.strip()
@@ -507,6 +518,7 @@ def publish_inventory(settings, data, registry):
     now = int(time.time())
     save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now), mode=0o644)
     save(data / 'dashboard/integrations.json', {'time': now, 'services': integrations}, mode=0o644)
+    publish_metadata(data, settings, registry)
 
 
 def show_status(data):
@@ -521,11 +533,41 @@ def show_status(data):
             print(f'{label} (no status snapshot available)')
             continue
         timestamp = snapshot['time']
-        updated = datetime.fromtimestamp(timestamp, timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
-        age = 'stale, last updated' if time.time() - timestamp > 180 else 'updated'
-        print(f'{label} ({age} {updated})')
+        print(snapshot_heading(label, timestamp))
         for entry, state in entries(snapshot):
             print(f'  {entry}  {state}')
+
+
+def snapshot_heading(label, timestamp):
+    updated = datetime.fromtimestamp(timestamp, timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    age = 'stale, last updated' if time.time() - timestamp > 180 else 'updated'
+    return f'{label} ({age} {updated})'
+
+
+def show_telegram_status(data):
+    dashboard = data / 'dashboard'
+    snapshot = dashboard / 'telegram.json'
+    if snapshot.is_file():
+        report = load(snapshot)
+        stamp = datetime.fromisoformat(report['generatedAt'].replace('Z', '+00:00')).timestamp()
+        print(snapshot_heading('Telegram', stamp))
+        for service, state in report['services'].items():
+            print(f"  {service}  {state.get('health') or state['state']}")
+        print(f"  Pending drafts  {report['pendingDrafts']}")
+        print(f"  Unconfirmed deliveries  {report['unconfirmedDeliveries']}")
+        if report['paused']:
+            print('  Draft delivery paused')
+        return
+    snapshot = dashboard / 'integrations.json'
+    if snapshot.is_file():
+        report = load(snapshot)
+        services = {name: state for name, state in report['services'].items() if name.startswith('Telegram')}
+        if services:
+            print(snapshot_heading('Telegram', report['time']))
+            for name, state in services.items():
+                print(f'  {name}  {state}')
+            return
+    print('Telegram (no status snapshot available)')
 
 
 def open_existing(data):
@@ -591,14 +633,14 @@ def interactive(presets, saved):
     return settings, passphrase
 
 
-def workspace_command(data):
+def workspace_command(data, *, elevated=True):
     target = '' if data == DATA else f' --data-dir {quote(str(data))}'
-    return f'sudo ./constellation_matrix{target}'
+    return ('sudo ' if elevated else '') + f'./constellation_matrix{target}'
 
 
-def show_element_setup(settings, data=DATA):
+def show_element_setup(settings, data=DATA, *, elevated=True):
     from setup_guide import show_printable
-    show_printable(settings, workspace_command(data))
+    show_printable(settings, workspace_command(data, elevated=elevated))
 
 
 def finalize_setup(data, *, print_only=False, passphrase=None):
@@ -611,14 +653,21 @@ def finalize_setup(data, *, print_only=False, passphrase=None):
     guide(data, settings, workspace_command(data), passphrase)
 
 
-def install(data, args):
+def install(data, args, *, entered=None):
     from setup_guide import interactive_terminal
     presets = load(PRESETS)
     previous = data / 'settings.json'
     registry_file = data / 'agents.json'
     if registry_file.exists() and 'root' in load(registry_file)['agents']:
         raise ValueError('Run agent migrate-root before updating the existing Root deployment.')
-    if args.config:
+    if entered is not None:
+        raw, passphrase = entered['settings'], entered['password']
+        if not isinstance(passphrase, str) or password_error(passphrase):
+            raise ValueError('Enter a valid Matrix operator password')
+        allowed = ('server_name', 'owner', 'tailscale', 'telegram', 'dot')
+        settings = normalized({'agents': [], **(load(previous) if previous.exists() else {}),
+                               **{key: raw[key] for key in allowed}}, presets)
+    elif args.config:
         settings = normalized(load(args.config), presets)
         if not settings.get('owner_password_file'):
             raise ValueError('Config-file installation requires a private owner_password_file')
@@ -633,7 +682,14 @@ def install(data, args):
             for key in ('server_name', 'owner', 'project', 'matrix_port'):
                 if current[key] != settings[key]:
                     raise ValueError(f'{key} belongs to the existing deployment identity')
-        prepare_graph_password(data, settings.pop('neo4j_password_file', None), interactive=not args.config)
+        source = settings.pop('neo4j_password_file', None)
+        if entered is None:
+            prepare_graph_password(data, source, interactive=not args.config)
+        else:
+            value = entered.get('graph_password')
+            if value is not None and not isinstance(value, str):
+                raise ValueError('Enter a valid Context Intelligence password')
+            save_graph_password(data, value)
         if settings['systemd']:
             from host_services import enable_host_dependencies
             enable_host_dependencies(settings)
@@ -671,7 +727,7 @@ def install(data, args):
             refresh_context(data)
         else:
             up(data, 'postgres', 'synapse', 'context')
-        provision_layout(settings, data, registry, passphrase, unattended=bool(args.config))
+        provision_layout(settings, data, registry, passphrase, unattended=bool(args.config) or entered is not None)
         compose(data, 'build', 'monitor')
         prepare_images(settings, registry)
         local_agents = [key for key, entry in registry['agents'].items() if entry['placement'] == 'local']
@@ -698,13 +754,15 @@ def install(data, args):
         from roster import enable_management
         enable_management(data, automatic=True)
     print('Workspace deployed.')
+    if entered is not None:
+        return
     if args.config or not interactive_terminal():
-        print(f'Continue setup from an interactive terminal.\n  {workspace_command(data)} setup-guide')
+        print(f'Continue setup from an interactive terminal.\n  {workspace_command(data, elevated=False)} setup-guide')
         return
     finalize_setup(data, passphrase=passphrase)
 
 
-def provision_selected_agents(data, settings, registry, selection, passphrase):
+def provision_selected_agents(data, settings, registry, selection, passphrase, *, operator_token=None):
     from roster import prepare_management
 
     presets = load(PRESETS)
@@ -713,17 +771,23 @@ def provision_selected_agents(data, settings, registry, selection, passphrase):
         if key not in registry['agents']:
             register_entry(roster, registry, key, presets[key])
     if selection:
+        rooms = load(data / 'rooms.json')
+        if operator_token is not None:
+            verify_operator(rooms, operator_token)
         # Publish config and start engines as a batch. Agent registration and Compose are safe to retry.
         compose_config(roster, data, registry)
         refresh_context(data)
-        rooms = load(data / 'rooms.json')
-        owner = login(roster['owner'], passphrase if passphrase is not None else password(roster))
+        if operator_token is None:
+            token = login(roster['owner'], passphrase if passphrase is not None else password(roster))['access_token']
+        else:
+            token = operator_token
         try:
             for key in selection:
-                prepare_agent_state(data, key, registry['agents'][key], rooms, owner['access_token'], roster)
-            prepare_management(data, roster, registry, owner['access_token'])
+                prepare_agent_state(data, key, registry['agents'][key], rooms, token, roster)
+            prepare_management(data, roster, registry, token)
         finally:
-            request('POST', CLIENT + '/logout', {}, owner['access_token'])
+            if operator_token is None:
+                request('POST', CLIENT + '/logout', {}, token)
         prepare_images(roster, registry)
         up(data, *(f'engine-{key}' for key in selection if registry['agents'][key]['placement'] == 'local'))
         sync_workshop(roster, data, registry)
@@ -865,7 +929,7 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
             return bridge_room
         if unattended:
             print(f'More than one Telegram Bridge DM matches. To finish the Telegram layout later, run:\n'
-                  f'  {workspace_command(data)} telegram layout')
+                  f'  {workspace_command(data, elevated=False)} telegram layout')
             return None
         if bridge_room or not sys.stdin.isatty():
             raise ValueError('Multiple private Telegram Bridge DMs match. Run telegram layout --bridge-room with one of: '
@@ -876,12 +940,28 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
                             bridge_active=active, select=select)
 
 
-def telegram(data, args, owner_password_file=None):
+def verify_operator(rooms, token):
+    if request('GET', CLIENT + '/account/whoami', token=token).get('user_id') != rooms['owner']:
+        raise ValueError('Sign in with the workspace’s Matrix operator account')
+
+
+def telegram_layout_options(action, args):
+    parser = argparse.ArgumentParser(prog=f'constellation_matrix telegram {action}', allow_abbrev=False)
+    parser.add_argument('--owner-password-file', type=Path)
+    parser.add_argument('--bridge-room', help='Room ID to use when multiple private bridge DMs match')
+    return parser.parse_args(args)
+
+
+def telegram(data, args, owner_password_file=None, *, operator_token=None):
     settings, registry = open_existing(data)
     if not settings['telegram']:
         raise ValueError('Select Telegram in the installer first')
     if not args:
         raise ValueError('Specify a Telegram command. See docs/telegram.md.')
+    if args == ['status', '--refresh']:
+        run_telegram(data, 'metrics')
+        show_telegram_status(data)
+        return
     if args == ['enable-operations']:
         from host_services import enable_telegram_units
         with operator_lock(data):
@@ -889,20 +969,22 @@ def telegram(data, args, owner_password_file=None):
         return
     if args[0] in {'layout', 'activate'}:
         action = args[0]
-        parser = argparse.ArgumentParser(prog=f'constellation_matrix telegram {action}', allow_abbrev=False)
-        parser.add_argument('--owner-password-file', type=Path)
-        parser.add_argument('--bridge-room', help='Room ID to use when multiple private bridge DMs match')
-        options = parser.parse_args(args[1:])
+        options = telegram_layout_options(action, args[1:])
         with operator_lock(data):
-            owner = login(settings['owner'], password(settings, options.owner_password_file or owner_password_file))
-            token = owner['access_token']
+            workspace = load(data / 'rooms.json')
+            if operator_token is None:
+                token = login(settings['owner'], password(settings, options.owner_password_file or owner_password_file))['access_token']
+            else:
+                verify_operator(workspace, operator_token)
+                token = operator_token
             try:
                 if action == 'activate':
                     run_telegram(data, action)
-                rooms = provision_telegram_layout(settings, data, load(data / 'rooms.json'), token, options.bridge_room)
+                rooms = provision_telegram_layout(settings, data, workspace, token, options.bridge_room)
                 run_telegram(data, 'start-guide')
             finally:
-                request('POST', CLIENT + '/logout', {}, token)
+                if operator_token is None:
+                    request('POST', CLIENT + '/logout', {}, token)
         print('In Element, open Telegram → Telegram Control → Pinned messages.')
         if rooms['bridge']:
             print('Telegram Bridge is linked under Telegram.')
@@ -959,6 +1041,10 @@ def service_units(settings, data, broker=False):
 
 
 def main():
+    from operator_cli import (HOST_ACTIONS, configure_as_operator, execute_host, install_as_operator, print_guide,
+                              publish_metadata, setup_as_operator, telegram_as_operator)
+    from setup_guide import interactive_terminal
+
     parser = argparse.ArgumentParser(prog='constellation_matrix', description=__doc__, allow_abbrev=False)
     parser.add_argument('--data-dir', type=Path, default=DATA)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -1017,6 +1103,10 @@ def main():
     persona = commands.add_parser('persona-draft')
     persona.add_argument('role')
     persona.add_argument('observation')
+    host = commands.add_parser('_host')
+    host.add_argument('action', choices=HOST_ACTIONS)
+    host.add_argument('key', nargs='?')
+    host.add_argument('--pending-only', action='store_true')
     args = parser.parse_args()
     if args.command == 'validate':
         normalized(load(args.config), load(PRESETS))
@@ -1026,13 +1116,34 @@ def main():
     if args.command == 'status' and not args.refresh:
         show_status(data)
         return
+    if args.command == 'telegram' and args.arguments == ['status']:
+        show_telegram_status(data)
+        return
+    if args.command == 'setup-guide' and (args.print_only or not interactive_terminal()):
+        print_guide(data, root=os.geteuid() == 0)
+        return
     if os.geteuid():
+        if args.command == 'install':
+            install_as_operator(data, args)
+            return
+        if args.command == 'setup-guide':
+            setup_as_operator(data)
+            return
+        if args.command == 'agent' and args.action in {'configure', 'sign-in'}:
+            configure_as_operator(data, args.key)
+            return
+        if args.command == 'telegram' and args.arguments[:1] in (['activate'], ['layout']):
+            telegram_as_operator(data, args.arguments)
+            return
         parser.error('Run this deployment command with sudo')
     if data.is_symlink() or (data / 'settings.json').is_symlink() or data.resolve() == Path('/'):
         parser.error('Use a dedicated deployment directory')
     data = data.resolve()
     if (data / 'settings.json').exists() and load(data / 'settings.json').get('rootless'):
         parser.error('Use a separate directory for standard Docker. This directory contains an older rootless deployment')
+    if args.command == '_host':
+        execute_host(data, args)
+        return
     if args.command == 'install':
         install(data, args)
     elif args.command == 'setup-guide':
@@ -1108,6 +1219,8 @@ def main():
         settings, registry = open_existing(data)
         publish_inventory(settings, data, registry)
         compose(data, '--profile', 'agents', 'ps')
+    if args.command in {'install', 'setup-guide', 'agent'} or args.command == 'remote' and args.action == 'confirm':
+        publish_metadata(data)
 
 
 if __name__ == '__main__':

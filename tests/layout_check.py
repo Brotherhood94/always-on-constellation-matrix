@@ -10,6 +10,7 @@ from unittest.mock import patch
 from installer import save
 from layout import CLIENT, create_layout, direct_room, invite, join, link_child, login, encoded, room_route
 from onboarding import finish
+from operator_cli import matrix_session
 from provision import MatrixError, request
 from roster import deactivate_worker, invitation_ready, office_inviter, prepare_management
 from roster_broker import verify
@@ -18,6 +19,19 @@ from vps_migration import revoke_legacy
 
 
 class LayoutTest(unittest.TestCase):
+    def test_operator_session_uses_local_matrix_login_and_logs_out(self):
+        server = os.environ['MATRIX_SERVER_NAME']
+        password = 'synthetic-test-passphrase-88'
+        owner = login('operator', password)
+        current = {'matrix_port': int(os.environ['MATRIX_LOCAL_PORT']),
+                   'settings': {'owner': 'operator', 'server_name': server}}
+        with matrix_session(current, password) as token:
+            self.assertNotEqual(token, owner['access_token'])
+            self.assertEqual(request('GET', CLIENT + '/account/whoami', token=token)['user_id'], owner['user_id'])
+        with self.assertRaises(MatrixError) as expired:
+            request('GET', CLIENT + '/account/whoami', token=token)
+        self.assertEqual(expired.exception.code, 'M_UNKNOWN_TOKEN')
+
     def test_telegram_layout_migrates_only_known_links_and_reuses_private_rooms(self):
         domain = os.environ['MATRIX_SERVER_NAME']
         password = 'synthetic-test-passphrase-88'

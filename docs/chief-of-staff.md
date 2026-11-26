@@ -2,7 +2,7 @@
 
 Persona Workshop manages agent profiles. Context Intelligence adds Office evidence such as who took a handoff, where tasks blocked, and whether a result was verified. The Chief of Staff uses both to propose improvements with links to the supporting threads.
 
-Select **Chief of Staff** during installation and activate it with `sudo ./constellation_matrix agent configure chief-of-staff`. Send `review team` in your encrypted one-to-one chat with Chief of Staff. A review can suggest a coordination change or propose a communication or working-style edit for a managed agent that took part in the cited work. Repeated capability gaps can lead to a hiring proposal. The operator decides which proposals to pursue.
+Select **Chief of Staff** during installation and activate it with `./constellation_matrix agent configure chief-of-staff`. Send `review team` in your encrypted one-to-one chat with Chief of Staff. A review can suggest a coordination change or propose a communication or working-style edit for a managed agent that took part in the cited work. Repeated capability gaps can lead to a hiring proposal. The operator decides which proposals to pursue.
 
 ## Managed agents
 
@@ -32,6 +32,6 @@ retire qa
 
 Open the proposal linked in the **Accept / Reject** poll. Check the hire profile or retirement target before voting. The first valid operator vote applies to that proposal and closes the poll. The poll expires after 15 minutes.
 
-For an older deployment or an interrupted setup, run `sudo ./constellation_matrix setup-guide`. If setup needs to create the invitation identity, enter your Matrix operator password at the hidden prompt.
+For an older deployment or an interrupted setup, run `./constellation_matrix setup-guide`. If setup needs to create the invitation identity, enter your Matrix operator password at the hidden prompt.
 
 For a hire, Chief registers the worker in Office and Persona Workshop, then sends the VPS command for native Amplifier sign-in. Run it to make the worker available for assignments. A retiring worker finishes accepted assignments before Chief reports that it has been archived. [Worker lifecycle commands](runbook.md#retire-a-worker)
