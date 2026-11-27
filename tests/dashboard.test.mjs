@@ -82,7 +82,11 @@ test('dashboard accepts the graph link, filters history, and reports stale or mi
 
 test('encrypted shortcuts wait for operator device keys and update only their own pins', async () => {
   const state = { entries: {}, replaced: [] };
-  const links = { dashboard: 'https://matrix.example:8443/', context: 'https://matrix.example:8444/browser/' };
+  const links = {
+    dashboard: 'https://matrix.example:8443/',
+    context: 'https://matrix.example:8444/browser/?connectURL=bolt%2Bs%3A%2F%2Fmatrix.example%3A17687',
+    telegramBridge: 'https://matrix.to/#/%21telegram-bridge%3Amatrix.example',
+  };
   let joined = false;
   let devices = null;
   let pinned = ['$operator'];
@@ -109,6 +113,7 @@ test('encrypted shortcuts wait for operator device keys and update only their ow
   const [content] = messages.values();
   assert.ok(content.formatted_body.includes(`<a href="${links.dashboard}">Open dashboard</a>`));
   assert.ok(content.formatted_body.includes(`<a href="${links.context}">Open Context Intelligence</a>`));
+  assert.ok(content.formatted_body.includes(`<a href="${links.telegramBridge}">Open Telegram Bridge</a>`));
   assert.equal(pinned.length, 2);
   const [operator, first] = pinned;
   assert.equal(state.entries.dashboard.event, first);
@@ -141,7 +146,8 @@ test('shortcut recipients use stable public device keys', () => {
 });
 
 test('Element guides include copyable commands and manage optional pins independently', async () => {
-  const links = { dashboard: 'https://matrix.example:8443/', context: 'https://matrix.example:8444/browser/' };
+  const links = { dashboard: 'https://matrix.example:8443/', context: 'https://matrix.example:8444/browser/',
+    telegramBridge: 'https://matrix.to/#/%21telegram-bridge%2F%24unexpected-event' };
   const command = "sudo ./constellation_matrix --data-dir '/srv/test & workspace'";
   const graphPassword = "sudo cat -- '/srv/test & workspace/context/neo4j-password'";
   const state = { entries: {}, replaced: [] };
@@ -157,6 +163,7 @@ test('Element guides include copyable commands and manage optional pins independ
   await reconcilePins(matrix, links, state, { command, graphPassword, dot: true, systemd: true });
   const workspace = messages.get(state.entries.dashboard.event);
   assert.match(workspace.body, /Sign in as neo4j/);
+  assert.doesNotMatch(workspace.body, /Open Telegram Bridge/u);
   assert.ok(workspace.body.includes(graphPassword));
   assert.ok(workspace.formatted_body.includes('test &amp; workspace'));
   assert.equal(state.entries.dashboard.event, state.entries.context.event);

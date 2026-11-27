@@ -21,6 +21,20 @@ function shortcut(label, value) {
   return { label, url: url.href };
 }
 
+function telegramShortcut(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    if (url.origin !== 'https://matrix.to' || url.username || url.password ||
+        url.pathname !== '/' || url.search || !url.hash.startsWith('#/')) return null;
+    const room = decodeURIComponent(url.hash.slice(2));
+    if (!/^![^\s/#?]{1,240}$/u.test(room)) return null;
+    return { label: 'Open Telegram Bridge', url: url.href };
+  } catch {
+    return null;
+  }
+}
+
 function message(title, sections) {
   const plain = line => typeof line === 'string' ? line : line.code ?? `${line.label} — ${line.url}`;
   const rich = line => {
@@ -173,13 +187,14 @@ async function reconcile({ recipientKey, getPinned, send, setPinned, save }, gro
 export function reconcilePins(matrix, links, state, options = {}) {
   const dashboard = shortcut(labels.dashboard, links.dashboard);
   const context = shortcut(labels.context, links.context);
+  const telegram = telegramShortcut(links.telegramBridge);
   const graphSteps = [context, 'Sign in as neo4j with your dedicated Context Intelligence password, then select Connect.'];
   if (options.graphPassword) graphSteps.push('Retrieve the stored password privately on the VPS if needed.',
     { code: options.graphPassword });
   const shortcuts = message('Workspace shortcuts', [
     ['📊 Dashboard', [dashboard, 'Check VPS resource history, agent readiness, and integration status.']],
     ['🧠 Context Intelligence · Neo4j Browser', graphSteps],
-    ...(links.telegramBridge ? [['✈️ Telegram', [shortcut('Open Telegram Bridge', links.telegramBridge)]]] : []),
+    ...(telegram ? [['✈️ Telegram', [telegram]]] : []),
   ]);
   return reconcile(matrix, [
     { key: 'workspace-shortcuts', content: shortcuts, entries: Object.entries({ dashboard, context })
