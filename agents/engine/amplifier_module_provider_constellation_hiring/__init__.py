@@ -11,12 +11,17 @@ from amplifier_core.message_models import ChatResponse
 from amplifier_module_provider_openai_chatgpt import ChatGPTProvider
 
 NAME = 'constellation-hiring'
+ROUTING_ENV = ('AGENT_USERNAME', 'HIRING_GRANT_ID', 'AGENT_MOBILITY_ENDPOINT', 'AGENT_MOBILITY_GENERATION')
 PROVIDER_ERRORS = {
     'authorization_required': llm_errors.AuthenticationError,
     'rate_limited': llm_errors.RateLimitError,
     'invalid_request': llm_errors.InvalidRequestError,
     'forbidden': llm_errors.AuthenticationError,
 }
+
+
+def routing_environment():
+    return {name: os.environ[name] for name in ROUTING_ENV if name in os.environ}
 
 
 class Provider:

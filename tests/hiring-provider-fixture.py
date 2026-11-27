@@ -128,10 +128,18 @@ class Tests(unittest.TestCase):
             finally:
                 await worker.close()
 
-        environment = {'AGENT_USERNAME': 'fixture', 'AGENT_MODEL': 'fixture-model',
-                       'AGENT_REASONING': 'high', 'HIRING_PROVIDER_MODE': 'chatgpt_codex'}
+        environment = {'AGENT_USERNAME': 'fixture-worker', 'HIRING_GRANT_ID': 'fixture', 'AGENT_MODEL': 'fixture-model',
+                       'AGENT_REASONING': 'high', 'HIRING_PROVIDER_MODE': 'chatgpt_codex',
+                       'OPENAI_API_KEY': 'fixture-secret-must-not-reach-backend'}
         with patch.dict(os.environ, environment):
             initialize.configure()
+        # Agent Instance starts its backend with the explicit environment from
+        # config.json rather than passing the engine's Compose environment through.
+        forwarded = json.loads(Path('/instance/config.json').read_text())['config']['backend']['env']
+        self.assertEqual(forwarded, {'HOME': '${AGENT_HOME}', 'AGENT_USERNAME': 'fixture-worker', 'HIRING_GRANT_ID': 'fixture'})
+        worker_environment = {key: value for key, value in os.environ.items() if key not in environment}
+        worker_environment.update({key: value for key, value in forwarded.items() if key != 'HOME'})
+        with patch.dict(os.environ, worker_environment, clear=True):
             with ThreadingHTTPServer(('127.0.0.1', 8082), handler(self.gateway, 'model')) as server:
                 thread = Thread(target=server.serve_forever)
                 thread.start()

@@ -75,9 +75,17 @@ write(backend / 'agent.json', json.dumps({
 }))
 config = home / 'config.json'
 document = json.loads(config.read_text())
-if not document['config']['setup_complete']:
+initial = not document['config']['setup_complete']
+if initial:
     document['config'].update(setup_complete=True, enabled=True, purpose='Draft authorized Telegram replies', backend={
         'command': '/usr/local/bin/backend', 'args': [], 'env': {}, 'secret_env': {},
         'working_directory': str(workspace), 'allowed_working_roots': [str(workspace)],
     })
+if mode:
+    from amplifier_module_provider_constellation_hiring import ROUTING_ENV, routing_environment
+    environment = document['config']['backend'].setdefault('env', {})
+    for name in ROUTING_ENV:
+        environment.pop(name, None)
+    environment.update(routing_environment())
+if initial or mode:
     write(config, json.dumps(document))

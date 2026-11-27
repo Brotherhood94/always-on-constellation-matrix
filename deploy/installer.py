@@ -1114,9 +1114,11 @@ def agent_sign_in(data, key=None, *, selection=None, telegram_pending=False):
 
 
 def configure_amplifier(data, engine, entry):
-    print(f"Amplifier setup for {entry['name']}. Add or edit a provider, select a model, then choose Done.", flush=True)
     app = ('/opt/amplifier-cli/.venv/bin/python', '-B', '/opt/office/provider_setup.py')
-    if not entry.get('hiring_provider'):
+    if entry.get('hiring_provider'):
+        print(f"Checking the selected provider for {entry['name']}.", flush=True)
+    else:
+        print(f"Amplifier setup for {entry['name']}. Add or edit a provider, select a model, then choose Done.", flush=True)
         compose(data, '--profile', 'agents', 'exec', engine, *app)
     result = compose(data, '--profile', 'agents', 'exec', '-T', engine, *app, 'metadata',
                      stdout=subprocess.PIPE, text=True)

@@ -93,10 +93,13 @@ def configure():
                                   'bundle': str(bundle), 'runtimeImmutable': True, 'moduleSources': module_sources})
     path = HOME / 'config.json'
     document = json.loads(path.read_text())
-    # Constellation defaults the backend's HOME to /instance/backend. Match
-    # the setup CLI's private home so Amplifier can use its saved logins.
+    # Agent Instance forwards only its configured backend environment.
+    environment = {'HOME': '${AGENT_HOME}'}
+    if managed_mode:
+        from amplifier_module_provider_constellation_hiring import routing_environment
+        environment.update(routing_environment())
     document['config'].update(setup_complete=True, enabled=True, purpose='Agent in the private Matrix deployment', backend={
-        'command': '/usr/local/bin/backend', 'args': [], 'env': {'HOME': '${AGENT_HOME}'}, 'secret_env': {},
+        'command': '/usr/local/bin/backend', 'args': [], 'env': environment, 'secret_env': {},
         'working_directory': '/workspace', 'allowed_working_roots': ['/workspace'],
     })
     save(path, document)
