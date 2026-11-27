@@ -261,7 +261,8 @@ Persistent=true
 WantedBy=timers.target
 ''')
     if broker:
-        for source, name in [('broker.py', 'root-broker.py'), ('maintenance.py', 'maintenance.py')]:
+        for source, name in [('service_diagnostics.py', 'service_diagnostics.py'),
+                             ('maintenance.py', 'maintenance.py'), ('broker.py', 'root-broker.py')]:
             save(host / name, (SOURCE / 'integrations/root' / source).read_text())
         name = project + '-root'
         root = deployment + '/state/vps-manager'

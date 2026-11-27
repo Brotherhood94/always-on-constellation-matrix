@@ -136,29 +136,84 @@ with TemporaryDirectory() as directory:
     deployment = Path(directory)
     state = deployment / 'state/vps-manager/execution'
     state.mkdir(parents=True)
-    (deployment / 'settings.json').write_text(json.dumps({'project': 'isolated-fixture', 'telegram': True}))
+    (deployment / 'settings.json').write_text(json.dumps({
+        'project': 'isolated-fixture', 'telegram': True, 'systemd': True, 'tailscale': True,
+    }))
+    (deployment / 'compose.yaml').write_text(json.dumps({'services': {'synapse': {}, 'neo4j': {}, 'dot': {}}}))
     (deployment / 'telegram').mkdir()
     (deployment / 'telegram/engine-moved').touch()
-    bridge = 'a' * 12
-    connector = 'b' * 12
-    listing = f'{bridge}\ttelegram-bridge\trunning\tUp 2 hours (healthy)\n{connector}\tconnector\texited\tExited (1)'
-    responses = [CompletedProcess([], 0, listing, ''),
-                 CompletedProcess([], 0, 'USERNAME_NOT_OCCUPIED fixture-private-contact', ''),
-                 CompletedProcess([], 0, '', 'One Telegram backend turn failed. Its binding was paused. fixture-secret')]
-    with patch('broker.require_root_file'), patch('broker.subprocess.run', side_effect=responses) as docker:
-        raw = json.dumps({'kind': 'telegram-diagnostics'})
-        status, code, result = execute_plan(raw, state, 'telegram')
+    main_listing = 'aaaaaaaaaaaa\tsynapse\trunning\tUp 2 hours (healthy)\nbbbbbbbbbbbb\tneo4j\texited\tExited (1)'
+    telegram_listing = 'cccccccccccc\ttelegram-bridge\trunning\tUp 2 hours (healthy)'
+    unit_listing = '''isolated-fixture-dot.service loaded failed failed Dot tunnel
+isolated-fixture-backup.timer loaded active waiting Backups
+other-private.service loaded active running fixture-private-unit'''
+    commands = []
+
+    def docker_and_systemd(argv, **kwargs):
+        commands.append(argv)
+        output, stderr, code = '', '', 0
+        if argv[1] == 'ps':
+            if argv[4] == 'label=com.docker.compose.project=isolated-fixture':
+                output = main_listing
+            else:
+                assert argv[4] == 'label=com.docker.compose.project=isolated-fixture-telegram'
+                output = telegram_listing
+        elif argv[1] == 'list-units':
+            assert 'isolated-fixture-*' in argv
+            output = unit_listing
+        elif argv[1] == 'logs':
+            assert tuple(argv[2:6]) == ('--since', '30m', '--tail', '100')
+            if argv[-1] == 'aaaaaaaaaaaa':
+                stderr = 'fixture-secret connection refused\nfixture-password invalid configuration'
+            elif argv[-1] == 'cccccccccccc':
+                output = 'USERNAME_NOT_OCCUPIED fixture-private-contact'
+            elif argv[-1] == 'bbbbbbbbbbbb':
+                code = 1
+            else:
+                raise AssertionError(f'Unexpected Docker log target {argv[-1]}')
+        else:
+            assert argv[:3] == ('/usr/bin/journalctl', '--unit', 'isolated-fixture-dot.service')
+            output = 'fixture-secret authentication failed'
+        return CompletedProcess(argv, code, output, stderr)
+
+    def inspect(target):
+        commands.clear()
+        status, code, result = execute_plan(json.dumps({'kind': 'inspect-services', 'target': target}), state, target)
         assert (status, code) == ('completed', 0)
-        assert 'Telegram Bridge: running (healthy)' in result['findings']
-        assert 'recipient lookup (1)' in result['findings']
-        assert 'Connector: exited' in result['findings']
-        assert 'binding (1)' in result['findings']
-        assert 'Engine: managed on a worker' in result['findings']
-        assert 'fixture-' not in result['findings']
-        assert docker.call_count == 3
-        assert 'label=com.docker.compose.project=isolated-fixture-telegram' in docker.call_args_list[0].args[0]
-        assert docker.call_args_list[1].args[0] == ['/usr/bin/docker', 'logs', '--since', '30m', '--tail', '100', bridge]
-    rejects(lambda: execute_plan(json.dumps({'kind': 'telegram-diagnostics', 'script': 'id'}), state, 'bad'),
+        assert 'fixture-secret' not in result['findings'] and 'fixture-password' not in result['findings']
+        return result['findings']
+
+    with patch('broker.require_root_file'), patch('service_diagnostics.subprocess.run', side_effect=docker_and_systemd):
+        overview = inspect('all')
+        assert 'synapse [Compose]: running (healthy)' in overview
+        assert 'neo4j [Compose]: exited' in overview
+        assert 'dot [Compose]: no container found' in overview
+        assert 'isolated-fixture-backup.timer [systemd]: active (waiting)' in overview
+        assert 'isolated-fixture-dot.service [systemd]: failed (failed)' in overview
+        assert 'other-private.service' not in overview
+        assert not any(argv[1] in {'logs', '--unit'} for argv in commands)
+        synapse = inspect('synapse')
+        assert synapse == 'synapse [Compose]: running (healthy) · configuration (1), connectivity (1)'
+        assert sum(argv[1] == 'logs' for argv in commands) == 1
+        assert 'recent logs unavailable' in inspect('neo4j')
+        dot = inspect('dot')
+        assert 'isolated-fixture-dot.service [systemd]: failed (failed) · authentication (1)' in dot
+        assert sum(argv[1] == '--unit' for argv in commands) == 1
+        telegram = inspect('telegram')
+        assert 'telegram-bridge [Telegram Compose]: running (healthy) · lookup (1)' in telegram
+        assert 'fixture-private-contact' not in telegram
+        assert 'telegram-engine [Telegram Compose]: managed on a worker' in telegram
+        assert 'neo4j' not in telegram and 'synapse' not in telegram
+        unknown = inspect('other-private.service')
+        assert 'No matching local service found' in unknown
+        assert not any(argv[1] in {'logs', '--unit'} for argv in commands)
+        commands.clear()
+        legacy = execute_plan(json.dumps({'kind': 'telegram-diagnostics'}), state, 'legacy')[2]['findings']
+        assert 'telegram-bridge [Telegram Compose]: running (healthy)' in legacy
+        assert not any(argv[0] == '/usr/bin/systemctl' for argv in commands)
+    rejects(lambda: execute_plan(json.dumps({'kind': 'inspect-services', 'target': '--all'}), state, 'bad'),
+            'Invalid service inspection target.')
+    rejects(lambda: execute_plan(json.dumps({'kind': 'inspect-services', 'target': 'synapse', 'script': 'id'}), state, 'bad'),
             'Invalid reviewed plan.')
 
 print('Broker verified owner approval, exact edits, redaction, replay, rejection, expiry and crash recovery.')

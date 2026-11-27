@@ -29,6 +29,7 @@ export function maintenanceProposal(result) {
 }
 export const maximumScriptBytes = 4000;
 const reviewPrefix = 'ROOT_REVIEW:';
+const serviceSelector = /^[a-z0-9][a-z0-9._@-]{0,79}$/u;
 const maximumReviewRequestBytes = 12000;
 
 const pollResponse = 'org.matrix.msc3381.poll.response';
@@ -123,9 +124,10 @@ function reviewLine(text) {
 
 function reviewedPlan(answer) {
   const { plan } = answer;
-  if (!plan || !['shell', 'inspect-file', 'replace-file', 'telegram-diagnostics'].includes(plan.kind)) {
-    throw new ProposalError('Specify a shell, inspect-file, replace-file or telegram-diagnostics maintenance plan.');
+  if (!plan || !['shell', 'inspect-file', 'replace-file', 'inspect-services'].includes(plan.kind)) {
+    throw new ProposalError('Specify a shell, inspect-file, replace-file or inspect-services maintenance plan.');
   }
+  if (plan.kind === 'inspect-services') return serviceInspection(plan.target);
   const exact = { kind: plan.kind };
   if (['inspect-file', 'replace-file'].includes(plan.kind)) {
     if (typeof plan.path !== 'string' || plan.path.length > 512 || !/^\/[A-Za-z0-9_./@+=-]+$/u.test(plan.path)) {
@@ -159,18 +161,30 @@ function reviewedPlan(answer) {
     details: { impact, verification, recovery } };
 }
 
-export function telegramDiagnosticProposal(text) {
-  const request = text.toLowerCase();
-  // Older Office requests can identify Telegram through its bridge, binding and draft terminology.
-  if (!/\b(?:diagnosi|diagnostica|diagnose|diagnostics|troubleshoot)\b/u.test(request) ||
-      !(/\btelegram\b/u.test(request) || ['bridge', 'binding', 'bozza'].every(word => request.includes(word)))) return null;
-  return reviewedPlan({
-    plan: { kind: 'telegram-diagnostics' },
-    summary: 'Diagnose Telegram services on the VPS.',
-    impact: 'Reads local Docker service status and counts known signals in recent Telegram logs.',
-    verification: 'The private receipt reports service health and diagnostic signal counts.',
-    recovery: 'If evidence points to a fault, request a separate review for the repair.',
-  });
+function serviceInspection(target) {
+  if (typeof target !== 'string' || !serviceSelector.test(target)) {
+    throw new ProposalError('Specify one service ID or all for a service inspection.');
+  }
+  const overview = target === 'all';
+  const command = JSON.stringify({ kind: 'inspect-services', target });
+  return {
+    operation: reviewedPlanOperation, command, hash: digest(command),
+    summary: overview ? 'Check Constellation service health on the VPS.' : `Inspect ${target} on the VPS.`,
+    details: {
+      impact: overview ? 'Reads local Docker Compose and systemd service status.' :
+        'Reads status and counts recognized signals in recent logs for matching local services.',
+      verification: 'Check the private receipt for service state and any unavailable components.',
+      recovery: 'Request a separate review for any change to the host.',
+    },
+  };
+}
+
+export function serviceDiagnosticProposal(text) {
+  const request = text.trim().toLowerCase();
+  const match = /^(?:diagnostica|diagnosi|diagnose|troubleshoot|diagnostics)\s+(?:(?:il servizio|service)\s+)?([a-z0-9][a-z0-9._@-]{0,79}|context intelligence)[.!?]?$/u.exec(request);
+  if (!match) return null;
+  const target = match[1].replace(/\.$/u, '').replace(' ', '-');
+  return serviceInspection(['services', 'servizi'].includes(target) ? 'all' : target);
 }
 
 export function reviewBody(task) {
@@ -190,6 +204,13 @@ export function reviewBody(task) {
     'List the Telegram bridge, guide, connector and engine containers for this deployment.',
     'Check the local status and health. Inspect up to 100 recent log lines per service from the last 30 minutes.',
     'Return only service status and counts for recognized diagnostic signals. No messages are sent to Telegram.',
+  ].join('\n');
+  if (plan.kind === 'inspect-services') return [
+    'Target: ' + plan.target,
+    'Read the state of matching local Constellation Docker Compose services and systemd units.',
+    plan.target === 'all' ? 'Return a bounded status overview.' :
+      'Count known signals in up to 100 log lines per service from the last 30 minutes, for up to six matching instances.',
+    'Return only service states and signal counts.',
   ].join('\n');
   if (plan.kind === 'inspect-file') return 'Inspect regular file\n' + plan.path + '\nReturn a bounded redacted preview.';
   return 'Replace ' + plan.path + '\n' +

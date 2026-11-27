@@ -44,4 +44,17 @@ for (const [action, outcome] of [['approve', 'completed'], ['approve', 'failed']
   assert.equal(status.turn.managed.dispatch, '$delegation');
   assert.equal(status.turn.managed.target, manager);
 }
+for (const [request, target] of [['Diagnostica Telegram', 'telegram'], ['Diagnostica synapse', 'synapse'],
+  ['Diagnostica servizi', 'all'], ['Diagnostica il servizio Context Intelligence.', 'context-intelligence'],
+  ['Diagnose workspace-monitor.service', 'workspace-monitor.service']]) {
+  const inspection = protocol.serviceDiagnosticProposal(request);
+  assert.deepEqual(JSON.parse(inspection.command), {kind:'inspect-services', target});
+  assert.equal(inspection.hash, protocol.digest(inspection.command));
+  assert.ok(protocol.reviewBody(inspection).includes(target));
+}
+assert.equal(protocol.serviceDiagnosticProposal('Diagnostica il blocco e proponi una correzione'), null);
+assert.throws(() => protocol.proposal(JSON.stringify({operation:'reviewed-plan',
+  plan:{kind:'inspect-services', target:'--all'}}), {}), /one service ID/);
+assert.throws(() => protocol.proposal(JSON.stringify({operation:'reviewed-plan',
+  plan:{kind:'inspect-services', target:'/etc/passwd'}}), {}), /one service ID/);
 console.log('Planner formatting, exact script bytes, safe format errors and Manager receipts passed.');

@@ -17,6 +17,8 @@ from tempfile import NamedTemporaryFile
 import time
 from urllib.parse import quote
 
+from service_diagnostics import SERVICE_ID, inspect_services
+
 
 MAX_MESSAGE = 40_000
 WINDOW = 900_000
@@ -110,10 +112,13 @@ def read_plan(raw):
         raise ValueError('Invalid reviewed plan.')
     plan = json.loads(raw)
     fields = {'shell': {'script', 'verify'}, 'inspect-file': {'path'},
-              'replace-file': {'path', 'before', 'after', 'verify'}, 'telegram-diagnostics': set()}
+              'replace-file': {'path', 'before', 'after', 'verify'}, 'inspect-services': {'target'},
+              'telegram-diagnostics': set()}
     kind = plan.get('kind') if isinstance(plan, dict) else None
     if not isinstance(kind, str) or kind not in fields or set(plan) != {'kind', *fields[kind]}:
         raise ValueError('Invalid reviewed plan.')
+    if kind == 'inspect-services' and (not isinstance(plan['target'], str) or not SERVICE_ID.fullmatch(plan['target'])):
+        raise ValueError('Invalid service inspection target.')
     for name in ('script', 'verify'):
         if name in plan and (not isinstance(plan[name], str) or not plan[name].strip() or
                              not re.fullmatch(r'[\t\n\x20-\x7e]{1,4000}', plan[name])):
@@ -178,77 +183,17 @@ def replace_regular(path, expected, content, metadata):
             temporary.unlink(missing_ok=True)
 
 
-TELEGRAM_SERVICES = {
-    'telegram-bridge': 'Telegram Bridge', 'telegram-guide': 'Setup guide',
-    'connector': 'Connector', 'telegram-engine': 'Engine',
-}
-TELEGRAM_SIGNALS = {
-    'authentication': re.compile(r'AuthenticationError|AUTH_KEY_UNREGISTERED|SESSION_REVOKED|M_UNKNOWN_TOKEN', re.I),
-    'binding': re.compile(r'binding was paused|active, verified binding|binding (?:missing|invalid|inactive)', re.I),
-    'recipient lookup': re.compile(r'USERNAME_NOT_OCCUPIED|PEER_ID_INVALID|no eligible chat matched|could not resolve', re.I),
-    'connectivity': re.compile(r'connection refused|ETIMEDOUT|ECONNREFUSED|sync or delivery check failed', re.I),
-}
-
-
-def run_docker_diagnostic(*args):
-    return subprocess.run(['/usr/bin/docker', *args], capture_output=True, encoding='utf-8', errors='replace',
-                          timeout=8, env={'HOME': '/root', 'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'})
-
-
-def telegram_diagnostics(data):
-    settings_path = data / 'settings.json'
-    require_root_file(settings_path)
-    settings = json.loads(settings_path.read_text())
-    if not settings.get('telegram'):
-        return 'completed', 0, {'findings': 'The Telegram integration is disabled in this deployment.'}
-    project = settings['project']
-    if not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', project):
-        return 'precondition_failed', None, None
-    listing = run_docker_diagnostic('ps', '--all', '--filter', 'label=com.docker.compose.project=' + project + '-telegram',
-                                    '--filter', 'label=com.docker.compose.oneoff=False', '--format',
-                                    '{{.ID}}\t{{.Label "com.docker.compose.service"}}\t{{.State}}\t{{.Status}}')
-    if listing.returncode:
-        return 'failed', listing.returncode, {'findings': 'Docker could not list the Telegram services.'}
-    containers = {service: [] for service in TELEGRAM_SERVICES}
-    for line in listing.stdout.splitlines():
-        fields = line.split('\t', 3)
-        if len(fields) == 4 and fields[1] in containers and re.fullmatch(r'[a-f0-9]{12,64}', fields[0]):
-            containers[fields[1]].append(fields)
-    findings = []
-    for service, label in TELEGRAM_SERVICES.items():
-        if service == 'telegram-engine' and (data / 'telegram/engine-moved').exists():
-            findings.append(f'{label}: managed on a worker')
-            continue
-        matches = containers[service]
-        if len(matches) != 1:
-            findings.append(f'{label}: ' + ('multiple containers found' if matches else 'no container found'))
-            continue
-        container, _, state, status = matches[0]
-        if state not in {'created', 'restarting', 'running', 'removing', 'paused', 'exited', 'dead'}:
-            state = 'unknown state'
-        health = re.search(r'\((?:health: )?(healthy|unhealthy|starting)\)\s*$', status)
-        line = f'{label}: {state}' + (f' ({health[1]})' if health else '')
-        try:
-            logs = run_docker_diagnostic('logs', '--since', '30m', '--tail', '100', container)
-        except subprocess.TimeoutExpired:
-            logs = None
-        if logs is None or logs.returncode:
-            findings.append(line + '; recent logs unavailable')
-            continue
-        lines = (logs.stdout + '\n' + logs.stderr).splitlines()
-        counts = {signal: sum(pattern.search(entry) is not None for entry in lines)
-                  for signal, pattern in TELEGRAM_SIGNALS.items()}
-        signals = ', '.join(f'{name} ({count})' for name, count in counts.items() if count)
-        findings.append(line + '; ' + (signals or 'no recognized signs in recent logs'))
-    findings.append('Service checks alone cannot verify a specific recipient or chat binding.')
-    return 'completed', 0, {'findings': '\n'.join(findings)}
+def read_diagnostic_config(path):
+    require_root_file(path)
+    return json.loads(path.read_text())
 
 
 def execute_plan(raw, state, identifier, *, run_script=execute_script):
     plan = read_plan(raw)
     kind = plan['kind']
-    if kind == 'telegram-diagnostics':
-        return telegram_diagnostics(state.parents[2])
+    if kind in {'inspect-services', 'telegram-diagnostics'}:
+        return inspect_services(state.parents[2], plan.get('target', 'telegram'), read_diagnostic_config,
+                                legacy=kind == 'telegram-diagnostics')
     if kind == 'shell':
         outcome, code = run_script(plan['script'])
         if outcome != 'completed':

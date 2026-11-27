@@ -47,5 +47,5 @@ docker run --rm --pull never --network "$network" --network-alias context --user
   -v "$src/operations.json:/operations.json:ro" -v "$here/fixture.mjs:/app/root/fixture.mjs:ro" \
   --entrypoint node "$connector_image" /app/root/fixture.mjs
 docker run --rm --pull never --network none --cap-drop ALL --read-only --tmpfs /tmp \
-  -v "$broker/broker.py:/fixture/broker.py:ro" -v "$here/broker_check.py:/fixture/broker_check.py:ro" \
+  -v "$broker/broker.py:/fixture/broker.py:ro" -v "$broker/service_diagnostics.py:/fixture/service_diagnostics.py:ro" -v "$here/broker_check.py:/fixture/broker_check.py:ro" \
   --user 0:0 --entrypoint python "$syn" -B /fixture/broker_check.py

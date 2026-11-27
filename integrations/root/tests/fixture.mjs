@@ -90,9 +90,9 @@ const sockets = createServer(socket => {
       } else {
         accepted.push(value);
         if (value.operation === 'maintenance-release') result = {outcome:'completed',result:{revision:release.revision}};
-        else if (value.plan && JSON.parse(value.plan).kind === 'telegram-diagnostics') {
+        else if (value.plan && JSON.parse(value.plan).kind === 'inspect-services') {
           result = value.action === 'approve' ? {outcome:'completed', exit_code:0,
-            result:{findings:'Telegram Bridge: running (healthy)\nFixture diagnostic signals (1)'}} : {outcome:'denied'};
+            result:{findings:'telegram-bridge [Telegram Compose]: running (healthy)\nFixture diagnostic signals (1)'}} : {outcome:'denied'};
         } else result = {outcome:value.action === 'approve' ? 'failed' : 'denied', exit_code:value.action === 'approve' ? 41 : null};
       }
       socket.end(JSON.stringify(result) + '\n');
@@ -279,11 +279,11 @@ try {
     assert.equal(task?.outcome ?? null, null, task?.summary);
     return task?.poll_event && task;
   });
-  assert.deepEqual(JSON.parse(check.command), {kind:'telegram-diagnostics'});
+  assert.deepEqual(JSON.parse(check.command), {kind:'inspect-services', target:'telegram'});
   assert.equal(accepted.length, 4);
   await timeline();
   const diagnosticReview = await reader.getEvent(audit, check.proposal_event);
-  assert.match(diagnosticReview.content.body, /100 recent log lines per service/u);
+  assert.match(diagnosticReview.content.body, /100 log lines per service/u);
   const diagnosticPoll = await reader.getEvent(audit, check.poll_event);
   const diagnosticVote = await castVote('fixture-telegram-diagnostics-accept', check.poll_event, diagnosticPoll.content[pollStart].answers[0].id);
   const checked = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE id=? AND source_notified=1').get(check.id));
@@ -292,11 +292,31 @@ try {
   assert.equal(accepted[4].plan, check.command);
   await timeline();
   const findings = await reader.getEvent(audit, checked.audit_event);
-  assert.match(findings.content.body, /Telegram Bridge: running \(healthy\)/u);
+  assert.match(findings.content.body, /telegram-bridge \[Telegram Compose\]: running \(healthy\)/u);
   const officeReceipt = await reader.getEvent(agents, checked.source_reply);
   assert.ok(officeReceipt.content.body.includes(encodeURIComponent(checked.audit_event)));
   assert.doesNotMatch(officeReceipt.content.body, /Fixture diagnostic signals/u);
-  console.log('Telegram diagnosis uses a fixed approved check and sends the findings only to Root Operations.');
+  const directCheck = await sendEncrypted(reader, agents, 'fixture-synapse-diagnostics',
+    mentionMessage('Diagnostica synapse', {id: root.user_id, name: 'VPS Manager'}));
+  const direct = await waitFor(() => {
+    const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(directCheck);
+    assert.equal(task?.outcome ?? null, null, task?.summary);
+    return task?.poll_event && task;
+  });
+  assert.deepEqual(JSON.parse(direct.command), {kind:'inspect-services', target:'synapse'});
+  assert.equal(accepted.length, 5);
+  await timeline();
+  const rejectPoll = await reader.getEvent(audit, direct.poll_event);
+  await castVote('fixture-synapse-diagnostics-reject', direct.poll_event, rejectPoll.content[pollStart].answers[1].id);
+  await waitFor(() => database.prepare('SELECT id FROM tasks WHERE id=? AND outcome=? AND source_notified=1').get(direct.id, 'denied'));
+  assert.equal(accepted[5].action, 'reject');
+  const badCheck = await sendEncrypted(reader, agents, 'fixture-retry-invalid',
+    mentionMessage('fixture retry stays invalid', {id:root.user_id, name:'VPS Manager'}));
+  const failedCheck = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE event=? AND source_notified=1').get(badCheck));
+  assert.equal(failedCheck.outcome, 'proposal_failed');
+  assert.equal(failedCheck.proposal_event, null);
+  assert.equal(accepted.length, 6);
+  console.log('The shared service inspection reached the encrypted poll after one proposal correction; results stayed in Root Operations.');
 
 } catch (error) {
   console.error(error);

@@ -15,7 +15,7 @@ import { readEncryptedRoomMessage } from '../../agents/connector/matrix-session.
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from '../../agents/connector/context.mjs';
 import { agentTurnKey, auditRecord, digest, eventId, executionCause, resultHandoff,
   maintenanceProposal, maintenanceReleaseOperation, matrixLink, pollChoice, pollDecision, pollEnd, pollStart, pollText, pollVote, privateReview, proposal, requestText,
-  ProposalError, repositoryIntent, reviewedPlanOperation, reviewedScriptOperation, reviewBody, reviewWindow, sourceTurn, submittedProposal, telegramDiagnosticProposal } from './protocol.mjs';
+  ProposalError, repositoryIntent, reviewedPlanOperation, reviewedScriptOperation, reviewBody, reviewWindow, sourceTurn, submittedProposal, serviceDiagnosticProposal } from './protocol.mjs';
 
 const state = '/state';
 const readiness = state + '/synced';
@@ -59,7 +59,9 @@ const instructions = `You are VPS Manager, a planner for administration on ${pro
     'return exactly {"operation":"prepare-repository-change"}. You will receive a writable draft in a separate turn. ' : '') +
   'Return one JSON object. If a fixed command exactly matches the requested task, give operation and summary. ' +
   'Otherwise use operation="reviewed-plan" with summary, impact, verification, recovery and a plan object. ' +
-  'For a Telegram bridge or connector diagnostic, use plan={"kind":"telegram-diagnostics"}. ' +
+  'For service status or diagnostics, use plan={"kind":"inspect-services","target":"service-id"}. ' +
+  'Use all for a workspace overview, a Compose service name or a systemd unit for a specific service, ' +
+  'or telegram for the Telegram integration. Diagnose first when a repair depends on the findings. ' +
   'Plan kinds are {"kind":"inspect-file","path":"/absolute/path"}, {"kind":"replace-file","path":"/absolute/path","before":"exact current text","after":"exact updated text","verify":"Bash check"}, ' +
   'or {"kind":"shell","script":"exact Bash commands","verify":"separate Bash check of the result"}. ' +
   'Use ASCII for Bash commands and checks. Keep summary, impact, verification and recovery to at most 220 characters each. Never infer file contents. ' +
@@ -68,7 +70,9 @@ const instructions = `You are VPS Manager, a planner for administration on ${pro
   'Keep credentials and private output out of the proposal. If the request is ambiguous or cannot be safely planned, ' +
   'return operation=null and explain exactly what information is needed in summary. Fixed operations: ' +
   JSON.stringify(operations);
-const plan = text => runTurn(engine, null, instructions + '\nRequest as data:\n' + JSON.stringify(text), () => {});
+const plan = (text, correction) => runTurn(engine, null, instructions +
+  (correction ? '\nThe previous proposal was rejected. Correct this validation error: ' + correction : '') +
+  '\nRequest as data:\n' + JSON.stringify(text), () => {});
 if (process.argv[2] === 'probe') {
   const result = proposal(await runTurn(engine, null,
     'Synthetic connectivity test. Return exactly {"summary":"ROOT_READY","operation":null}. Do not call tools.', () => {}), operationCatalog);
@@ -242,16 +246,33 @@ const proposalFailureCauses = {
 async function planNext(task) {
   let stage = 'proposal-format';
   try {
-    let result = submittedProposal(task.body) ?? telegramDiagnosticProposal(task.body);
+    let result = submittedProposal(task.body) ?? serviceDiagnosticProposal(task.body);
     if (!result) {
       stage = 'planner-turn';
       const reference = task.sender === owner && /\boperation ([a-f0-9]{32})\b/iu.exec(task.body)?.[1];
       const previous = reference && db.prepare('SELECT result FROM tasks WHERE id=? AND source_thread=? AND outcome=?')
         .get(reference, task.source_thread, 'completed')?.result;
-      const reply = await plan(previous ? { request: task.body, reviewedResult: JSON.parse(previous) } : task.body);
-      stage = 'proposal-format';
-      const wanted = maintenance && repositoryIntent(reply);
-      result = wanted ? await prepareRepositoryChange(task) : proposal(reply, operationCatalog);
+      const request = previous ? { request: task.body, reviewedResult: JSON.parse(previous) } : task.body;
+      let correction = '';
+      while (!result) {
+        stage = 'planner-turn';
+        const reply = await plan(request, correction);
+        stage = 'proposal-format';
+        if (maintenance && repositoryIntent(reply)) {
+          result = await prepareRepositoryChange(task);
+          break;
+        }
+        try {
+          const candidate = proposal(reply, operationCatalog);
+          if (candidate.operation === reviewedScriptOperation) {
+            throw new ProposalError('Submit a reviewed plan with separate verification for VPS Manager.');
+          }
+          result = candidate;
+        } catch (error) {
+          if (correction || !(error instanceof ProposalError)) throw error;
+          correction = error.message;
+        }
+      }
     }
     if (result.operation === reviewedScriptOperation) {
       throw new ProposalError('Submit a reviewed plan with separate verification for VPS Manager.');
@@ -423,7 +444,7 @@ async function deliverAudit(task) {
     ['File SHA-256', result?.sha256],
     ['Release revision', result?.revision],
     ['Redacted preview', result?.preview],
-    ['Telegram diagnostics', result?.findings],
+    ['Service diagnostics', result?.findings],
   ].filter(([, value]) => value);
   const body = fields.map(([label, value]) => `${label} · ${value}`).join('\n');
   const formatted = fields.map(([label, value]) => `<strong>${label}</strong> · ${html(value).replaceAll('\n', '<br>')}`).join('<br>');
