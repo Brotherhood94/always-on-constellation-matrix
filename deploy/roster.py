@@ -200,6 +200,10 @@ def retire_locked(data, settings, registry, key, *, actor=None, approval=None):
         disconnect(data, key)
         if len(entries) == 1 and not settings['telegram'] and 'persona-workshop' in load(data / 'compose.yaml')['services']:
             compose(data, '--profile', 'agents', 'rm', '-sf', 'persona-workshop')
+        if entry.get('hiring_provider'):
+            # The gateway rereads every per-agent grant. Revocation stays durable across restarts.
+            (data / 'hiring' / 'grants' / (key + '.json')).unlink(missing_ok=True)
+            (data / 'state' / key / 'hiring-agent/token').unlink(missing_ok=True)
         progress = entry['retirement'] = 'revoked'
         save(data / 'agents.json', registry)
     # On retries the live entry remains fenced until all credential and data steps finish.
@@ -301,6 +305,7 @@ def prepare_management(data, settings, registry, operator):
 
 def enable_management(data, password_file=None, *, automatic=False):
     from host_services import roster_units
+    from installer import configure_network, prepare_images
 
     with operator_lock(data):
         settings = load(data / 'settings.json')
@@ -310,7 +315,9 @@ def enable_management(data, password_file=None, *, automatic=False):
                        and (key == 'chief-of-staff' or registry['agents'][key].get('starter_role') == key)]
         if 'hiring-manager' in registry['agents'] and 'chief-of-staff' in authorities:
             authorities.remove('chief-of-staff')
-        if automatic and settings.get('roster_management') and all(
+        managed_hiring = 'hiring-manager' in registry['agents']
+        needs_hiring_upgrade = managed_hiring and not (data / 'roster/element-hiring-v1').is_file()
+        if automatic and not needs_hiring_upgrade and settings.get('roster_management') and all(
                 (data / 'roster' / (key + '.key')).exists() for key in authorities if key != 'chief-of-staff'):
             return
         if not settings['systemd'] or not authorities:
@@ -328,10 +335,15 @@ def enable_management(data, password_file=None, *, automatic=False):
                 request('POST', CLIENT + '/logout', {}, operator)
         for key in authorities:
             private_secret(auth / ('bridge-key' if key == 'chief-of-staff' else key + '.key'), uid=RUNTIME_UID)
+        if needs_hiring_upgrade:
+            prepare_images(settings, registry)
         roster_units(settings, data)
         settings['roster_management'] = True
         compose_config(settings, data, registry)
         up(data, *authorities)
+        if managed_hiring:
+            configure_network(settings, data)
+            save(auth / 'element-hiring-v1', 'enabled\n')
         save(data / 'settings.json', settings)
         publish_inventory(settings, data, registry)
     print('Team management is ready in Element.')

@@ -241,7 +241,8 @@ class RosterTest(TestCase):
         owner = '@operator:fixture.test'
         audience = [{'type': 'm.room.member', 'state_key': user, 'content': {'membership': 'join'}}
                     for user in (chief, owner)]
-        audience.append({'type': 'm.room.join_rules', 'content': {'join_rule': 'invite'}})
+        audience.extend([{'type': 'm.room.join_rules', 'content': {'join_rule': 'invite'}},
+                         {'type': 'm.room.encryption', 'content': {'algorithm': 'm.megolm.v1.aes-sha2'}}])
         events = [{'event_id': event, 'origin_server_ts': stamp, 'type': 'm.room.encrypted', 'sender': sender}
                   for event, stamp, sender in (('$request', 997, owner), ('$proposal', 998, chief),
                                                ('$poll', 999, chief), ('$vote', 1000, owner))]

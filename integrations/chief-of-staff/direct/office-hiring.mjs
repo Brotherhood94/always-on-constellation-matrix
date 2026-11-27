@@ -4,21 +4,22 @@ import { staffingNotice, staffingOutcome } from '../../../agents/connector/staff
 const terminal = ['ready', 'declined', 'expired', 'rejected', 'conflict', 'unavailable'];
 
 export function officeHireStatus(approval, agent, joined, needsWeb) {
-  if (approval?.announced === 'provisioned') {
-    if (!agent || !agent.active) return 'provider_required';
+  if (['provisioned', 'active'].includes(approval?.announced)) {
+    if (!agent || !agent.active) return approval.announced === 'active' ? 'awaiting_readiness' : 'provider_required';
     if (!canDispatch(agent, joined) || !['Available', 'Running'].includes(agent.status)) return 'awaiting_readiness';
     if (needsWeb && !Object.values(agent.grants ?? {}).some(tool => tool.kind === 'mcp' && tool.purpose === 'public-web')) {
       return 'awaiting_web';
     }
     return 'ready';
   }
+  if (['provider_waiting', 'tools_waiting'].includes(approval?.announced)) return approval.announced;
   if (['declined', 'expired', 'rejected'].includes(approval?.announced)) return approval.announced;
   if (approval?.action === 'approve') return 'provisioning';
   return approval?.poll ? 'awaiting_approval' : 'preparing';
 }
 
 export function createOfficeHiring({ db, client, office, owner, planner, catalog, enabled, approvals, say, draft,
-  allowedKey, publish, report, now = Date.now }) {
+  allowedKey, publish, report, configured = false, now = Date.now }) {
   db.exec(`CREATE TABLE IF NOT EXISTS office_hires (
     request TEXT PRIMARY KEY, thread TEXT NOT NULL, handoff TEXT NOT NULL, manager TEXT NOT NULL, requester TEXT NOT NULL,
     agent TEXT NOT NULL, brief TEXT NOT NULL, web INTEGER NOT NULL, profile TEXT, private_source TEXT,
@@ -47,10 +48,11 @@ export function createOfficeHiring({ db, client, office, owner, planner, catalog
     if (!enabled) status = 'unavailable';
     else if (!row.private_source && (!allowedKey(row.agent) || row.agent === owner.slice(1).split(':', 1)[0] || agent || pending.get(row.agent, null) || prior.get(row.agent, row.request))) {
       status = 'conflict';
-    } else if (!agents && approval?.announced === 'provisioned') return;
+    } else if (!agents && ['active', 'provisioned'].includes(approval?.announced)) return;
     else {
-      const joined = approval?.announced === 'provisioned' ? new Set(await client.getJoinedRoomMembers(office)) : new Set();
-      status = officeHireStatus(approval, agent, joined, row.web);
+      const joined = ['active', 'provisioned'].includes(approval?.announced) ? new Set(await client.getJoinedRoomMembers(office)) : new Set();
+      status = configured && row.private_source && !approval?.poll && !approval?.action
+        ? 'configuring' : officeHireStatus(approval, agent, joined, row.web);
     }
     if (status !== row.status) {
       const receipt = { request: row.request, handoff: row.handoff, agent: row.agent, status };
@@ -69,11 +71,12 @@ export function createOfficeHiring({ db, client, office, owner, planner, catalog
     }
     const link = `https://matrix.to/#/${encodeURIComponent(office)}/${encodeURIComponent(row.request)}`;
     const summary = `Requested in Office: ${link}\n\n${row.brief}` +
-      (row.web ? '\n\nPublic web access needs a separate verified tool grant.' : '');
+      (row.web ? (configured ? '\n\nReview the required public web tool in the same proposal.' :
+      '\n\nPublic web access needs a separate verified tool grant.') : '');
     const source = await say('hire-office:' + row.request, 'Review the hiring proposal for ' + row.agent + '.\n\n' + summary);
     db.exec('BEGIN IMMEDIATE');
     try {
-      approvals.enqueue(source, { kind: 'add', agent: row.agent, profile: JSON.parse(row.profile) }, summary, 'agent');
+      approvals.enqueue(source, { kind: 'add', agent: row.agent, profile: JSON.parse(row.profile), ...(configured && {web: Boolean(row.web), firstTask: row.brief}) }, summary, 'agent');
       db.prepare("UPDATE office_hires SET private_source=?,brief='',profile=NULL WHERE request=?").run(source, row.request);
       db.exec('COMMIT');
     } catch (error) {

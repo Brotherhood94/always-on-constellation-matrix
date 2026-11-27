@@ -48,16 +48,18 @@ class OperatorCLITest(unittest.TestCase):
             self.assertIn('Draft delivery paused', report)
             sudo.assert_not_called()
 
-    def test_docker_access_is_optional_and_prints_a_command_for_the_operator(self):
+    def test_docker_access_prompts_then_elevates_only_on_opt_in(self):
         from operator_cli import operator_docker_access
-        for choice in ('keep', 'show'):
+        for status, choice in [('available', None), ('reconnect', None), ('missing', 'keep'), ('missing', 'add')]:
             report = StringIO()
-            with redirect_stdout(report), patch('operator_cli.choose_option', return_value=choice) as menu, \
-                    patch('operator_cli.run') as privileged, patch('operator_cli.getpwuid', return_value=SimpleNamespace(pw_name='fixture')):
-                operator_docker_access()
-            self.assertEqual(menu.call_args.args[-1], 'keep')
-            self.assertEqual('sudo usermod -aG docker fixture' in report.getvalue(), choice == 'show')
-            privileged.assert_not_called()
+            with self.subTest(status=status, choice=choice), redirect_stdout(report), \
+                    patch('operator_cli.docker_access_state', return_value=status), \
+                    patch('operator_cli.choose_option', return_value=choice) as menu, \
+                    patch('operator_cli.elevate') as privileged:
+                operator_docker_access(Path('/srv/fixture'))
+            self.assertEqual(menu.called, status == 'missing')
+            self.assertEqual(privileged.called, choice == 'add')
+            self.assertEqual('reconnect' in report.getvalue().lower(), status == 'reconnect' or choice == 'add')
 
     def test_install_prompts_before_sudo_and_sends_passwords_only_on_stdin(self):
         output = StringIO()

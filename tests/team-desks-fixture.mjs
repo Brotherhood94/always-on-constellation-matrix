@@ -12,7 +12,9 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { openRoomClient, sendEncrypted } from './matrix-session.mjs';
 import { mentionMessage } from './matrix-format.mjs';
 import { createRosterApproval } from './chief-of-staff/direct/roster-approval.mjs';
+import { useTool } from './team-tools.mjs';
 import { openDesk } from './chief-of-staff/direct/team.mjs';
+import crypto from '@matrix-org/matrix-sdk-crypto-nodejs';
 import { WebSocketServer } from 'ws';
 
 const url='http://synapse:8008', domain='fixture.test', owner='@operator:'+domain;
@@ -20,7 +22,12 @@ const password='synthetic-test-passphrase-88';
 const source = await mkdtemp('/tmp/team-desks-');
 const records = [];
 const executionRecords = [];
+const fixtureTool = {id:'fixture-web', kind:'mcp', purpose:'public-web', endpoint:'https://tools.example.test/mcp',
+  source:'https://tools.example.test/', version:'1', methods:['search'], permissions:'Read public sources', verification:'List read-only tools'};
+const eligible = {accounts:{accounts:[{id:'a'.repeat(24), mode:'chatgpt_codex', label:'Fixture Codex', ready:true}]},
+  catalog:{models:[{id:'fixture-live-model', efforts:['high']}]}, tools:{tools:[fixtureTool]}};
 let officeEvidence = [];
+let researchToolCalls = 0;
 const graph = createServer(async (req,res) => {
   assert.ok(['/office/review/recent','/office/review/open','/events'].includes(req.url));
   assert.equal(req.headers.authorization,'Bearer fixture-context');
@@ -39,8 +46,9 @@ const host = createSocket(socket => {
     input+=chunk;
     if (!input.endsWith('\n')) return;
     const receipt = JSON.parse(input);
+    if (receipt.hiring) return socket.end(JSON.stringify(eligible[receipt.hiring.action] ?? {}));
     records.push(receipt);
-    socket.end(JSON.stringify({status:JSON.parse(receipt.operation).kind==='add' ? 'provisioned' : 'retired'}));
+    socket.end(JSON.stringify({status:JSON.parse(receipt.operation).kind==='add' ? 'active' : 'retired'}));
   });
 });
 await Promise.all([new Promise(r=>graph.listen(8000,r)),new Promise(r=>host.listen('/run/office-roster.sock',r))]);
@@ -63,18 +71,35 @@ const secured = createSecureServer({key:await readFile('/desk-tls/key.pem'), cer
 const acp = new WebSocketServer({server:secured, path:'/api/v1/acp'});
 acp.on('connection', (socket, request) => {
   assert.equal(request.headers.authorization, 'Bearer fixture-acp');
-  socket.on('message', raw => {
+  socket.on('message', async raw => {
     const {id, method, params} = JSON.parse(raw);
     const send = message => socket.send(JSON.stringify({jsonrpc:'2.0', ...message}));
     if (method === 'initialize') send({id, result:{protocolVersion:params.protocolVersion, agentCapabilities:{loadSession:true}}});
+    if (method === 'session/load') send({id, result:{}});
     if (method === 'session/new') send({id, result:{sessionId:'staffing-fixture'}});
     if (method !== 'session/prompt') return;
     const prompt = params.prompt[0].text;
     const officeRequest = prompt.includes('For an explicit request to hire') && prompt.split('Request:\n').at(-1);
-    const key = officeRequest && /\bresearch-fixture(?:-dot)?\b/u.exec(officeRequest)?.[0];
-    const input = key ? null : JSON.parse(prompt.split('\n').at(-1));
+    const sample = prompt.includes('Office research activation sample');
+    const key = !sample && officeRequest && /\bresearch-fixture(?:-dot)?\b/u.exec(officeRequest)?.[0];
+    const input = key || sample ? null : JSON.parse(prompt.split('\n').at(-1));
     let answer;
-    if (key) {
+    if (sample && prompt.startsWith('You are Research fixture')) {
+      const result = await useTool(fixtureTool,'search',{query:'public case study'}, {fetch:async (_url, options) => {
+        const call = JSON.parse(options.body);
+        if (call.method.startsWith('notifications/')) return new Response(null,{status:202});
+        const replies = {initialize:{protocolVersion:call.params?.protocolVersion,capabilities:{tools:{}},
+          serverInfo:{name:'fixture',version:'1'}}, 'tools/list':{tools:[{name:'search',inputSchema:{type:'object'},
+          annotations:{readOnlyHint:true}}]}, 'tools/call':{content:[{type:'text',text:'Verified fixture evidence'}]}};
+        if (call.method === 'tools/call') researchToolCalls++;
+        return Response.json({jsonrpc:'2.0',id:call.id,result:replies[call.method]});
+      }});
+      answer = result.content[0].text;
+    } else if (sample) {
+      answer = prompt.includes('Verified fixture evidence') ? 'Research fixture returned verified evidence.'
+        : 'Ask the approved research specialist to run its first check.\nHANDOFF: ' +
+          JSON.stringify({agent:'research-fixture',capability:'research',resource:'task:fixture-research'});
+    } else if (key) {
       answer = 'I will ask Hiring Manager to prepare the private proposal.\nHANDOFF: ' +
         JSON.stringify({ agent: 'hiring-manager', capability: 'staffing', resource: 'task:hiring',
           staffing: { action: 'hire', key, brief: 'Compare and cite public sources.', web: true } });
@@ -131,6 +156,47 @@ async function eventually(check, attempts = 45) {
   assert.fail('Expected an encrypted desk result.');
 }
 
+async function chooseProvider(operator, room, request, query, run = async () => {}, worker = '') {
+  let last;
+  for (const step of ['mode', 'account', 'model', 'effort']) {
+    const prompt = await eventually(async () => {
+      await run();
+      const row = query(request);
+      return row?.prompt && row.prompt !== last && JSON.parse(row.state).stage === step ? row.prompt : null;
+    }, 160);
+    last = prompt;
+    await operator.sync();
+    const event = await eventually(async () => {
+      await operator.sync();
+      const item = await operator.client.getEvent(room, prompt);
+      return item.type === 'm.room.message' ? item : null;
+    });
+    assert.match(event.content.body, /!hire 1/u);
+    await sendEncrypted(operator.client, room, 'hiring-choice-' + worker + '-' + step, {
+      ...mentionMessage('!hire 1'), 'm.relates_to': {'m.in_reply_to': {event_id:prompt}},
+    });
+  }
+}
+
+async function readHiringProposal(operator, room, proposal) {
+  const event = await eventually(async () => {
+    await operator.sync();
+    const item = await operator.client.getEvent(room, proposal);
+    return item.type === 'm.room.message' ? item : null;
+  });
+  const raw = await operator.client.getRawEvent(room, proposal);
+  assert.equal(raw.type, 'm.room.encrypted');
+  assert.equal(event.content.msgtype, 'm.file');
+  assert.match(event.content.body, /-proposal\.md$/u);
+  const file = event.content.file;
+  const media = await fetch(url + '/_matrix/client/v1/media/download/' + file.url.slice('mxc://'.length),
+    {headers: {Authorization: 'Bearer ' + operator.client.accessToken}});
+  assert.ok(media.ok);
+  const bytes = Buffer.from(await media.arrayBuffer());
+  assert.ok(!bytes.includes(Buffer.from('fixture-live-model')));
+  return Buffer.from(crypto.Attachment.decrypt(new crypto.EncryptedAttachment(bytes, JSON.stringify(file)))).toString();
+}
+
 const children = new Set();
 function launch(file, env) {
   const child = spawn(process.execPath, [file], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -158,7 +224,7 @@ async function officeHiring(office) {
   await writeFile('/state/control-room-id', control);
   const snapshot = '/catalog/hiring-fixture.json';
   const publishRoster = (...specialists) => writeFile(snapshot, JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
-    contactPolicy: true, dynamicHandoffs: true, agents: [manager, hire, ...specialists] }));
+    contactPolicy: true, dynamicHandoffs: true, agents: [{...manager,contacts:[...manager.contacts,...specialists.map(agent => agent.key)]}, hire, ...specialists] }));
   await publishRoster();
   const base = { MATRIX_URL: url, MATRIX_SERVER_NAME: domain, MATRIX_OWNER: owner, MATRIX_PLANNER: '@dot:' + domain,
     MATRIX_CATALOG_PATH: snapshot, AGENT_WORKSPACE: '/tmp', CONTEXT_INTELLIGENCE_URL: 'http://localhost:8000' };
@@ -207,6 +273,10 @@ async function officeHiring(office) {
     const dotEvent = decodeURIComponent(dot.structuredContent.thread_url.split('/').at(-1));
     const settled = new Map();
     for (const [key, root, accept] of [['research-fixture', direct, true], ['research-fixture-dot', dotEvent, false]]) {
+      const privateSource = await eventually(() => row(hiringState, 'SELECT private_source FROM office_hires WHERE request=?',
+        root)?.private_source, 180);
+      await chooseProvider(reviewer, control, privateSource, id => row(hiringState,
+        'SELECT state,prompt FROM hiring_config WHERE request=?', id), undefined, key);
       const record = await eventually(async () => {
         await reader.sync();
         const status = events.find(event => event.content?.['org.matrixconstellation.staffing.receipt']?.request === root &&
@@ -214,12 +284,19 @@ async function officeHiring(office) {
         const approval = row(hiringState, 'SELECT a.* FROM office_hires h JOIN roster_requests a ON h.private_source=a.request WHERE h.request=?', root);
         return status && approval?.poll ? { status, approval } : null;
       }, 220);
+      const proposal = await readHiringProposal(reviewer, control, record.approval.proposal);
+      assert.match(proposal, /fixture-live-model/u);
+      assert.match(proposal, /Reasoning · high/u);
+      assert.match(proposal, /fixture-web/u);
+      assert.match(proposal, /Methods · search/u);
       assert.equal(record.status.sender, hire.id);
       assert.equal((await reader.client.getRawEvent(office, record.status.event_id)).type, 'm.room.encrypted');
       assert.equal(record.status.content['m.relates_to'].event_id, root);
       assert.doesNotMatch(record.status.content.body, /Compare and cite public sources|matrix.to/u);
-      assert.ok(events.some(event => event.sender === manager.id &&
-        event.content?.['net.matrix_agents.turn']?.staffing?.key === key));
+      const handoff = row(hiringState, 'SELECT handoff FROM office_hires WHERE request=?', root).handoff;
+      const rawHandoff = await reader.client.getRawEvent(office, handoff);
+      assert.equal(rawHandoff.sender, manager.id);
+      assert.equal(rawHandoff.type, 'm.room.encrypted');
       assert.equal(records.filter(value => JSON.parse(value.operation).agent === key).length, 0);
       if (accept) {
         const stopped = once(hiringProcess, 'exit');
@@ -243,7 +320,7 @@ async function officeHiring(office) {
       const final = await eventually(async () => {
         await reader.sync();
         return events.find(event => event.content?.['org.matrixconstellation.staffing.receipt']?.request === root &&
-          event.content['org.matrixconstellation.staffing.receipt'].status === (accept ? 'provider_required' : 'declined'));
+          event.content['org.matrixconstellation.staffing.receipt'].status === (accept ? 'awaiting_readiness' : 'declined'));
       }, 240);
       assert.deepEqual(final.content['m.mentions'].user_ids, [accept ? owner : '@dot:' + domain]);
       assert.equal(records.filter(value => JSON.parse(value.operation).agent === key).length, Number(accept));
@@ -275,16 +352,10 @@ async function officeHiring(office) {
     });
     assert.ok(joined.ok);
     const specialist = { key, id: worker.user_id, name: 'Research fixture', role: 'worker',
-      active: true, status: 'Available', limits: '', capabilities: [], contacts: ['manager'] };
-    await publishRoster(specialist);
-    await eventually(async () => {
-      await reader.sync();
-      return events.some(event => event.content?.['org.matrixconstellation.staffing.receipt']?.request === direct &&
-        event.content['org.matrixconstellation.staffing.receipt'].status === 'awaiting_web');
-    }, 120);
-    assert.ok(!events.some(event => event.content?.['net.matrix_agents.task_outcome']?.status === 'completed' &&
-      event.content['m.relates_to']?.event_id === direct));
-    await publishRoster({ ...specialist, grants: { web: { kind: 'mcp', purpose: 'public-web' } } });
+      active: true, status: 'Available', limits: '', capabilities: [{code:'research',description:'Find evidence',resources:['task:*']}], contacts: ['manager'] };
+    const accepted = records.find(item => JSON.parse(item.operation).agent === key);
+    assert.deepEqual(JSON.parse(accepted.operation).tools, [fixtureTool]);
+    await publishRoster({ ...specialist, grants: { 'fixture-web': fixtureTool } });
     await eventually(async () => {
       await reader.sync();
       return events.find(event => event.sender === manager.id && event.content?.['net.matrix_agents.task_outcome']?.status === 'completed' &&
@@ -294,7 +365,21 @@ async function officeHiring(office) {
       item.data.evidence.outcome === 'completed'), 90);
     assert.ok(recorded.data.evidence.references?.length);
     assert.doesNotMatch(JSON.stringify(recorded), /Compare and cite public sources/);
-    console.log('Office and Dot preserved one encrypted hiring poll each, returned decline and provisioning in the original threads, and closed the accepted task after the simulated web tool check.');
+    const workerAccount = await participant(key, office, 'MATRIXRESEARCHFIXTURE');
+    workerAccount.client.crypto.engine.machine.close();
+    await writeFile(workerAccount.state + '/room-id', office);
+    boot(specialist, workerAccount);
+    await eventually(() => row(workerAccount.state + '/connector.sqlite3',
+      "SELECT value FROM settings WHERE name='activatedAt'"), 120);
+    const assignment = await sendEncrypted(reader.client, office, 'research-fixture-first-assignment',
+      mentionMessage('Office research activation sample. Ask Research fixture to verify a public case study.', manager));
+    await eventually(async () => {
+      await reader.sync();
+      return events.find(event => event.sender === specialist.id && event.content.body.includes('Verified fixture evidence') &&
+        event.content['m.relates_to']?.event_id === assignment);
+    }, 180);
+    assert.equal(researchToolCalls, 1);
+    console.log('Office and Dot preserved one encrypted hiring poll each, decrypted the reviewed Markdown attachment, and closed the accepted task after the broker reported readiness.');
   } finally {
     reader.client.crypto.engine.machine.close();
     reviewer.client.crypto.engine.machine.close();
@@ -383,18 +468,20 @@ try {
       assert.equal(record.vote,receipt.event_id);
       console.log(actor+' received its exact encrypted operator approval in its own DM.');
       if (assignments) {
+        const source = await eventually(async () => {
+          await approval.run();
+          return db.prepare("SELECT request FROM roster_requests WHERE request<>? AND json_extract(operation,'$.kind')='add'").get(turn)?.request;
+        }, 180);
+        await chooseProvider(operator, room, source,
+          id => db.prepare('SELECT state,prompt FROM hiring_config WHERE request=?').get(id), approval.run, 'release-editor');
         const hire = await eventually(async () => {
           await approval.run();
           return db.prepare("SELECT request, proposal, poll FROM roster_requests WHERE request<>? AND poll IS NOT NULL").get(turn);
         });
         assert.ok(!records.some(entry => entry.request === hire.request));
-        const proposal = await eventually(async () => {
-          await operator.sync();
-          const event = await operator.client.getEvent(room,hire.proposal);
-          return event.type === 'm.room.message' ? event : null;
-        });
-        assert.match(proposal.content.body, /Recurring duty across 2 Office assignments/u);
-        for (const id of assignments) assert.ok(proposal.content.body.includes(encodeURIComponent(id)));
+        const proposal = await readHiringProposal(operator, room, hire.proposal);
+        assert.match(proposal, /Recurring duty across 2 Office assignments/u);
+        for (const id of assignments) assert.ok(proposal.includes(encodeURIComponent(id)));
         assert.equal((await operator.client.getRawEvent(room,hire.poll)).type,'m.room.encrypted');
         const hirePoll = await operator.client.getEvent(room,hire.poll);
         const selection=await operator.client.crypto.encryptRoomEvent(room,vote,

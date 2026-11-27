@@ -39,12 +39,12 @@ PROJECT = re.compile(r'[a-z][a-z0-9-]{0,38}')
 RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
-            'telegram-agent', 'telegrambot', 'roster-inviter', 'root', 'vps-manager-ops', 'helper-dm'}
+            'telegram-agent', 'telegrambot', 'hiring-provider', 'roster-inviter', 'root', 'vps-manager-ops', 'helper-dm'}
 TELEGRAM_AGENT = 'telegram-agent'
 LEGACY_CONNECTION = 'chatgpt-codex'
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
-         'context_port': 18081, 'context_https_port': 8445}
+         'context_port': 18081, 'context_https_port': 8445, 'hiring_port': 18792}
 
 
 def load(path):
@@ -189,6 +189,10 @@ def normalized(raw, presets):
             key not in chosen or not isinstance(value, str) or not value.strip() for key, value in overrides.items()
         ):
             raise ValueError('Subscription overrides must identify selected agents and nonempty labels')
+    if settings.get('hiring_url'):
+        hiring_url = urlsplit(validated_url(settings['hiring_url']))
+        if hiring_url.path != '/hiring' or hiring_url.query:
+            raise ValueError('The private hiring URL must end in /hiring')
     server = settings['server_name']
     settings['dashboard_url'] = validated_url(raw.get('dashboard_url', f"https://{server}:{settings['dashboard_https_port']}/"))
     bolt = f"bolt+s://{server}:{settings['bolt_https_port']}"
@@ -435,6 +439,7 @@ def register_entry(settings, registry, key, definition):
     if previous:
         existing = {**previous, 'active': False}
         existing.pop('amplifier', None)
+        existing.pop('legacy_hire_approval', None)
         if existing != desired:
             raise ValueError(f'Agent {key} is already provisioned with different settings')
     registry['agents'][key] = previous or desired
@@ -582,6 +587,8 @@ def compose_config(settings, data, registry):
         directory(data / 'telegram/dot-requests', uid=RUNTIME_UID)
     if 'helper' in registry['agents']:
         publish_helper_guides(data)
+    if 'hiring-manager' in registry['agents'] or any(entry.get('hiring_provider') for entry in registry['agents'].values()):
+        directory(data / 'hiring', uid=RUNTIME_UID)
     environment = base_environment(settings, data)
     env_write(data, environment)
     context_config(settings, data, registry)
@@ -635,7 +642,7 @@ def publish_inventory(settings, data, registry):
     rows = json.loads(raw) if raw.startswith('[') else [json.loads(line) for line in raw.splitlines()]
     health = {row['Service']: row for row in rows}
     integrations = {}
-    for key in ('synapse', 'context', 'neo4j', 'dot', 'monitor', 'persona-workshop'):
+    for key in ('synapse', 'context', 'neo4j', 'dot', 'monitor', 'persona-workshop', 'hiring-provider'):
         if key in health or key in {'synapse', 'context', 'neo4j', 'monitor'}:
             row = health.get(key, {})
             integrations[key] = row.get('Health') or row.get('State') or 'unavailable'
@@ -1046,7 +1053,8 @@ def agent_add(data, args, *, operator_token=None):
 
 def pending_local_agents(registry):
     return [key for key, entry in registry['agents'].items()
-            if entry['placement'] == 'local' and not entry['active'] and not entry.get('retirement')]
+            if entry['placement'] == 'local' and not entry['active'] and not entry.get('retirement')
+            and not entry.get('hiring_provider')]
 
 
 def telegram_agent_pending(data, settings):
@@ -1101,6 +1109,8 @@ def agent_activate(data, key, *, pending_only=False):
     with operator_lock(data, waiting_message=waiting_message):
         settings, registry = open_existing(data)
         entry = registry['agents'][key]
+        if entry.get('hiring_provider'):
+            raise ValueError('This worker uses an approved ChatGPT connection. Reconnect it in Hiring Manager.')
         if entry.get('retirement'):
             raise ValueError(f'Agent {key} is retiring. Resume its removal first.')
         if entry.get('mobility_move'):
@@ -1359,6 +1369,8 @@ def main():
     install_parser = commands.add_parser('install')
     install_parser.add_argument('--config', type=Path)
     commands.add_parser('validate').add_argument('--config', type=Path, required=True)
+    hiring = commands.add_parser('hiring', help='Manage the Office hiring tool catalog').add_subparsers(dest='action', required=True)
+    hiring.add_parser('tools', help='Replace the approved hiring catalog with a JSON file').add_argument('manifest', type=Path)
     maintenance = commands.add_parser('maintenance', help='Configure scoped VPS Manager maintenance').add_subparsers(
         dest='action', required=True)
     maintenance_enable = maintenance.add_parser('enable')
@@ -1537,6 +1549,9 @@ def main():
             backup(data, args.command)
     elif args.command == 'layout':
         workspace_layout(data, args)
+    elif args.command == 'hiring':
+        from hiring import configure_tools
+        configure_tools(data, args.manifest)
     elif args.command == 'maintenance':
         from maintenance_setup import configure as configure_maintenance
         configure_maintenance(data, args)

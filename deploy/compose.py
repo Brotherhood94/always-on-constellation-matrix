@@ -1,6 +1,7 @@
 """Compose topology generated from the operator's configuration and registry."""
 from pathlib import Path
 from shlex import quote
+from urllib.parse import urlsplit
 
 SOURCE = Path(__file__).resolve().parent.parent
 CONNECTOR = 'constellation-office-connector:0.22.17'
@@ -96,6 +97,20 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                            'volumes': [volume(state / 'dot/matrix', '/state'), volume(dashboard, '/catalog', True)]}
         if settings['telegram']:
             services['dot']['volumes'].append(volume(data / 'telegram/dot-requests', '/telegram-dot', True))
+    if 'hiring-manager' in registry['agents'] or any(entry.get('hiring_provider') for entry in registry['agents'].values()):
+        network['hiring-models'] = {'internal': True}
+        network.setdefault('provider', {})
+        dashboard_url = urlsplit(settings.get('dashboard_url') or
+                                f"https://{server}:{settings['dashboard_https_port']}")
+        public_url = settings.get('hiring_url') or (f'{dashboard_url.scheme}://{dashboard_url.netloc}/hiring' if settings['tailscale'] else '')
+        services['hiring-provider'] = {
+            **restricted, 'image': engine_image, 'profiles': ['agents'], 'networks': ['hiring-models', 'provider'],
+            'entrypoint': ['/opt/amplifier-acp/.venv/bin/python', '-B', '/opt/office/hiring_gateway.py'],
+            'environment': {'HIRING_PUBLIC_URL': public_url},
+            'ports': [port(settings.get('hiring_port', 18792), 8081)],
+            'volumes': [volume(data / 'hiring', '/hiring')],
+            'healthcheck': health('curl', '-fsS', 'http://127.0.0.1:8082/health'),
+        }
     telegram_coordinator = telegram_office_agent(registry) if settings['telegram'] else None
     for key, entry in sorted(registry['agents'].items()):
         if entry.get('placement') != 'local' or entry.get('mobility_fenced'):
@@ -119,6 +134,12 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                         volume(directory / 'exchange', '/exchange')],
             'healthcheck': health('curl', '-fsS', '--cacert', '/exchange/ca.pem', f'https://{instance}:19443/'),
         }
+        if entry.get('hiring_provider'):
+            services[instance]['environment']['HIRING_PROVIDER_MODE'] = entry['hiring_provider']['mode']
+            services[instance]['networks'].append('hiring-models')
+            grant = volume(directory / 'hiring-agent', '/hiring-agent', True)
+            grant['bind'] = {'create_host_path': False}
+            services[instance]['volumes'].append(grant)
         if key == 'vps-manager' and settings.get('maintenance'):
             services[instance]['environment']['MATRIX_REPOSITORY_DRAFTS'] = 'true'
             drafts = volume(data / 'maintenance/drafts', '/workspace/constellation-matrix')

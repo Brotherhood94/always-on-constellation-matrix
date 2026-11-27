@@ -67,19 +67,28 @@ def configure():
                             if key in os.environ})},
             }}},
         })
+    providers = provider_profiles(settings)
+    managed_mode = os.environ.get('HIRING_PROVIDER_MODE')
+    if managed_mode:
+        providers = [{'module': 'provider-constellation-hiring',
+                      'source': MODULES + '/amplifier_module_provider_constellation_hiring',
+                      'config': {'mode': managed_mode, 'default_model': os.environ['AGENT_MODEL'],
+                                 'reasoning_effort': os.environ['AGENT_REASONING']}}]
     bundle = BACKEND / 'office.yaml'
     save(bundle, {
         'bundle': {'name': 'matrix-office', 'version': '1.0.0+amplifier-unified.snapshot.1'},
         'session': {'orchestrator': {'module': 'loop-live'}, 'context': {
             'module': 'context-simple', 'source': MODULES + '/amplifier_module_context_simple',
         }},
-        'providers': provider_profiles(settings),
+        'providers': providers,
         'tools': tools, 'agents': [],
     })
     module_sources = {
         'provider-' + name: MODULES + '/amplifier_module_provider_' + name.replace('-', '_')
         for name in ('anthropic', 'openai', 'openai-chatgpt')
     }
+    if managed_mode:
+        module_sources['provider-constellation-hiring'] = MODULES + '/amplifier_module_provider_constellation_hiring'
     save(BACKEND / 'agent.json', {'home': str(settings), 'appHome': str(BACKEND / 'acp'),
                                   'bundle': str(bundle), 'runtimeImmutable': True, 'moduleSources': module_sources})
     path = HOME / 'config.json'

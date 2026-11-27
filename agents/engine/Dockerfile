@@ -15,6 +15,8 @@ RUN git init /opt/amplifier-cli \
         && uv pip check --python "/opt/$app/.venv/bin/python" || exit 1; \
     done \
     && rm -rf /root/.cache/uv
+COPY agents/engine/amplifier_module_provider_constellation_hiring /opt/amplifier-acp/.venv/lib/python3.13/site-packages/amplifier_module_provider_constellation_hiring
+COPY agents/engine/hiring_gateway.py agents/engine/connect-plan.py agents/engine/connect-plan.py.lock agents/engine/launch-plan.sh /opt/office/
 COPY agents/engine/initialize.py agents/engine/provider_setup.py agents/engine/prepare_runtime.py agents/engine/prepare_provider_pages.py /opt/office/
 RUN /opt/amplifier-acp/.venv/bin/python /opt/office/prepare_runtime.py \
     && /opt/amplifier-cli/.venv/bin/python /opt/office/prepare_provider_pages.py

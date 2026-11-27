@@ -248,7 +248,7 @@ def payload(data, settings, registry, agent, entry, host, identifier, generation
             publish_helper_guides(data)
             config['guides'] = load(data / 'support/guides.json')
     server = settings['server_name']
-    return {**config, 'key': agent, 'entry': {field: entry[field] for field in ('name', 'model', 'effort', 'profile', 'starter_role') if field in entry},
+    return {**config, 'key': agent, 'entry': {field: entry[field] for field in ('name', 'model', 'effort', 'profile', 'starter_role', 'hiring_provider') if field in entry},
             'settings': settings_subset(settings), 'team_version': registry.get('team_version', 1),
             'project_key': secret_digest(server)[:8], 'matrix_url': 'https://' + server,
             'context_url': f"https://{server}:{settings['context_https_port']}", 'transaction': identifier, 'generation': generation}
@@ -271,7 +271,9 @@ def create_move(data, key, target, yes=False, *, initial=False):
             host = root(data) / 'hosts' / (source + '.json')
             if not host.is_file() or load(host).get('adopted', {}).get(key) != legacy_device:
                 raise ValueError('Enroll the existing remote host and run host adopt on it before moving this agent.')
-        print(f"{entry['name']}: {source} → {destination}. The agent’s saved provider login will transfer.")
+        provider = ('The managed ChatGPT connection stays on the coordinator.' if entry.get('hiring_provider') else
+                    'The agent’s saved provider login will transfer.')
+        print(f"{entry['name']}: {source} → {destination}. {provider}")
         if not yes and (not sys.stdin.isatty() or input('Type move to confirm: ').strip().lower() != 'move'):
             raise ValueError('Confirm the move in an interactive terminal, or use --yes')
         if key == TELEGRAM or source == settings['server_name'] and entry['active']:

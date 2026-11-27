@@ -73,9 +73,14 @@ def setup_console():
 
 def main():
     os.umask(0o077)
+    managed = os.environ.get('HIRING_PROVIDER_MODE')
     if sys.argv[1:] == ['metadata']:
-        print(json.dumps(configured_provider(HOME)))
+        metadata = ({'provider': 'provider-constellation-hiring', 'model': os.environ['AGENT_MODEL'],
+                     'effort': os.environ['AGENT_REASONING'], 'mode': managed} if managed else configured_provider(HOME))
+        print(json.dumps(metadata))
         return
+    if managed:
+        raise SystemExit('This worker uses an approved profile. Reconnect it in Hiring Manager.')
     if sys.argv[1:] or not sys.stdin.isatty():
         raise SystemExit('Run Amplifier provider setup in the operator terminal.')
     os.environ['AMPLIFIER_HOME'] = str(HOME)

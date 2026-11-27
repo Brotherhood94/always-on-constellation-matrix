@@ -39,7 +39,9 @@ From this checkout on an Ubuntu 24.04 VPS, use standard Docker Engine with Compo
 2. **Choose your team.** Confirm Element sign-in in the terminal. Use the arrow keys to review the six preselected roles, press Enter to toggle any of them, and choose **Done**. The installer uses sudo to save the agent registrations and start local Amplifier containers, then opens Amplifier’s provider and model setup for each local agent in the same terminal.
 3. **Open the welcome.** Once the selected agents are ready, Hiring Manager sends a private welcome if selected. Otherwise, a ready Office agent posts it in Office. The welcome points to **Workspace shortcuts**.
 
-ChatGPT via Codex is the only provider tested with a live account. Anthropic and OpenAI API-key setup have been exercised with synthetic credentials.
+The starter agents use Amplifier’s native provider setup. ChatGPT via Codex is the only starter provider tested with a live account. Anthropic and OpenAI API-key setup have synthetic coverage.
+
+The installer can add your Linux user to the `docker` group after you opt in. This grants root-equivalent access for manual Docker commands. Open a new SSH session afterward. Hiring Manager uses the existing roster broker for Docker operations.
 
 If agent sign-in was interrupted, resume it from the same checkout.
 
@@ -48,6 +50,10 @@ If agent sign-in was interrupted, resume it from the same checkout.
 ```
 
 Run `./constellation_matrix setup-guide` to resume onboarding or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md)
+
+### Hire a specialist from Element
+
+Ask **@Task Manager** in Office to hire a specialist or send `hire release-editor Prepare release notes from verified changes` in **Agents → People → Hiring Manager**. Reply to the setup prompts to choose **ChatGPT Codex** or **ChatGPT Plan**, the connected account, the model, and reasoning effort. Open the encrypted proposal attachment and vote once. Hiring Manager starts the approved Docker services and reports when the new agent is ready for an Office assignment. [Hiring walkthrough](docs/team.md#hire-from-office)
 
 ### Finish Telegram setup
 

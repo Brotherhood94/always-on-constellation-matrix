@@ -78,7 +78,7 @@ async function readBounded(response, limit) {
 }
 
 export async function uploadAttachment(media, path) {
-  const { client, workspace, serverName, limit } = media;
+  const { workspace, limit } = media;
   const name = safeFilename(path);
   let data;
   try {
@@ -87,6 +87,12 @@ export async function uploadAttachment(media, path) {
     return { issue: error instanceof FileTooLarge ? sizeNotice(name, limit, error.size) :
       `Attachment refused: ${name} is not a readable regular file in the agent's workspace.` };
   }
+  return uploadAttachmentBytes(media, name, data);
+}
+
+export async function uploadAttachmentBytes({ client, serverName, limit }, filename, data) {
+  const name = safeFilename(filename);
+  if (!Buffer.isBuffer(data) || data.length > limit) return { issue: sizeNotice(name, limit, data?.length) };
   const { buffer, file } = await client.crypto.encryptMedia(data);
   try {
     const response = await mediaRequest(client, '/_matrix/media/v3/upload', buffer);

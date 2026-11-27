@@ -164,6 +164,7 @@ def layered_definition(host, details, runtime, *, local):
     # Tailnet Serve exposes the existing token-gated, TLS-pinned Instance endpoint.
     instance['ports'] = [f"127.0.0.1:{details['port']}:19443"]
     instance['environment']['AGENT_INSTANCE_CERTIFICATE_NAMES'] = json.dumps([runtime.engine, host])
+    managed = bool(details['entry'].get('hiring_provider'))
     for name, item in services.items():
         item.pop('profiles', None)
         item.pop('cgroup_parent', None)
@@ -177,7 +178,7 @@ def layered_definition(host, details, runtime, *, local):
             'AGENT_MOBILITY_GENERATION': details['generation'],
             'NODE_EXTRA_CA_CERTS': '/mobility/ca.pem',
         }.items():
-            if name != runtime.engine or key == TELEGRAM:
+            if name != runtime.engine or key == TELEGRAM or managed:
                 env[field] = value
         mounts = []
         for item_mount in item['volumes']:
@@ -186,10 +187,10 @@ def layered_definition(host, details, runtime, *, local):
                 item_mount = volume(runtime.desktop, place)
             elif place == '/context-token':
                 item_mount = volume(runtime.data / 'private/context-token', place, True)
-            elif place in ('/telegram-office', '/telegram-handoffs', '/run/office-roster.sock', '/roster-key'):
+            elif place in ('/telegram-office', '/telegram-handoffs', '/run/office-roster.sock', '/roster-key', '/hiring-agent'):
                 continue
             mounts.append(item_mount)
-        if name != runtime.engine or key == TELEGRAM:
+        if name != runtime.engine or key == TELEGRAM or managed:
             mounts.append(volume(runtime.data / 'private', '/mobility', True))
         if name == key and key in ('task-manager', 'manager') and settings['telegram']:
             env['TELEGRAM_OFFICE_SOCKET'] = 'role:telegram-office'

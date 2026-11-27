@@ -296,6 +296,30 @@ def relay(data, registry, host, request):
             http.close()
 
 
+def authorize_inference(registry, node, credential, message):
+    agent, generation = message.get('agent'), message.get('generation')
+    if not isinstance(agent, str) or not KEY.fullmatch(agent) or not isinstance(generation, str):
+        raise PermissionError('Invalid inference lease')
+    entry = registry['agents'].get(agent, {})
+    if not entry.get('hiring_provider') or entry.get('retirement'):
+        raise PermissionError('No managed inference grant')
+    host = entry.get('server')
+    rpc = entry.get('mobility_rpc', {})
+    if (rpc.get('node') == node and rpc.get('digest') == credential and
+            leased_agents(registry, host).get(agent) == generation):
+        return agent
+    # The authenticated destination may run its readiness probe once the source is fenced.
+    if entry.get('mobility_fenced'):
+        move = registry.get('relocations', {}).get(entry.get('mobility_move'), {})
+        for side in ('target', 'rollback_target'):
+            peer = move.get(side) or {}
+            host = move.get('destination' if side == 'target' else 'source')
+            if (peer.get('node') == node and peer.get('rpc_token') and secret_digest(peer['rpc_token']) == credential
+                    and staged_agents(registry, host).get(agent) == generation == peer.get('generation')):
+                return agent
+    raise PermissionError('The agent activation lease has ended')
+
+
 def serve(data):
     path = root(data)
     config = load(path / 'endpoint.json')
@@ -319,7 +343,7 @@ def serve(data):
             return json.loads(self.rfile.read(size))
 
         def call(self):
-            self.connection.settimeout(180)
+            self.connection.settimeout(380 if self.path == '/inference' else 180)
             value = self.headers.get('Authorization', '')
             if not value.startswith('Bearer ') or len(value) > 200:
                 raise PermissionError('Authentication required')
@@ -330,6 +354,25 @@ def serve(data):
                 with transport_lock(path):
                     enrolled = enrollment(path, credential, node, body.get('credential'))
                 self.json_reply(200, enrolled)
+                return
+            if self.command == 'POST' and self.path == '/inference':
+                from hiring import gateway
+                message = self.body()
+                registry = load(data / 'agents.json')
+                agent = authorize_inference(registry, node, credential, message)
+                allowed = ('catalog', 'request')
+                payload = {field: message[field] for field in allowed if field in message}
+                with gateway(data, {'action': 'inference', 'agent': agent, 'payload': payload}, timeout=380) as response:
+                    self.send_response(response.status)
+                    self.send_header('Content-Type', response.getheader('Content-Type'))
+                    self.send_header('Cache-Control', 'no-store')
+                    self.end_headers()
+                    try:
+                        for line in response:
+                            self.wfile.write(line)
+                            self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
                 return
             if self.command == 'POST' and self.path == '/rpc':
                 request = self.body()

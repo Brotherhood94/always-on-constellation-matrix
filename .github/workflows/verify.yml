@@ -20,9 +20,10 @@ jobs:
       - run: tests/compose-smoke
       - run: tests/desktop-sftp
       - run: docker build -t constellation-office-connector:0.22.17 agents/connector
+      - run: MATRIX_TEAM_DESKS_SMOKE=1 bash tests/synapse-smoke
       - run: |
           mkdir -p "$RUNNER_TEMP/matrix-topology"
-          MATRIX_OPERATIONS_SMOKE=1 MATRIX_HELPER_SMOKE=1 MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" tests/synapse-smoke
+          MATRIX_OPERATIONS_SMOKE=1 MATRIX_TEAM_DESKS_SMOKE=0 MATRIX_HELPER_SMOKE=1 MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" tests/synapse-smoke
       - run: bash integrations/root/tests/run
       - run: python3 -B integrations/root/tests/maintenance-docker
       - run: MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" bash integrations/context-execution/tests/isolated
@@ -42,5 +43,6 @@ jobs:
       - run: docker build --target amplifier-base -t constellation-amplifier-base:0.22.17 -f integrations/telegram/engine/Dockerfile .
       - run: docker build -t constellation-office-engine:0.22.17 -f agents/engine/Dockerfile .
       - run: bash tests/provider-setup-smoke
+      - run: bash tests/hiring-provider-smoke
       - run: docker build -t constellation-persona-workshop:0.7.4 integrations/chief-of-staff/persona
       - run: tests/workshop-smoke

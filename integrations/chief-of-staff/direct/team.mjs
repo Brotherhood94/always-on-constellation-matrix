@@ -6,6 +6,7 @@ import { acknowledgePrivateMessage, readOptional, sendEncrypted } from '../../..
 import { runTurn } from '../../../agents/connector/instance-acp.mjs';
 import { research } from '../../../agents/connector/team-tools.mjs';
 import { contextRequest } from './evidence.mjs';
+import { createHireConfiguration } from './hire-configuration.mjs';
 import { allowedHireKey, createRosterApproval, draftWorker, submit } from './roster-approval.mjs';
 import { createOfficeHiring } from './office-hiring.mjs';
 import { createStaffingReview, staffingExamples, staffingRoster } from './staffing-clusters.mjs';
@@ -97,7 +98,11 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
       db.prepare('UPDATE desk_followups SET done=1 WHERE id=?').run(op.change);
     }
   }
-  const approvals = createRosterApproval({db,client,room,owner,actor,checkDestination:audience,onApplied:scheduleFollowup,
+  const configuration = staffing && createHireConfiguration({ db,
+    access: hiring => submit({ actor, hiring }),
+    send: (id, content) => sendEncrypted(client, room, 'hiring-setup-' + id, content),
+  });
+  const approvals = createRosterApproval({db,client,room,owner,actor,checkDestination:audience,onApplied:scheduleFollowup,configuration,
     currentAgents:() => catalog.fresh() ? catalog.current().agents : null,
     configureCommand:process.env.ROSTER_CONFIGURE_COMMAND,
     describeRetirement: async target => {
@@ -107,7 +112,7 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
         'Open assignments: ' + (result.results.map(r => link(office,r.request)).join(' ') || 'none')].join('\n');
     }});
   const hiring = staffing && createOfficeHiring({
-    db, client, office, owner, planner, catalog, enabled, approvals, say, draft: draftWorker, allowedKey: allowedHireKey,
+    db, client, office, owner, planner, catalog, enabled, approvals, say, draft: draftWorker, allowedKey: allowedHireKey, configured: true,
     publish: (request, status, content) => sendEncrypted(client, office, 'hire-office-' + digest([request, status]), content),
     report: reportHire,
   });
@@ -200,7 +205,7 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
       const sources = (Array.isArray(job.evidence) ? job.evidence : []).map(e => link(office,e.request));
       return {message:[...(semantic ? ['Recurring duty across ' + sources.length + ' Office assignments: ' + job.topic] : []),
         decision.message, 'First assignment: ' + decision.first_task,...sources].join('\n'),
-        operation:{kind:'add',agent:decision.key,profile}};
+        operation:{kind:'add',agent:decision.key,profile,firstTask:decision.first_task}};
     }
     if (actor === 'coach') {
       if (job.mode === 'request' && /^undo\s+[\w-]+$/u.test(job.text)) {
@@ -287,7 +292,10 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
         await hiring?.tick();
         await audience();
         await inbox().catch(error => console.warn('Private desk inbox will retry:', error.code || error.name));
-        if (enabled) await approvals.tick();
+        if (enabled) {
+          await configuration?.reconnectTick();
+          await approvals.tick();
+        }
         await scan();
         if (!await processJob() && staffingBatch && catalog.fresh()) {
           const {examples, exact} = staffingBatch;

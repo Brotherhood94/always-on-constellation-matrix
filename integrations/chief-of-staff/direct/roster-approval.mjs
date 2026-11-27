@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
+import { hiringMarkdown } from './hire-configuration.mjs';
+import { uploadAttachmentBytes } from '../../../agents/connector/matrix-media.mjs';
 import { mentionMessage } from '../../../agents/connector/matrix-format.mjs';
 import { acknowledgePrivateMessage, sendEncrypted } from '../../../agents/connector/matrix-session.mjs';
 import { runTurn } from '../../../agents/connector/instance-acp.mjs';
@@ -15,7 +17,7 @@ const gapId = /^cos-gap-[a-f0-9]{64}$/u;
 const validKey = /^[a-z0-9][a-z0-9_-]{0,35}$/u;
 const protectedKeys = new Set(['manager', 'root', 'vps-manager', 'chief-of-staff', 'remote-worker', 'dot', 'monitor',
   'telegram-agent', 'telegrambot', 'roster-inviter', 'postgres', 'synapse', 'context', 'neo4j',
-  'persona-workshop', 'vps-manager-ops', 'helper-dm']);
+  'persona-workshop', 'vps-manager-ops', 'helper-dm', 'hiring-provider', 'helper']);
 
 const starterKeys = new Set(['task-manager','hiring-manager','coach','scouter','vps-manager','manager']);
 export const allowedHireKey = key => validKey.test(key) && !key.startsWith('engine-') && !key.startsWith('acp-') &&
@@ -112,7 +114,7 @@ export async function submit(payload) {
     socket.once('connect', () => socket.write(JSON.stringify({ ...payload, key }) + '\n'));
     socket.on('data', chunk => {
       output += chunk;
-      if (output.length > 4096) socket.destroy(new Error('Invalid roster response'));
+      if (output.length > 128_000) socket.destroy(new Error('Invalid roster response'));
     });
     socket.once('error', reject);
     socket.once('end', () => {
@@ -126,7 +128,7 @@ export async function submit(payload) {
 }
 
 export function createRosterApproval({ db, client, room, owner, checkDestination, currentAgents,
-  actor = 'chief-of-staff', describeRetirement, onApplied, draft = draftWorker, apply = submit, configureCommand = 'sudo ./constellation_matrix agent configure', now = Date.now }) {
+  actor = 'chief-of-staff', describeRetirement, onApplied, configuration, attachment = uploadAttachmentBytes, draft = draftWorker, apply = submit, configureCommand = 'sudo ./constellation_matrix agent configure', now = Date.now }) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS roster_requests (
       request TEXT PRIMARY KEY, operation TEXT NOT NULL, proposal TEXT, proposed INTEGER, poll TEXT UNIQUE,
@@ -153,6 +155,20 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
   async function accept(event, raw) {
     if (raw.sender !== owner || raw.type !== 'm.room.encrypted' || (raw.room_id && raw.room_id !== room) ||
         raw.unsigned?.redacted_because) return null;
+    if (configuration) {
+      await checkDestination();
+      const selection = await configuration.accept(event, raw);
+      if (selection !== null) return selection;
+      const resume = event.type === 'm.room.message' && event.content?.msgtype === 'm.text' &&
+        event.content['m.relates_to']?.rel_type !== 'm.replace' &&
+        /^resume hire ([a-z0-9][a-z0-9_-]{0,35})$/u.exec(event.content.body);
+      if (resume && allowedHireKey(resume[1])) {
+        const { profile } = await configuration.pending(resume[1]);
+        if (!profile) return 'Choose a worker previously approved for hiring that is still pending activation.';
+        enqueue(raw.event_id, { kind: 'add', agent: resume[1], profile, resume: true }, 'Review an existing pending hire.');
+        return '';
+      }
+    }
     const request = command(event);
     if (request && ['chief-of-staff', 'hiring-manager'].includes(actor)) {
       if (db.prepare('SELECT 1 FROM roster_requests WHERE request=?').get(raw.event_id)) {
@@ -175,7 +191,7 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
         let operation = { kind: request.kind, agent: request.key };
         if (request.kind === 'add') {
           try {
-            operation = { ...operation, profile: await draft(request.key, request.brief) };
+            operation = { ...operation, profile: await draft(request.key, request.brief), ...(configuration && {firstTask: request.brief, chooseTools: /\b(?:mcp|tools?|strument[oi]|web)\b/iu.test(request.brief)}) };
           } catch {
             return 'The hire profile could not be prepared. Try again with a short description of the new agent’s duties.';
           }
@@ -208,13 +224,33 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
     if (!row) return;
     update('UPDATE roster_requests SET next=? WHERE request=?', now() + 30_000, row.request);
     await checkDestination();
-    const operation = JSON.parse(row.operation);
+    let operation = JSON.parse(row.operation);
+    if (configuration && operation.kind === 'add' && !operation.provider && !row.proposal) {
+      const configured = await configuration.prepare(row, operation);
+      update('UPDATE roster_requests SET next=? WHERE request=?', now() + 3000, row.request);
+      if (!configured) return;
+      operation = configured;
+      row.operation = JSON.stringify(operation);
+      update('UPDATE roster_requests SET operation=? WHERE request=?', row.operation, row.request);
+    }
     const action = {add:'Hire', retire:'Retire', tool:'Enable tool for', coach:'Change protected contacts for', undo:'Restore contacts for'}[operation.kind];
     const target = action + ' ' + operation.agent;
     if (!row.proposal) {
       const content = operation.kind === 'add' ? JSON.stringify(operation.profile, null, 2) :
         operation.kind === 'retire' ? 'Finish accepted assignments, revoke access and archive the agent.' : JSON.stringify(operation, null, 2);
-      row.proposal = await say(row, 'proposal', [target, row.summary, content].filter(Boolean).join('\n\n'));
+      if (operation.provider) {
+        const document = Buffer.from(hiringMarkdown(operation, row.summary), 'utf8');
+        const exported = await attachment({ client, serverName: owner.split(':').slice(1).join(':'), limit: 32_768 },
+          operation.agent + '-proposal.md', document);
+        if (!exported.content) throw new Error('Unable to upload the encrypted hiring proposal.');
+        row.proposal = await sendEncrypted(client, room, 'roster-proposal-' + id(row), {
+          ...exported.content, 'm.mentions': { user_ids: [] }, 'm.relates_to': {
+            rel_type: 'm.thread', event_id: row.request, is_falling_back: true, 'm.in_reply_to': { event_id: row.request },
+          },
+        });
+      } else {
+        row.proposal = await say(row, 'proposal', [target, row.summary, content].filter(Boolean).join('\n\n'));
+      }
       row.proposed = (await client.getRawEvent(room, row.proposal)).origin_server_ts;
       update('UPDATE roster_requests SET proposal=?, proposed=? WHERE request=?', row.proposal, row.proposed, row.request);
     }
@@ -222,7 +258,10 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
     if (!row.poll && !expired) {
       const link = 'https://matrix.to/#/' + encodeURIComponent(room) + '/' + encodeURIComponent(row.proposal);
       const question = target + ' · Review the exact proposal before voting.\n' + link;
-      row.poll = await pollEvent(row, pollStart, { [pollText]: question, [pollStart]: {
+      row.poll = await pollEvent(row, pollStart, {
+        ...(operation.provider && {'m.relates_to': {rel_type: 'm.thread', event_id: row.request,
+          is_falling_back: true, 'm.in_reply_to': {event_id: row.proposal}}}),
+        [pollText]: question, [pollStart]: {
         kind: 'org.matrix.msc3381.poll.disclosed', max_selections: 1, question: { [pollText]: question },
         answers: ['approve', 'reject'].map((option, index) =>
           ({ id: choiceId(row, option), [pollText]: index ? 'Reject' : 'Accept' })),
@@ -248,6 +287,12 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
     const notifications = {
       declined: target + ' was declined.', expired: target + ' approval expired.',
       rejected: target + ' was blocked by the VPS. Check the worker ID or the current roster before trying again.',
+      active: operation.agent + ' is available in Office. The provider, tools, and workspace integrations are ready.',
+      activating: 'Approved ' + operation.agent + '. The roster broker is verifying its Docker services and Office readiness.',
+      provider_waiting: 'The approved connection is unavailable for ' + operation.agent +
+        '. Reconnect it in this chat with !hire reconnect ' + (operation.provider?.account ?? '') + '. The approved hire will resume.',
+      tools_waiting: 'A reviewed tool is unavailable for ' + operation.agent +
+        '. The hire will resume once the same approved tool is restored.',
       provisioned: 'Registered ' + operation.agent + '. Finish provider sign-in on the VPS:\n' + configureCommand + ' ' + operation.agent,
       draining: 'Retiring ' + operation.agent + '. It will finish accepted work before its access is revoked.',
       retired: 'Retired ' + operation.agent + '. Its private archive is available on the VPS.',
@@ -260,9 +305,15 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       retry: 'The VPS could not finish ' + target.toLowerCase() + ' yet. The approved operation will retry.',
     };
     if (!Object.hasOwn(notifications, status)) throw new Error('Unexpected roster result');
-    if (row.announced !== status) await say(row, status, notifications[status]);
+    if (row.announced !== status) {
+      if (operation.provider) await sendEncrypted(client, room, 'roster-' + status + '-' + id(row), {
+        ...mentionMessage(notifications[status]), 'm.relates_to': {rel_type: 'm.thread', event_id: row.request,
+          is_falling_back: true, 'm.in_reply_to': {event_id: row.proposal}},
+      });
+      else await say(row, status, notifications[status]);
+    }
     update('UPDATE roster_requests SET announced=?, done=? WHERE request=?', status,
-      Number(!['draining', 'retry', 'checking'].includes(status)), row.request);
+      Number(!['draining', 'retry', 'checking', 'activating', 'provider_waiting', 'tools_waiting'].includes(status)), row.request);
   }
 
   return { accept, tick, enqueue };

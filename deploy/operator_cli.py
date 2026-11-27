@@ -2,6 +2,7 @@
 from contextlib import contextmanager, nullcontext
 import json
 import os
+from grp import getgrnam
 from pwd import getpwuid
 from subprocess import SubprocessError
 from types import SimpleNamespace
@@ -17,7 +18,7 @@ from roster import enable_management
 from setup_guide import confirm_element, element_page, interactive_terminal
 
 
-HOST_ACTIONS = ('metadata', 'install', 'enroll', 'configure', 'finish', 'telegram-layout', 'layout', 'add-helper')
+HOST_ACTIONS = ('metadata', 'install', 'enroll', 'configure', 'finish', 'telegram-layout', 'layout', 'add-helper', 'docker-access')
 GUIDE_FIELDS = ('server_name', 'owner', 'tailscale', 'telegram', 'dot')
 SUDO_PASSWORD_NOTICE = 'If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt.'
 
@@ -80,23 +81,56 @@ def install_as_operator(data, args):
     )
     elevate(data, '_host', 'install', payload={'settings': settings, 'password': passphrase, 'graph_password': graph})
     if interactive_terminal():
+        operator_docker_access(data)
         setup_as_operator(data, passphrase=passphrase)
-        operator_docker_access()
     else:
         print(f'Continue setup with {workspace_command(data, elevated=False)} setup-guide')
 
 
-def operator_docker_access():
-    choice = choose_option('🐳 Docker access for your Linux login', {
-        'keep': 'Keep using sudo for manual Docker commands',
-        'show': 'Show the optional docker group setup (root-equivalent access)',
-    }, 'keep')
-    if choice == 'show':
-        from shlex import quote
-        account = quote(getpwuid(os.getuid()).pw_name)
-        print('The docker group gives this Linux account root-equivalent access. This is optional for VPS Manager.')
-        print(f'  sudo usermod -aG docker {account}')
-        print('Open a new SSH session and verify the group change with docker info.')
+def docker_access_state():
+    try:
+        run('docker', '--host', 'unix:///var/run/docker.sock', 'info', '--format', '{{.ServerVersion}}', capture_output=True, timeout=10)
+        return 'available'
+    except (SubprocessError, OSError):
+        pass
+    account = getpwuid(os.getuid())
+    try:
+        group = getgrnam('docker')
+    except KeyError:
+        return 'missing'
+    if group.gr_gid in os.getgroups() or group.gr_gid == os.getgid():
+        return 'unavailable'
+    return 'reconnect' if group.gr_gid == account.pw_gid or account.pw_name in group.gr_mem else 'missing'
+
+
+def operator_docker_access(data):
+    state = docker_access_state()
+    if state == 'available':
+        return
+    if state == 'unavailable':
+        print('Your shell has Docker group access. Check that the Docker daemon and CLI context are available.')
+        return
+    if state == 'missing':
+        print('The docker group gives your Linux account root-equivalent access for manual Docker commands.')
+        choice = choose_option('🐳 Docker access for your Linux login', {
+            'keep': 'Keep using sudo for manual Docker commands',
+            'add': 'Add my Linux account to the docker group',
+        }, 'keep')
+        if choice == 'keep':
+            return
+        print('Authorizing a Linux group membership change. ' + SUDO_PASSWORD_NOTICE, flush=True)
+        elevate(data, '_host', 'docker-access')
+    print('Reconnect over SSH to apply Docker group membership, then verify with docker info.')
+
+
+def add_operator_to_docker_group():
+    uid = os.environ.get('SUDO_UID', '')
+    if os.geteuid() != 0 or not uid.isdecimal() or int(uid) == 0:
+        raise ValueError('Run Docker group setup from your non-root Linux account.')
+    account = getpwuid(int(uid))
+    group = getgrnam('docker')
+    if group.gr_gid != account.pw_gid and account.pw_name not in group.gr_mem:
+        run('/usr/sbin/usermod', '-aG', 'docker', '--', account.pw_name)
 
 
 def print_guide(data, *, root=False):
@@ -227,6 +261,9 @@ def add_helper_as_operator(data, args):
 
 
 def execute_host(data, args):
+    if args.action == 'docker-access':
+        add_operator_to_docker_group()
+        return
     try:
         if args.action in {'install', 'enroll', 'telegram-layout', 'layout', 'add-helper'}:
             payload = json.load(sys.stdin)

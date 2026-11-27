@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+root=$(cd -- "$(dirname -- "$0")/.." && pwd)
+docker run --rm -i --network none --add-host hiring-provider:127.0.0.1 --read-only --tmpfs /tmp \
+  --tmpfs /instance:uid=991,gid=991,mode=0700 --tmpfs /hiring-agent:uid=991,gid=991,mode=0700 \
+  --tmpfs /workspace:uid=991,gid=991,mode=0700 \
+  -v "$root/agents/engine/hiring_gateway.py:/opt/office/hiring_gateway.py:ro" \
+  -v "$root/agents/engine/amplifier_module_provider_constellation_hiring:/opt/amplifier-acp/.venv/lib/python3.13/site-packages/amplifier_module_provider_constellation_hiring:ro" \
+  -v "$root/agents/engine/connect-plan.py.lock:/opt/office/connect-plan.py.lock:ro" \
+  -v "$root/agents/engine/launch-plan.sh:/opt/office/launch-plan.sh:ro" \
+  -e PYTHONPATH=/opt/office --entrypoint /opt/amplifier-acp/.venv/bin/python \
+  "${OFFICE_ENGINE_TEST_IMAGE:-constellation-office-engine:0.22.17}" -B - <"$root/tests/hiring-provider-fixture.py"

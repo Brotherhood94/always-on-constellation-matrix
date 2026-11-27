@@ -45,6 +45,9 @@ export async function verifyStaffingHandoff({ read, request, handoff, thread, ma
 
 const messages = {
   preparing: key => `Hiring Manager is preparing the private proposal for ${key}.`,
+  configuring: key => `Choose the Amplifier connection for ${key} in Agents → People → Hiring Manager.`,
+  provider_waiting: key => `The approved provider for ${key} needs attention in Agents → People → Hiring Manager.`,
+  tools_waiting: key => `The approved tool for ${key} is unavailable. Hiring Manager will retry verification.`,
   awaiting_approval: key => `The proposal for ${key} is awaiting your vote in Agents → People → Hiring Manager.`,
   provisioning: key => `The hire for ${key} was approved. Registration is in progress.`,
   provider_required: key => `Registered ${key}. Complete Amplifier provider setup on the VPS with ./constellation_matrix agent configure ${key}.`,
