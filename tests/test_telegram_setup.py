@@ -63,6 +63,20 @@ class TelegramSetupTest(unittest.TestCase):
             self.assertEqual(len(prepared), 1)
             self.assertFalse(prepared[0].exists())
             self.assertNotIn(digest, output.getvalue())
+            self.assertIn('~/telegram-api.json', output.getvalue())
+            self.assertIn('--api-file /path/to/telegram-api.json', output.getvalue())
+
+    def test_setup_reuses_the_mounted_operator_file_without_prompting(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            file = data / 'telegram-api.json'
+            file.touch(mode=0o600)
+            with patch.dict('os.environ', {'CONSTELLATION_RUNTIME': 'compose',
+                                           'CONSTELLATION_TELEGRAM_API_FILE': str(file)}):
+                output, actions, _, prompts = self.run_setup(data, ['credentials', 'ready', ''])
+            self.assertEqual(actions, [call(data, ['prepare', str(file)])])
+            self.assertEqual(prompts, 0)
+            self.assertIn('~/telegram-api.json', output)
 
     def test_qr_can_pause_and_requires_confirmed_login_to_continue(self):
         data = Path('/srv/isolated-fixture')

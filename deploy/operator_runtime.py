@@ -75,6 +75,19 @@ def inputs(args, data):
             and not path.is_relative_to(SOURCE)}
 
 
+def telegram_setup_file(args):
+    if args[0] == '--data-dir':
+        args = args[2:]
+    elif args[0].startswith('--data-dir='):
+        args = args[1:]
+    if args[:1] not in (['install'], ['setup-guide']) and args[:2] != ['telegram', 'setup']:
+        return None
+    if any(value.split('=', 1)[0] in {'--config', '--api-file', '--print', '--help', '-h'} for value in args):
+        return None
+    path = Path.home() / 'telegram-api.json'
+    return path if path.is_file() and not path.is_symlink() else None
+
+
 def main():
     args = sys.argv[1:]
     if not args or args in (['-h'], ['--help']) or args[0] == 'validate':
@@ -96,7 +109,11 @@ def main():
                 command.extend(['-e', key + '=' + os.environ[key]])
         if sys.stdin.isatty() and sys.stdout.isatty():
             command.append('-t')
-        for path, readonly in [(SOURCE, True), (data.parent, False), (SOCKET, False), *inputs(args, data).items()]:
+        mounts = inputs(args, data)
+        if credential_file := telegram_setup_file(args):
+            mounts[credential_file] = True
+            command.extend(['-e', f'CONSTELLATION_TELEGRAM_API_FILE={credential_file}'])
+        for path, readonly in [(SOURCE, True), (data.parent, False), (SOCKET, False), *mounts.items()]:
             command.extend(mount(path, readonly=readonly))
         tailscale = shutil.which('tailscale')
         socket = Path('/var/run/tailscale/tailscaled.sock')

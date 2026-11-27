@@ -48,14 +48,21 @@ def setup(data, arguments=(), *, install_agent=True, owner_passphrase=None):
             if stage == 'credentials':
                 path = args.api_file
                 if path is None:
-                    sudo_user = os.environ.get('SUDO_USER')
-                    home = Path(getpwnam(sudo_user).pw_dir) if sudo_user else Path.home()
-                    default = home / 'telegram-api.json'
-                    if default.is_file():
-                        path = default
-                        print('Using the existing private Telegram API credentials file.')
+                    if os.environ.get('CONSTELLATION_RUNTIME') == 'compose':
+                        mounted = os.environ.get('CONSTELLATION_TELEGRAM_API_FILE')
+                        default = Path(mounted) if mounted else None
                     else:
-                        print('Open https://my.telegram.org/apps and copy App api_id and App api_hash.', flush=True)
+                        sudo_user = os.environ.get('SUDO_USER')
+                        home = Path(getpwnam(sudo_user).pw_dir) if sudo_user else Path.home()
+                        default = home / 'telegram-api.json'
+                    if default and default.is_file():
+                        path = default
+                        print('Using the private ~/telegram-api.json file from the VPS.')
+                    else:
+                        print('Open https://my.telegram.org/apps and copy App api_id and App api_hash.\n'
+                              'You can enter them below or save them in a private ~/telegram-api.json on the VPS (mode 0600).\n'
+                              'If you have a file, press Ctrl+C and resume with:\n'
+                              f'  {command} --api-file /path/to/telegram-api.json', flush=True)
                         try:
                             api_id = int(input('Telegram App api_id: ').strip())
                         except ValueError as error:

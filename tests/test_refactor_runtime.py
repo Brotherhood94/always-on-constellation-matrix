@@ -10,11 +10,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy'))
 from auto_tune import policy, propose
 from deployment_snapshot import publish
 from operation_timing import record
+from operator_runtime import main as operator_main
 from shared_provider import configure_team
 from twin import validate
 
 
 class RefactorTest(unittest.TestCase):
+    def test_operator_runtime_mounts_the_home_telegram_file_read_only_for_setup(self):
+        with TemporaryDirectory() as directory:
+            home = Path(directory)
+            file = home / 'telegram-api.json'
+            secret = 'a' * 32
+            file.write_text(json.dumps({'api_id': 1234, 'api_hash': secret}))
+            file.chmod(0o600)
+            data = home / 'state' / 'workspace'
+            for command, expected in ((['install'], True), (['setup-guide'], True),
+                                      (['telegram', 'setup'], True), (['setup-guide', '--print'], False),
+                                      (['telegram', 'setup', '--api-file', str(home / 'other.json')], False),
+                                      (['status'], False)):
+                with self.subTest(command=command), patch('operator_runtime.preflight'), \
+                        patch('operator_runtime.Path.home', return_value=home), \
+                        patch('operator_runtime.subprocess.run') as run, \
+                        patch('operator_runtime.os.execvp') as launch, \
+                        patch.object(sys, 'argv', ['constellation_matrix', '--data-dir', str(data), *command]):
+                    run.return_value.returncode = 0
+                    operator_main()
+                argv = launch.call_args.args[1]
+                self.assertEqual('CONSTELLATION_TELEGRAM_API_FILE=' + str(file) in argv, expected)
+                self.assertEqual(f'type=bind,source={file},target={file},readonly' in argv, expected)
+                self.assertNotIn(secret, ' '.join(argv))
+
     def test_default_provider_profile_is_reused_and_resume_does_not_prompt_again(self):
         profile = {'account': 'a' * 24, 'mode': 'chatgpt_codex', 'model': 'fixture-model', 'effort': 'low'}
         with TemporaryDirectory() as directory, patch('shared_provider.catalog', return_value=profile) as catalog, \

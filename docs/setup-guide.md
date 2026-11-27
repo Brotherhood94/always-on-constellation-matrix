@@ -31,6 +31,8 @@ Control Room publishes its pins after you join and Element registers your first 
 
 When Telegram is enabled, the installer registers **Telegram Agent** in Office and includes it in the numbered provider setup. Complete bridge credentials and QR sign-in after the Element page. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.
 
+The terminal can reuse a private `~/telegram-api.json` on the VPS with mode `0600`. You can also enter the App api_id and masked App api_hash at the prompt. If your file is in another directory, append `--api-file /path/to/telegram-api.json` to the resume command.
+
 If you closed the installer, resume the Telegram step on its own.
 
 ```sh
