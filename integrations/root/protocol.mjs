@@ -123,11 +123,11 @@ function reviewLine(text) {
 
 function reviewedPlan(answer) {
   const { plan } = answer;
-  if (!plan || !['shell', 'inspect-file', 'replace-file'].includes(plan.kind)) {
-    throw new ProposalError('Specify a shell, inspect-file or replace-file maintenance plan.');
+  if (!plan || !['shell', 'inspect-file', 'replace-file', 'telegram-diagnostics'].includes(plan.kind)) {
+    throw new ProposalError('Specify a shell, inspect-file, replace-file or telegram-diagnostics maintenance plan.');
   }
   const exact = { kind: plan.kind };
-  if (plan.kind !== 'shell') {
+  if (['inspect-file', 'replace-file'].includes(plan.kind)) {
     if (typeof plan.path !== 'string' || plan.path.length > 512 || !/^\/[A-Za-z0-9_./@+=-]+$/u.test(plan.path)) {
       throw new ProposalError('Specify one absolute file path.');
     }
@@ -159,6 +159,20 @@ function reviewedPlan(answer) {
     details: { impact, verification, recovery } };
 }
 
+export function telegramDiagnosticProposal(text) {
+  const request = text.toLowerCase();
+  // Older Office requests can identify Telegram through its bridge, binding and draft terminology.
+  if (!/\b(?:diagnosi|diagnostica|diagnose|diagnostics|troubleshoot)\b/u.test(request) ||
+      !(/\btelegram\b/u.test(request) || ['bridge', 'binding', 'bozza'].every(word => request.includes(word)))) return null;
+  return reviewedPlan({
+    plan: { kind: 'telegram-diagnostics' },
+    summary: 'Diagnose Telegram services on the VPS.',
+    impact: 'Reads local Docker service status and counts known signals in recent Telegram logs.',
+    verification: 'The private receipt reports service health and diagnostic signal counts.',
+    recovery: 'If evidence points to a fault, request a separate review for the repair.',
+  });
+}
+
 export function reviewBody(task) {
   if (task.operation === maintenanceReleaseOperation) {
     const release = JSON.parse(task.command);
@@ -172,6 +186,11 @@ export function reviewBody(task) {
   if (task.operation !== reviewedPlanOperation) return task.command;
   const plan = JSON.parse(task.command);
   if (plan.kind === 'shell') return 'Apply\n' + plan.script + '\n\nVerify\n' + plan.verify;
+  if (plan.kind === 'telegram-diagnostics') return [
+    'List the Telegram bridge, guide, connector and engine containers for this deployment.',
+    'Check the local status and health. Inspect up to 100 recent log lines per service from the last 30 minutes.',
+    'Return only service status and counts for recognized diagnostic signals. No messages are sent to Telegram.',
+  ].join('\n');
   if (plan.kind === 'inspect-file') return 'Inspect regular file\n' + plan.path + '\nReturn a bounded redacted preview.';
   return 'Replace ' + plan.path + '\n' +
     'Remove exact text: ' + JSON.stringify(plan.before) + '\n' +

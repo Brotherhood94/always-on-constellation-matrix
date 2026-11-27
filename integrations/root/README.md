@@ -13,9 +13,16 @@ VPS Manager prepares the proposal in its own Amplifier Instance. A separate host
 | Inspect one file | The canonical absolute path. The private result contains a SHA-256 fingerprint and a bounded, redacted text preview. |
 | Replace one file | The exact previous and replacement text, plus a separate verification command. The broker checks the previous bytes, saves the original privately, and replaces the file atomically. On verification failure it restores the original if the replacement still matches. |
 | Release a repository patch | The tested diff, its SHA-256, the current and proposed revisions, and the local connectors to update. |
+| Diagnose Telegram | A read-only check of the bridge, guide, connector and local engine. The private result shows Docker status and counts of recognized signals in recent logs. |
 | Run a host script | The exact Bash script and separate verification script. Both run as root. Review the proposal’s recovery instructions before approval. |
 
 Keep credentials out of Office messages and proposal text. For an edit based on a completed inspection, refer to `operation <id>` in a new mention in the same Office thread. VPS Manager can use the approved private preview when drafting the next proposal. Changes to credentials should reference host-protected files rather than copying their contents into Matrix.
+
+## Diagnose a blocked Telegram draft
+
+1. In the original **Office** thread, mention **VPS Manager** and ask “Diagnose Telegram.” In **Root Operations**, vote **Accept** on the read-only check.
+2. Read the private findings for service health and signs of authentication, binding, recipient lookup or connectivity errors. If the engine has moved, check its worker as well. An empty log summary leaves the recipient and binding unverified.
+3. If the findings show a host fault, reply in the same Office thread with `operation <id>` and ask VPS Manager to propose the specific repair. Review that repair in a new poll. Afterward, ask Task Manager to prepare a fresh Telegram draft. Leave the Telegram Bridge delivery poll untouched if you only want to test drafting.
 
 ## Repository maintenance and automatic recovery
 

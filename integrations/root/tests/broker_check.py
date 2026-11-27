@@ -1,8 +1,10 @@
 import json
 from copy import deepcopy
 from pathlib import Path
+from subprocess import CompletedProcess
 import sys
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from broker import WINDOW, database, execute_plan, execute_script, handle, sha, verify_matrix_receipt
 
@@ -129,6 +131,35 @@ with TemporaryDirectory() as directory:
         return ('completed', 0) if len(calls) == 1 else ('failed', 1)
     assert execute_plan(plan, home, 'verified-shell', run_script=run_step) == ('verification_failed', 1, None)
     assert calls == ['printf fixture', 'test -f expected']
+
+with TemporaryDirectory() as directory:
+    deployment = Path(directory)
+    state = deployment / 'state/vps-manager/execution'
+    state.mkdir(parents=True)
+    (deployment / 'settings.json').write_text(json.dumps({'project': 'isolated-fixture', 'telegram': True}))
+    (deployment / 'telegram').mkdir()
+    (deployment / 'telegram/engine-moved').touch()
+    bridge = 'a' * 12
+    connector = 'b' * 12
+    listing = f'{bridge}\ttelegram-bridge\trunning\tUp 2 hours (healthy)\n{connector}\tconnector\texited\tExited (1)'
+    responses = [CompletedProcess([], 0, listing, ''),
+                 CompletedProcess([], 0, 'USERNAME_NOT_OCCUPIED fixture-private-contact', ''),
+                 CompletedProcess([], 0, '', 'One Telegram backend turn failed. Its binding was paused. fixture-secret')]
+    with patch('broker.require_root_file'), patch('broker.subprocess.run', side_effect=responses) as docker:
+        raw = json.dumps({'kind': 'telegram-diagnostics'})
+        status, code, result = execute_plan(raw, state, 'telegram')
+        assert (status, code) == ('completed', 0)
+        assert 'Telegram Bridge: running (healthy)' in result['findings']
+        assert 'recipient lookup (1)' in result['findings']
+        assert 'Connector: exited' in result['findings']
+        assert 'binding (1)' in result['findings']
+        assert 'Engine: managed on a worker' in result['findings']
+        assert 'fixture-' not in result['findings']
+        assert docker.call_count == 3
+        assert 'label=com.docker.compose.project=isolated-fixture-telegram' in docker.call_args_list[0].args[0]
+        assert docker.call_args_list[1].args[0] == ['/usr/bin/docker', 'logs', '--since', '30m', '--tail', '100', bridge]
+    rejects(lambda: execute_plan(json.dumps({'kind': 'telegram-diagnostics', 'script': 'id'}), state, 'bad'),
+            'Invalid reviewed plan.')
 
 print('Broker verified owner approval, exact edits, redaction, replay, rejection, expiry and crash recovery.')
 if sys.platform == 'linux':

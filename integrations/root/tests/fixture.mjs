@@ -89,8 +89,11 @@ const sockets = createServer(socket => {
           [{id:'fixture-recovery',service:'coder',time:1780000000,reason:'unhealthy',status:'healthy'}] : []};
       } else {
         accepted.push(value);
-        result = value.operation === 'maintenance-release' ? {outcome:'completed',result:{revision:release.revision}} :
-          {outcome:value.action === 'approve' ? 'failed' : 'denied', exit_code:value.action === 'approve' ? 41 : null};
+        if (value.operation === 'maintenance-release') result = {outcome:'completed',result:{revision:release.revision}};
+        else if (value.plan && JSON.parse(value.plan).kind === 'telegram-diagnostics') {
+          result = value.action === 'approve' ? {outcome:'completed', exit_code:0,
+            result:{findings:'Telegram Bridge: running (healthy)\nFixture diagnostic signals (1)'}} : {outcome:'denied'};
+        } else result = {outcome:value.action === 'approve' ? 'failed' : 'denied', exit_code:value.action === 'approve' ? 41 : null};
       }
       socket.end(JSON.stringify(result) + '\n');
     }
@@ -266,6 +269,35 @@ try {
   assert.deepEqual(JSON.parse(accepted[3].plan), release);
   await waitFor(() => database.prepare('SELECT id FROM maintenance_notices WHERE id=?').get('fixture-recovery'));
   console.log('The tested release diff reached the encrypted poll and its exact approval. Autonomous recovery added a separate audit notice.');
+
+  const diagnostic = await sendEncrypted(reader, agents, 'fixture-telegram-diagnostics', mentionMessage(
+    'Diagnostica il blocco. Parti dallo stato dei servizi e dai log, e individua se il problema è nel destinatario, nel binding o nel bridge. ' +
+    'Se trovi un guasto sul VPS, proponi la correzione minima in Root Operations, con verifica e ripristino. Dopo l’approvazione, ripeti soltanto la prova della bozza.',
+    {id: root.user_id, name: 'VPS Manager'}));
+  const check = await waitFor(() => {
+    const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(diagnostic);
+    assert.equal(task?.outcome ?? null, null, task?.summary);
+    return task?.poll_event && task;
+  });
+  assert.deepEqual(JSON.parse(check.command), {kind:'telegram-diagnostics'});
+  assert.equal(accepted.length, 4);
+  await timeline();
+  const diagnosticReview = await reader.getEvent(audit, check.proposal_event);
+  assert.match(diagnosticReview.content.body, /100 recent log lines per service/u);
+  const diagnosticPoll = await reader.getEvent(audit, check.poll_event);
+  const diagnosticVote = await castVote('fixture-telegram-diagnostics-accept', check.poll_event, diagnosticPoll.content[pollStart].answers[0].id);
+  const checked = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE id=? AND source_notified=1').get(check.id));
+  assert.equal(checked.outcome, 'completed');
+  assert.equal(checked.decision, diagnosticVote);
+  assert.equal(accepted[4].plan, check.command);
+  await timeline();
+  const findings = await reader.getEvent(audit, checked.audit_event);
+  assert.match(findings.content.body, /Telegram Bridge: running \(healthy\)/u);
+  const officeReceipt = await reader.getEvent(agents, checked.source_reply);
+  assert.ok(officeReceipt.content.body.includes(encodeURIComponent(checked.audit_event)));
+  assert.doesNotMatch(officeReceipt.content.body, /Fixture diagnostic signals/u);
+  console.log('Telegram diagnosis uses a fixed approved check and sends the findings only to Root Operations.');
+
 } catch (error) {
   console.error(error);
   process.exitCode = 1;

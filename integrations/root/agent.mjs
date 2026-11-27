@@ -15,7 +15,7 @@ import { readEncryptedRoomMessage } from '../../agents/connector/matrix-session.
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from '../../agents/connector/context.mjs';
 import { agentTurnKey, auditRecord, digest, eventId, executionCause, resultHandoff,
   maintenanceProposal, maintenanceReleaseOperation, matrixLink, pollChoice, pollDecision, pollEnd, pollStart, pollText, pollVote, privateReview, proposal, requestText,
-  ProposalError, repositoryIntent, reviewedPlanOperation, reviewedScriptOperation, reviewBody, reviewWindow, sourceTurn, submittedProposal } from './protocol.mjs';
+  ProposalError, repositoryIntent, reviewedPlanOperation, reviewedScriptOperation, reviewBody, reviewWindow, sourceTurn, submittedProposal, telegramDiagnosticProposal } from './protocol.mjs';
 
 const state = '/state';
 const readiness = state + '/synced';
@@ -59,9 +59,10 @@ const instructions = `You are VPS Manager, a planner for administration on ${pro
     'return exactly {"operation":"prepare-repository-change"}. You will receive a writable draft in a separate turn. ' : '') +
   'Return one JSON object. If a fixed command exactly matches the requested task, give operation and summary. ' +
   'Otherwise use operation="reviewed-plan" with summary, impact, verification, recovery and a plan object. ' +
+  'For a Telegram bridge or connector diagnostic, use plan={"kind":"telegram-diagnostics"}. ' +
   'Plan kinds are {"kind":"inspect-file","path":"/absolute/path"}, {"kind":"replace-file","path":"/absolute/path","before":"exact current text","after":"exact updated text","verify":"Bash check"}, ' +
   'or {"kind":"shell","script":"exact Bash commands","verify":"separate Bash check of the result"}. ' +
-  'Keep summary, impact, verification and recovery to at most 220 characters each. Never infer file contents. ' +
+  'Use ASCII for Bash commands and checks. Keep summary, impact, verification and recovery to at most 220 characters each. Never infer file contents. ' +
   'Describe the scope and effects in plain text. Use absolute paths and verify prerequisites before making changes. ' +
   'Include the body of any new script that will run with privileges. Identify existing tools and input artifacts; pin the version or checksum of deployment artifacts. ' +
   'Keep credentials and private output out of the proposal. If the request is ambiguous or cannot be safely planned, ' +
@@ -241,7 +242,7 @@ const proposalFailureCauses = {
 async function planNext(task) {
   let stage = 'proposal-format';
   try {
-    let result = submittedProposal(task.body);
+    let result = submittedProposal(task.body) ?? telegramDiagnosticProposal(task.body);
     if (!result) {
       stage = 'planner-turn';
       const reference = task.sender === owner && /\boperation ([a-f0-9]{32})\b/iu.exec(task.body)?.[1];
@@ -351,7 +352,7 @@ async function deliverProposal(task) {
   ].filter(([, value]) => value);
   const plainFields = fields.map(([label, value]) => `${label} · ${value}`).join('\n');
   const richFields = fields.map(([label, value]) => `<strong>${label}</strong> · ${html(value)}`).join('<br>');
-  const review = 'Review the exact change, then vote Accept or Reject in the poll. The first authorized vote is final.';
+  const review = 'Review the exact operation, then vote Accept or Reject in the poll. The first authorized vote is final.';
   const expiry = 'Approval expires at ' + new Date(task.expires).toISOString();
   const title = 'VPS Manager approval requested';
   const reviewed = reviewBody(task);
@@ -359,7 +360,7 @@ async function deliverProposal(task) {
   const body = `${contact} ${title}\n${plainFields}\n${link}\n\n${reviewed}\n\n${review}\n${expiry}\n${details}`;
   const formatted = `<a href="${contactLink}">${html(contact)}</a> <strong>${title}</strong><br>` +
     `${richFields}<br><a href="${link}">Source request</a><pre><code>${html(reviewed)}</code></pre>` +
-    `Review the exact change, then vote <strong>Accept</strong> or <strong>Reject</strong> in the poll.<br>` +
+    `Review the exact operation, then vote <strong>Accept</strong> or <strong>Reject</strong> in the poll.<br>` +
     `The first authorized vote is final.<br>${expiry}<br>Operation <code>${task.id}</code><br>SHA-256 <code>${task.hash}</code>`;
   const transaction = 'proposal:' + task.id;
   db.prepare('INSERT OR IGNORE INTO review_polls (id,proposal_transaction) VALUES (?,?)').run(task.id, digest(transaction));
@@ -380,7 +381,7 @@ async function publishPoll(task) {
   db.prepare('INSERT OR IGNORE INTO review_polls (id,proposal_transaction) VALUES (?,?)')
     .run(task.id, digest('proposal:' + task.id));
   const { impact } = JSON.parse(task.review_details);
-  const question = `${task.summary}\n${impact}\nHost: ${host} · Review the exact script or fixed command before voting.\n` +
+  const question = `${task.summary}\n${impact}\nHost: ${host} · Review the exact operation before voting.\n` +
     `SHA-256 ${task.hash}\n${matrixLink(audit, task.proposal_event)}`;
   const event = await sendPollEvent(pollStart, 'root-review-' + task.id, {
     [pollText]: question,
@@ -422,9 +423,10 @@ async function deliverAudit(task) {
     ['File SHA-256', result?.sha256],
     ['Release revision', result?.revision],
     ['Redacted preview', result?.preview],
+    ['Telegram diagnostics', result?.findings],
   ].filter(([, value]) => value);
   const body = fields.map(([label, value]) => `${label} · ${value}`).join('\n');
-  const formatted = fields.map(([label, value]) => `<strong>${label}</strong> · ${html(value)}`).join('<br>');
+  const formatted = fields.map(([label, value]) => `<strong>${label}</strong> · ${html(value).replaceAll('\n', '<br>')}`).join('<br>');
   const linkLabel = task.proposal_event ? 'Review details' : 'Source request';
   const event = await say('audit:' + task.id, `${decision}${actor}\n${body}\nOperation ${task.id}\n${link}`,
     `<strong>${html(decision)}</strong>${html(actor)}<br>${formatted}<br>` +
@@ -456,6 +458,7 @@ async function deliverSourceOutcome(task) {
   const cause = ['not_proposed', 'proposal_failed', 'failed'].includes(task.outcome)
     ? 'See the private Root Operations receipt for details.' : executionCause(task);
   const status = outcome + exit;
+  const receipt = task.audit_event && matrixLink(audit, task.audit_event);
   const reference = `Operation ${task.id}.`;
   const handoff = resultHandoff(config, task, JSON.parse(task.source_turn ?? 'null'));
   const recipients = handoff ? [handoff.recipient] : [...new Set([owner, task.sender])];
@@ -467,10 +470,10 @@ async function deliverSourceOutcome(task) {
     ? { status: 'completed', result: status, verification: 'The approved host check passed.', evidence: [task.audit_event] }
     : { status: 'blocked', blocker: status, unblocker: 'The operator', action: 'Review the private Root Operations receipt.' });
   const event = await sendEncrypted(client, agents, digest('source-outcome:' + task.id), {
-    msgtype: 'm.text', body: [`${names.join(' ')} ${status}`, cause && `Cause · ${cause}`, recovery, reference, task.proposal_event && matrixLink(audit, task.proposal_event)].filter(Boolean).join('\n'),
+    msgtype: 'm.text', body: [`${names.join(' ')} ${status}`, cause && `Cause · ${cause}`, recovery, reference, receipt].filter(Boolean).join('\n'),
     format: 'org.matrix.custom.html', formatted_body: [`${mentions} ${html(status)}`,
-      cause && `<strong>Cause</strong> · ${html(cause)}`, html(recovery), html(reference), task.proposal_event &&
-        `<a href="${matrixLink(audit, task.proposal_event)}">Root Operations review</a>`].filter(Boolean).join('<br>'),
+      cause && `<strong>Cause</strong> · ${html(cause)}`, html(recovery), html(reference), receipt &&
+        `<a href="${receipt}">Root Operations receipt</a>`].filter(Boolean).join('<br>'),
     'm.mentions': { user_ids: recipients },
     ...(handoff?.turn && { [agentTurnKey]: { ...handoff.turn, returning: true } }),
     ...(terminal && { [taskOutcomeKey]: terminal, [agentTurnKey]: { request: task.event, number: 1 } }),
