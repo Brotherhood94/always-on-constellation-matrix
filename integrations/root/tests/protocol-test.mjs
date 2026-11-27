@@ -58,3 +58,12 @@ assert.throws(() => protocol.proposal(JSON.stringify({operation:'reviewed-plan',
 assert.throws(() => protocol.proposal(JSON.stringify({operation:'reviewed-plan',
   plan:{kind:'inspect-services', target:'/etc/passwd'}}), {}), /one service ID/);
 console.log('Planner formatting, exact script bytes, safe format errors and Manager receipts passed.');
+
+const selection = protocol.twinRequest('twin create ' + 'a'.repeat(24) + ' fixture-model low helper,coach:fixture-other:high');
+assert.deepEqual(selection.overrides, { coach: { model: 'fixture-other', effort: 'high' } });
+assert.equal(selection.minutes, 120);
+const twin = protocol.twinProposal(selection, 'b'.repeat(64));
+assert.equal(protocol.digest(twin.command), twin.hash);
+assert.match(protocol.reviewBody(twin), /coach · fixture-other · high/u);
+assert.deepEqual(protocol.twinRequest('start a digital twin'), { action: 'choices' });
+assert.throws(() => protocol.twinRequest('twin create ' + 'a'.repeat(24) + ' fixture-model low helper 500'));

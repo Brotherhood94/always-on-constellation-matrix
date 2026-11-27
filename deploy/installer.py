@@ -30,7 +30,10 @@ from configure import write_config
 from layout import CLIENT, create_layout, direct_room, invite, join, login, encoded
 from provision import MatrixError, request
 
-DATA = Path('/srv/constellation-matrix')
+from operator_runtime import default_data
+
+COMPOSE_RUNTIME = os.environ.get('CONSTELLATION_RUNTIME') == 'compose'
+DATA = default_data() if COMPOSE_RUNTIME else Path('/srv/constellation-matrix')
 PRESETS = SOURCE / 'deploy/matrix/agent-profiles.json'
 SERVER = re.compile(r'(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+')
 OWNER = re.compile(r'[a-z0-9][a-z0-9._-]{0,63}')
@@ -39,7 +42,7 @@ PROJECT = re.compile(r'[a-z][a-z0-9-]{0,38}')
 RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
-            'telegram-agent', 'telegrambot', 'hiring-provider', 'roster-inviter', 'root', 'vps-manager-ops', 'helper-dm'}
+            'telegram-agent', 'telegrambot', 'hiring-provider', 'roster-inviter', 'root', 'the-architect-ops', 'helper-dm'}
 TELEGRAM_AGENT = 'telegram-agent'
 LEGACY_CONNECTION = 'chatgpt-codex'
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
@@ -140,6 +143,10 @@ def normalized(raw, presets):
         raise ValueError('Use standard Docker Engine for this deployment')
     settings = {**PORTS, 'project': 'constellation-matrix', 'tailscale': True, 'systemd': True,
                 'dot': False, 'telegram': False, **raw}
+    if COMPOSE_RUNTIME:
+        settings.update(systemd=False, control_runtime=not bool(raw.get('twin')))
+        if not raw.get('twin'):
+            settings.setdefault('maintenance', True)
     if 'neo4j_password' in settings:
         raise ValueError('Use neo4j_password_file for Context Intelligence credentials')
     if 'neo4j_password_file' in settings and (
@@ -246,8 +253,8 @@ def context_config(settings, data, registry):
             PUBLISHER: ('agents-team', ['live:write', 'data:read'])}
     for key in registry['agents']:
         keys[key] = ('agents-team', ['live:write', 'data:read'] if key in PRIVATE_ROLES and registry['agents'][key].get('starter_role') == key else ['live:write'])
-    if 'vps-manager' in registry['agents']:
-        keys['vps-manager-ops'] = ('root-operations', ['live:write'])
+    if 'the-architect' in registry['agents']:
+        keys['the-architect-ops'] = ('root-operations', ['live:write'])
     if settings['telegram']:
         keys['telegram-agent'] = ('telegram', ['live:write'])
     identities = {}
@@ -256,7 +263,7 @@ def context_config(settings, data, registry):
         if key == PUBLISHER:
             token = private_secret(data / PUBLISHER_TOKEN)
         else:
-            token = private_secret(data / 'context' / (key + '.token'), uid=ROOT_UID if key in {'vps-manager', 'vps-manager-ops'} else RUNTIME_UID)
+            token = private_secret(data / 'context' / (key + '.token'), uid=ROOT_UID if key in {'the-architect', 'the-architect-ops'} else RUNTIME_UID)
         identities[sha256(token.encode()).hexdigest()] = {'id': key}
         grants[key] = {'workspaces': [workspace], 'capabilities': capabilities}
     password = read_password_file(data / 'context/neo4j-password', 'Context Intelligence')
@@ -298,7 +305,7 @@ for digest, entry in config['api_keys'].items():
         store.put(digest, entry)
 """
     compose(data, 'run', '--rm', '--no-deps', '-T', '--entrypoint', '/app/.venv/bin/python',
-            'context', '-B', '-c', program, *(([retire, 'vps-manager-ops'] if retire == 'vps-manager' else [retire]) if retire else []))
+            'context', '-B', '-c', program, *(([retire, 'the-architect-ops'] if retire == 'the-architect' else [retire]) if retire else []))
     up(data, 'context')
 
 
@@ -406,7 +413,7 @@ def register_entry(settings, registry, key, definition):
     if effort not in {'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}:
         raise ValueError('Invalid reasoning effort')
     placement = agent_placement(key, definition)
-    if placement not in {'local', 'remote'} or (key in (PRIVATE_ROLES | {'task-manager', 'chief-of-staff', 'vps-manager', 'helper'}) and placement != 'local'):
+    if placement not in {'local', 'remote'} or (key in (PRIVATE_ROLES | {'task-manager', 'chief-of-staff', 'the-architect', 'helper'}) and placement != 'local'):
         raise ValueError('Invalid agent placement')
     validated = profile(definition['profile'])
     if key == 'helper' and (name != 'Helper' or validated != profile(starter_profiles()['helper']['profile'])):
@@ -450,27 +457,31 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     layout = data / 'state' / key
     matrix_state = layout / 'matrix'
     directory(layout)
-    gateway_uid = ROOT_UID if key == 'vps-manager' else RUNTIME_UID
+    is_architect = key == 'the-architect' and not settings.get('twin')
+    gateway_uid = ROOT_UID if is_architect else RUNTIME_UID
     directory(matrix_state, uid=gateway_uid)
     if key != 'dot':
         for name in ('work', 'instance', 'exchange', 'tool-credentials'):
             directory(layout / name, uid=RUNTIME_UID)
-    if key not in {'dot', 'vps-manager', 'chief-of-staff', 'helper'}:
+    if key not in {'dot', 'the-architect', 'chief-of-staff', 'helper'}:
         directory(layout / 'work/desktop', uid=RUNTIME_UID)
     peer = f'@{key}:{server}'
-    if key == 'vps-manager':
+    if is_architect:
         directory(layout / 'tool-credentials', mode=0o750, uid=RUNTIME_UID)
         os.chown(layout / 'tool-credentials', RUNTIME_UID, ROOT_UID)
         directory(layout / 'gateway-credentials', mode=0o750)
         os.chown(layout / 'gateway-credentials', 0, ROOT_UID)
     credential = matrix_state / 'matrix-password'
+    shared = data / 'bot/password'
+    if key == 'the-architect' and shared.is_file() and not credential.exists():
+        save(credential, shared.read_text(), uid=gateway_uid)
     secret = private_secret(credential, uid=gateway_uid)
-    token_file = layout / 'gateway-credentials/matrix-token' if key == 'vps-manager' else matrix_state / 'matrix-token'
-    device = 'VPSMANAGER' if key == 'vps-manager' else 'MATRIX' + key.upper().replace('-', '')
+    token_file = layout / 'gateway-credentials/matrix-token' if is_architect else matrix_state / 'matrix-token'
+    device = 'THEARCHITECT' if is_architect else 'MATRIX' + key.upper().replace('-', '')
     if not token_file.exists():
         own = login(key, secret, device, entry['name'])
-        save(token_file, own['access_token'] + '\n', uid=None if key == 'vps-manager' else gateway_uid)
-        if key == 'vps-manager':
+        save(token_file, own['access_token'] + '\n', uid=None if key == 'the-architect' else gateway_uid)
+        if is_architect:
             os.chown(token_file, 0, ROOT_UID)
             token_file.chmod(0o440)
     token = token_file.read_text().strip()
@@ -480,10 +491,12 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     invite(rooms['office'], peer, owner_token)
     join(rooms['office'], peer, token)
     room = rooms['office']
-    if key in {'vps-manager', 'chief-of-staff'}:
-        label = 'Root Operations' if key == 'vps-manager' else entry['name']
-        room = direct_room(server, rooms['space'], 'root' if key == 'vps-manager' else key, label,
-                           rooms['owner'], owner_token, peer, token, classify=key != 'vps-manager')
+    if is_architect:
+        room = rooms['alerts']
+        invite(room, peer, owner_token)
+        join(room, peer, token)
+    elif key == 'chief-of-staff':
+        room = direct_room(server, rooms['space'], key, entry['name'], rooms['owner'], owner_token, peer, token)
     save(matrix_state / 'room-id', room + '\n', uid=gateway_uid)
     if key in PRIVATE_ROLES and entry.get('starter_role') == key:
         private = direct_room(server, rooms['space'], key, entry['name'], rooms['owner'], owner_token, peer, token)
@@ -504,10 +517,10 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
         directory(layout / 'persona', uid=RUNTIME_UID)
         directory(layout / 'observer/outbox', uid=RUNTIME_UID)
         save(layout / 'observer/agents-room-id', rooms['office'] + '\n', uid=RUNTIME_UID)
-    if key == 'vps-manager':
+    if key == 'the-architect' and not settings.get('twin'):
         save(layout / 'config.json', {'url': 'http://synapse:8008', 'owner': rooms['owner'], 'root': peer,
                                       'agents': rooms['office'], 'audit': room, 'gateway_uid': ROOT_UID,
-                                      'legacy_cutover': (data / 'vps-manager-migration.json').is_file(),
+                                      'legacy_cutover': (data / 'the-architect-migration.json').is_file(),
                                       'maintenance': settings.get('maintenance', False),
                                       'dot': f'@dot:{server}' if settings['dot'] else None},
              mode=0o444)
@@ -532,16 +545,11 @@ def provision_layout(settings, data, registry, passphrase, *, unattended=False, 
     own = login(settings['owner'], passphrase)
     token = own['access_token']
     try:
-        monitor = login('monitor', private_secret(data / 'bot/password', uid=RUNTIME_UID))
-        request('POST', CLIENT + '/logout', {}, monitor['access_token'])
+        monitor = login('the-architect', private_secret(data / 'bot/password', uid=RUNTIME_UID))
         rooms = create_layout(settings['server_name'], own['user_id'], token)
+        join(rooms['alerts'], monitor['user_id'], monitor['access_token'])
+        request('POST', CLIENT + '/logout', {}, monitor['access_token'])
         save(data / 'bot/room-id', rooms['alerts'] + '\n', uid=RUNTIME_UID)
-        if office_setup:
-            notice = data / 'bot/office-setup.json'
-            if not notice.exists():
-                invite(rooms['office'], f"@monitor:{settings['server_name']}", token)
-                save(notice, {'room': rooms['office'], 'pending': True,
-                              'command': workspace_command(data, elevated=False) + ' setup-guide'}, uid=RUNTIME_UID)
         for key, entry in registry['agents'].items():
             prepare_agent_state(data, key, entry, rooms, token, settings)
         if settings['dot']:
@@ -587,7 +595,7 @@ def compose_config(settings, data, registry):
         directory(data / 'telegram/dot-requests', uid=RUNTIME_UID)
     if 'helper' in registry['agents']:
         publish_helper_guides(data)
-    if 'hiring-manager' in registry['agents'] or any(entry.get('hiring_provider') for entry in registry['agents'].values()):
+    if settings.get('control_runtime') or 'hiring-manager' in registry['agents'] or any(entry.get('hiring_provider') for entry in registry['agents'].values()):
         directory(data / 'hiring', uid=RUNTIME_UID)
     environment = base_environment(settings, data)
     env_write(data, environment)
@@ -596,6 +604,9 @@ def compose_config(settings, data, registry):
     networks = load(manifest).get('networks', {}) if manifest.exists() else {}
     workshop_internal = networks.get('workshop-targets', {}).get('internal', True)
     desired = definition(settings, data, registry, environment, workshop_internal=workshop_internal)
+    if settings.get('control_runtime'):
+        from auto_tune import overrides
+        overrides(data, desired, settings)
     published = data / 'maintenance/active.json'
     if settings.get('maintenance') and published.is_file():
         from repository_maintenance import ordinary
@@ -603,6 +614,8 @@ def compose_config(settings, data, registry):
             if service in desired['services'] and ordinary(service, registry):
                 desired['services'][service]['image'] = image
     save(manifest, desired)
+    from deployment_snapshot import publish
+    publish(data, settings, registry, desired)
     return environment
 
 
@@ -616,8 +629,12 @@ def publish_dashboard(settings, data):
     else:
         for name in ('dashboard.css', 'connections.mjs', 'dashboard.mjs', 'index.html'):
             save(data / 'dashboard' / name, (SOURCE / 'dashboard' / name).read_text(), mode=0o644)
+    bridge_room = data / 'telegram/guide/room-id'
+    bridge = bridge_room.read_text().strip() if settings['telegram'] and bridge_room.is_file() else None
     save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url'],
-                                         'telegramAgent': telegram_agent_selected(settings)}, mode=0o644)
+                                         'telegramAgent': telegram_agent_selected(settings),
+                                         **({'telegramBridge': 'https://matrix.to/#/' + encoded(bridge)}
+                                            if bridge and re.fullmatch(r'![^\s/]{1,240}', bridge) else {})}, mode=0o644)
 
 
 def prepare_storage(settings, data):
@@ -625,6 +642,9 @@ def prepare_storage(settings, data):
     if settings.get('maintenance'):
         directory(data / 'maintenance', 0o711)
         directory(data / 'maintenance/drafts', 0o711)
+    if settings.get('control_runtime'):
+        directory(data / 'runtime', 0o711)
+        directory(data / 'runtime/timing')
     for name in ('postgres', 'monitor', 'monitor/outbox', 'state', 'backups', 'staging'):
         directory(data / name, 0o750)
     os.chown(data / 'monitor/outbox', 0, RUNTIME_UID)
@@ -783,7 +803,7 @@ def interactive(presets, saved):
 
 def workspace_command(data, *, elevated=True):
     target = '' if data == DATA else f' --data-dir {quote(str(data))}'
-    return ('sudo ' if elevated else '') + f'./constellation_matrix{target}'
+    return ('sudo ' if elevated and not COMPOSE_RUNTIME else '') + f'./constellation_matrix{target}'
 
 
 def show_element_setup(settings, data=DATA, *, elevated=True):
@@ -795,6 +815,11 @@ def finalize_setup(data, *, print_only=False, passphrase=None):
     from setup_guide import interactive_terminal
     settings = load(data / 'settings.json')
     if print_only or not interactive_terminal():
+        registry = load(data / 'agents.json')
+        pending = pending_local_agents(registry)
+        if pending or (data / 'onboarding.json').is_file() and load(data / 'onboarding.json').get('select_agents'):
+            print('Finish selecting and configuring agents with ' + workspace_command(data) + ' setup-guide')
+            return
         show_element_setup(settings, data)
         return
     from onboarding import guide
@@ -875,7 +900,7 @@ def install(data, args, *, entered=None):
         commit_registry(registry_path, registry, actor=settings['owner'], reason='installation')
         environment = compose_config(settings, data, registry)
         compose(data, 'config', '--quiet')
-        service_units(settings, data, broker=registry['agents'].get('vps-manager', {}).get('active', False))
+        service_units(settings, data, broker=registry['agents'].get('the-architect', {}).get('active', False))
         homeserver = data / 'synapse/homeserver.yaml'
         if not homeserver.exists():
             compose(data, 'run', '--rm', '--no-deps', 'synapse', 'generate')
@@ -912,7 +937,7 @@ def install(data, args, *, entered=None):
             if args.config and (data / 'telegram/bridge/registration.yaml').is_file():
                 print('Complete Telegram login in Element → Telegram → Rooms → Telegram Bridge.')
         sync_workshop(settings, data, registry)
-        if settings.get('maintenance') and registry['agents'].get('vps-manager', {}).get('active'):
+        if settings.get('maintenance') and registry['agents'].get('the-architect', {}).get('active'):
             from maintenance_setup import initialize
             initialize(data, settings, registry)
         active = [key for key in local_agents if registry['agents'][key]['active']]
@@ -1054,7 +1079,7 @@ def agent_add(data, args, *, operator_token=None):
 def pending_local_agents(registry):
     return [key for key, entry in registry['agents'].items()
             if entry['placement'] == 'local' and not entry['active'] and not entry.get('retirement')
-            and not entry.get('hiring_provider')]
+            and not entry.get('hire_approval')]
 
 
 def telegram_agent_pending(data, settings):
@@ -1087,7 +1112,8 @@ def agent_sign_in(data, key=None, *, selection=None, telegram_pending=False):
 def configure_amplifier(data, engine, entry):
     print(f"Amplifier setup for {entry['name']}. Add or edit a provider, select a model, then choose Done.", flush=True)
     app = ('/opt/amplifier-cli/.venv/bin/python', '-B', '/opt/office/provider_setup.py')
-    compose(data, '--profile', 'agents', 'exec', engine, *app)
+    if not entry.get('hiring_provider'):
+        compose(data, '--profile', 'agents', 'exec', engine, *app)
     result = compose(data, '--profile', 'agents', 'exec', '-T', engine, *app, 'metadata',
                      stdout=subprocess.PIPE, text=True)
     configured = json.loads(result.stdout)
@@ -1109,8 +1135,8 @@ def agent_activate(data, key, *, pending_only=False):
     with operator_lock(data, waiting_message=waiting_message):
         settings, registry = open_existing(data)
         entry = registry['agents'][key]
-        if entry.get('hiring_provider'):
-            raise ValueError('This worker uses an approved ChatGPT connection. Reconnect it in Hiring Manager.')
+        if entry.get('hire_approval'):
+            raise ValueError('This worker uses an approved connection. Reconnect it in Hiring Manager.')
         if entry.get('retirement'):
             raise ValueError(f'Agent {key} is retiring. Resume its removal first.')
         if entry.get('mobility_move'):
@@ -1119,7 +1145,7 @@ def agent_activate(data, key, *, pending_only=False):
             return
         if entry['placement'] != 'local':
             raise ValueError('Complete provider sign-in on the authorized worker host')
-        if key == 'vps-manager' and settings.get('maintenance'):
+        if key == 'the-architect' and settings.get('maintenance'):
             from maintenance_setup import initialize
             initialize(data, settings, registry)
         engine = 'engine-' + key
@@ -1130,9 +1156,15 @@ def agent_activate(data, key, *, pending_only=False):
             save(data / 'agents.json', registry)
             publish_inventory(settings, data, registry)
             compose(data, '--profile', 'agents', 'stop', *connectors)
-        configured = configure_amplifier(data, engine, entry)
-        if key == 'vps-manager':
-            state = data / 'state/vps-manager'
+    configured = configure_amplifier(data, engine, entry)
+    with operator_lock(data, waiting_message=waiting_message):
+        settings, registry = open_existing(data)
+        current = registry['agents'].get(key)
+        if current != entry or current.get('retirement') or current.get('mobility_move'):
+            raise ValueError('Agent configuration changed during setup. Resume the latest configuration.')
+        entry = current
+        if key == 'the-architect':
+            state = data / 'state/the-architect'
             for source, target in (('credential-token', 'engine-token'), ('ca.pem', 'engine-ca.pem')):
                 path = state / 'gateway-credentials' / target
                 save(path, (state / 'exchange' / source).read_text(), mode=0o440)
@@ -1147,6 +1179,18 @@ def agent_activate(data, key, *, pending_only=False):
         entry['active'] = True
         save(data / 'agents.json', registry)
         publish_inventory(settings, data, registry)
+
+
+def activate_twin_agent(data, key):
+    settings, registry = open_existing(data)
+    if not settings.get('twin'):
+        raise ValueError('The target is not a digital twin.')
+    entry = registry['agents'][key]
+    compose(data, '--profile', 'agents', 'run', '--rm', '--no-deps', '-T', key, 'node', '/app/probe.mjs')
+    up(data, key, *(['helper-dm'] if key == 'helper' else []))
+    entry['active'] = True
+    save(data / 'agents.json', registry)
+    publish_inventory(settings, data, registry)
 
 
 def run_telegram(data, *args, **options):
@@ -1219,7 +1263,7 @@ def workspace_layout(data, args, *, token=None):
     try:
         verify_operator(rooms, token)
         with operator_lock(data):
-            for key in ('vps-manager', 'root'):
+            for key in ('the-architect', 'root'):
                 path = data / 'state' / key / 'matrix/room-id'
                 if path.is_file():
                     room = path.read_text().strip()
@@ -1349,6 +1393,9 @@ def persona_draft(data, role, observation):
 
 
 def service_units(settings, data, broker=False):
+    if settings.get('control_runtime'):
+        up(data, 'control-runtime')
+        return
     if not settings['systemd']:
         if broker:
             raise ValueError('Root execution requires an operator-managed systemd socket')
@@ -1366,20 +1413,24 @@ def main():
     parser = argparse.ArgumentParser(prog='constellation_matrix', description=__doc__, allow_abbrev=False)
     parser.add_argument('--data-dir', type=Path, default=DATA)
     commands = parser.add_subparsers(dest='command', required=True)
+    doctor = commands.add_parser('doctor', help='Check the local runtime and deployment state')
+    doctor.add_argument('--config', type=Path)
     install_parser = commands.add_parser('install')
     install_parser.add_argument('--config', type=Path)
     commands.add_parser('validate').add_argument('--config', type=Path, required=True)
     hiring = commands.add_parser('hiring', help='Manage the Office hiring tool catalog').add_subparsers(dest='action', required=True)
+    hiring.add_parser('connect', help='Connect a reusable provider account')
     hiring.add_parser('tools', help='Replace the approved hiring catalog with a JSON file').add_argument('manifest', type=Path)
-    maintenance = commands.add_parser('maintenance', help='Configure scoped VPS Manager maintenance').add_subparsers(
+    maintenance = commands.add_parser('maintenance', help='Configure scoped TheArchitect maintenance').add_subparsers(
         dest='action', required=True)
     maintenance_enable = maintenance.add_parser('enable')
     maintenance_enable.add_argument('--restart-service', action='append', metavar='CONNECTOR')
     maintenance_enable.add_argument('--no-auto-restarts', action='store_true')
+    maintenance_enable.add_argument('--auto-config-policy', type=Path)
     maintenance.add_parser('pause-recovery')
     maintenance.add_parser('resume-recovery')
     maintenance.add_parser('rollback', help='Retry verification and rollback after an interrupted release').add_argument('operation_id')
-    maintenance.add_parser('export', help='Print the exact sealed diff of a Root Operations proposal').add_argument('operation_id')
+    maintenance.add_parser('export', help='Print the exact sealed diff of a Control Room proposal').add_argument('operation_id')
     agent = commands.add_parser('agent').add_subparsers(dest='action', required=True)
     add = agent.add_parser('add')
     add_source = add.add_mutually_exclusive_group(required=True)
@@ -1398,7 +1449,7 @@ def main():
     team.add_argument('--apply', action='store_true')
     team.add_argument('--retire', action='append', default=[], metavar='AGENT')
     team.add_argument('--owner-password-file', type=Path)
-    migrate = agent.add_parser('migrate-root', help='Replace legacy Root and preserve the Root Operations room')
+    migrate = agent.add_parser('migrate-root', help='Replace legacy Root and preserve the Control Room room')
     migrate.add_argument('--owner-password-file', type=Path)
     migrate.add_argument('--yes', action='store_true', help='Confirm retirement of the legacy Root account')
     agent.add_parser('configure', aliases=['sign-in'], help='Open native Amplifier provider setup').add_argument(
@@ -1427,6 +1478,12 @@ def main():
                          help='Deployment data directory, defaults to /srv/constellation-matrix.')
     removal.add_argument('--purge', action='store_true',
                          help='Permanently delete the deployment data, backups, and project volumes.')
+    twins = commands.add_parser('twin').add_subparsers(dest='action', required=True)
+    twins.add_parser('list')
+    for action in ('status', 'stop', 'access'):
+        twins.add_parser(action).add_argument('id')
+    context = commands.add_parser('context').add_subparsers(dest='action', required=True)
+    context.add_parser('password', help='Print the dedicated Neo4j password to an interactive terminal')
     commands.add_parser('backup')
     commands.add_parser('restore-check')
     commands.add_parser('layout', help='Repair managed Element sidebar entries').add_argument('--owner-password-file', type=Path)
@@ -1447,6 +1504,26 @@ def main():
     host.add_argument('key', nargs='?')
     host.add_argument('--pending-only', action='store_true')
     args = parser.parse_args()
+    if args.command == 'doctor':
+        from operator_runtime import preflight
+        import socket
+        preflight()
+        data = args.data_dir.absolute()
+        print('Deployment directory ' + str(data))
+        if args.config:
+            settings = normalized(load(args.config), available_profiles())
+            for name in ('matrix_port', 'context_port', 'neo4j_port', 'bolt_port', 'hiring_port'):
+                with socket.socket() as test:
+                    try:
+                        test.bind(('127.0.0.1', settings[name]))
+                    except OSError as error:
+                        raise ValueError(f'Port {settings[name]} for {name} is unavailable.') from error
+        if (data / 'settings.json').is_file():
+            show_status(data)
+            compose(data, '--profile', 'agents', 'ps', '-a')
+        else:
+            print('No deployment in this directory. Run ./constellation_matrix install to begin.')
+        return
     if args.command == 'validate':
         normalized(load(args.config), available_profiles())
         print('Deployment configuration is valid.')
@@ -1459,7 +1536,10 @@ def main():
         show_telegram_status(data)
         return
     if args.command == 'setup-guide' and (args.print_only or not interactive_terminal()):
-        print_guide(data, root=os.geteuid() == 0)
+        if COMPOSE_RUNTIME:
+            finalize_setup(data, print_only=True)
+        else:
+            print_guide(data, root=os.geteuid() == 0)
         return
     if os.geteuid():
         if args.command == 'host' or args.command == 'agent' and (args.action == 'move' or
@@ -1504,6 +1584,13 @@ def main():
     elif args.command == 'uninstall':
         from uninstall import uninstall
         uninstall(data, purge=args.purge)
+    elif args.command == 'context':
+        if not interactive_terminal():
+            raise ValueError('Use an interactive private terminal to retrieve the Neo4j password.')
+        print(read_password_file(data / 'context/neo4j-password', 'Context Intelligence'))
+    elif args.command == 'twin':
+        from twin import command
+        command(data, args)
     elif args.command == 'host':
         from mobility import host_command
         host_command(data, args)
@@ -1528,7 +1615,19 @@ def main():
             migrate_root(data, args.owner_password_file, args.yes)
         else:
             settings = load(data / 'settings.json')
-            agent_sign_in(data, args.key, telegram_pending=telegram_agent_pending(data, settings))
+            if settings.get('control_runtime') and interactive_terminal():
+                from shared_provider import configure_team, prepare_telegram
+                selection = pending_local_agents(load(data / 'agents.json'))
+                selection = [key for key in selection if args.key in (None, key)]
+                telegram_engine = args.key in (None, TELEGRAM_AGENT) and telegram_agent_selected(settings) and not (
+                    data / 'telegram/connector/backend-verified').is_file()
+                if telegram_engine:
+                    selection.append(TELEGRAM_AGENT)
+                configure_team(data, selection)
+                if telegram_engine:
+                    prepare_telegram(data)
+            if args.key != TELEGRAM_AGENT or not settings.get('control_runtime'):
+                agent_sign_in(data, args.key, telegram_pending=False)
             if args.key in (None, 'chief-of-staff', *PRIVATE_ROLES):
                 from roster import enable_management
                 enable_management(data, automatic=True)
@@ -1550,8 +1649,12 @@ def main():
     elif args.command == 'layout':
         workspace_layout(data, args)
     elif args.command == 'hiring':
-        from hiring import configure_tools
-        configure_tools(data, args.manifest)
+        if args.action == 'connect':
+            from shared_provider import catalog
+            catalog(data)
+        else:
+            from hiring import configure_tools
+            configure_tools(data, args.manifest)
     elif args.command == 'maintenance':
         from maintenance_setup import configure as configure_maintenance
         configure_maintenance(data, args)
@@ -1608,7 +1711,19 @@ def main():
 
 if __name__ == '__main__':
     os.umask(0o077)
+    watch = time.monotonic_ns()
+    outcome = 'failed'
     try:
         main()
+        outcome = 'completed'
     except (KeyError, ValueError, OSError, MatrixError, subprocess.CalledProcessError) as error:
         raise SystemExit(f'Constellation setup failed: {error}') from None
+    finally:
+        if COMPOSE_RUNTIME:
+            from operator_runtime import selected_data
+            from operation_timing import record
+            args = sys.argv[1:]
+            command = next((part for part in args if part in {'install', 'setup-guide', 'agent', 'host', 'telegram',
+                'hiring', 'maintenance', 'backup', 'restore-check', 'dot-connect', 'twin', 'layout'}), None)
+            if command:
+                record(selected_data(args) / 'runtime/timing', 'cli-' + command, watch, outcome, actor='operator')

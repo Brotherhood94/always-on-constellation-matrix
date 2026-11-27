@@ -28,10 +28,10 @@ class Fixtures(unittest.TestCase):
         self.unhealthy = True
         self.failed_upgrade = False
         self.worker_id = 'b' * 64
-        self.registry = {'agents': {'coder': WORKER, 'vps-manager': WORKER, 'other': WORKER}}
+        self.registry = {'agents': {'coder': WORKER, 'the-architect': WORKER, 'other': WORKER}}
         atomic(self.data / 'agents.json', self.registry)
         atomic(self.data / 'compose.yaml', {'name': PROJECT, 'services': {
-            'coder': {'image': 'fixture:stable'}, 'vps-manager': {'image': 'fixture:admin'},
+            'coder': {'image': 'fixture:stable'}, 'the-architect': {'image': 'fixture:admin'},
         }})
         self.maintenance = Maintenance(self.data, runner=self.docker, clock=lambda: self.time, sleep=lambda _: None)
         instance = self.maintenance
@@ -86,7 +86,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(service.seal(JOB), review)
         self.assertEqual(service.reviewed_diff(JOB), review['diff'])
         with self.assertRaisesRegex(ValueError, 'does not match'):
-            service.activate(JOB, {**release, 'services': ['vps-manager']})
+            service.activate(JOB, {**release, 'services': ['the-architect']})
         self.assertEqual(service.activate(JOB, release), 'completed')
         self.assertIn('Fixture Dashboard', (self.data / 'dashboard/index.html').read_text())
         self.assertIn('releases/' + release['revision'], (self.data / 'dashboard/index.html').read_text())
@@ -131,7 +131,7 @@ class Fixtures(unittest.TestCase):
         self.assertEqual(service.active()['revision'], BASE)
         image = service.manifest()['services']['coder']['image']
         self.assertEqual(image, service.image_tag('rollback', IMAGE.split(':')[1]))
-        self.assertEqual(service.manifest()['services']['vps-manager']['image'], 'fixture:admin')
+        self.assertEqual(service.manifest()['services']['the-architect']['image'], 'fixture:admin')
         self.assertEqual(len([a for a in self.calls if 'up' in a]), 2)
 
     def test_interrupted_apply_rolls_back_and_a_stale_base_cannot_deploy(self):

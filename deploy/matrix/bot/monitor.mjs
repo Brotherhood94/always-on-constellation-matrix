@@ -16,7 +16,7 @@ const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, STATE_DIR, DATA_DIR, WORKS
   TELEGRAM_GUIDE, GUIDE_COMMAND, GRAPH_PASSWORD_COMMAND, DOT_ENABLED, SYSTEMD_ENABLED } = process.env;
 const telegram = TELEGRAM_GUIDE === 'true';
 const deviceId = telegram ? 'TELEGRAM_SETUP' : 'VPSMONITOR';
-const userId = `@${telegram ? 'telegram-agent' : 'monitor'}:${MATRIX_SERVER_NAME}`;
+const userId = `@${telegram ? 'telegram-agent' : 'the-architect'}:${MATRIX_SERVER_NAME}`;
 LogService.setLevel(LogLevel.WARN);
 
 async function readOptional(path) {
@@ -51,7 +51,7 @@ async function accessToken() {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       type: 'm.login.password', identifier: { type: 'm.id.user', user: userId },
-      password, device_id: deviceId, initial_device_display_name: 'VPS Monitor',
+      password, device_id: deviceId, initial_device_display_name: 'Control Room',
     }),
     signal: AbortSignal.timeout(15000),
   });
@@ -81,7 +81,7 @@ async function initialize() {
     throw new Error('The guide room requires Matrix encryption');
   }
   await client.crypto.prepare();
-  if (!telegram) await client.setDisplayName('Monitor');
+  if (!telegram) await client.setDisplayName('TheArchitect');
   if (!telegram && !(await client.crypto.isRecoveryAvailable())) {
     const key = await client.crypto.createIdentity();
     await writeAtomic(join(STATE_DIR, 'bot-recovery-key'), key);

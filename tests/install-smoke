@@ -248,7 +248,7 @@ load = lambda path: json.loads(path.read_text())
 roster = load(data / 'agents.json')
 targets = load(data / 'workshop-management/targets.json')
 assert roster['agents']['manager']['starter_role'] == 'task-manager'
-assert set(targets) == {'manager','vps-manager','coach','scouter','hiring-manager','coder','helper'}
+assert set(targets) == {'manager','the-architect','coach','scouter','hiring-manager','coder','helper'}
 assert targets['manager']['target'] == load(work / 'initial-targets.json')['manager']['target']
 private = {(data / 'state' / key / 'matrix/control-room-id').read_text() for key in ('hiring-manager','coach','scouter')}
 assert len(private) == 3

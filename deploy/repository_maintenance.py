@@ -1,4 +1,4 @@
-"""Load the same host implementation used by the isolated Root Operations broker."""
+"""Load the same host implementation used by the isolated Control Room broker."""
 
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path

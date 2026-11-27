@@ -625,12 +625,19 @@ async function run() {
       return;
     }
     if (Date.now() - lastGood > 15_000 || pausedFile() || !store.prepareSend(draft.id, ciphertext, Date.now())) return;
+    const started = performance.now();
+    let timingOutcome = 'matrix_accepted';
     try {
       const event = await matrix.put(draft.room, draft.txn, ciphertext);
       store.accepted(draft.txn, draft.room, event);
     } catch (error) {
       if (error.status === 429 && error.code === 'M_LIMIT_EXCEEDED') store.retry(draft.id, Date.now());
       else store.sendError(draft.id);
+      timingOutcome = error.status === 429 ? 'rate_limited' : 'unknown';
+    } finally {
+      const identity = digest([draft.id, draft.txn, timingOutcome, Date.now()]);
+      recordContext('telegram:delivery_attempt', identity, { timing: { id: identity, kind: 'telegram-delivery',
+        outcome: timingOutcome, work_ms: Math.round(performance.now() - started) } });
     }
   }
 

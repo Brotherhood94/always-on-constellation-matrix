@@ -265,7 +265,7 @@ WantedBy=timers.target
                              ('maintenance.py', 'maintenance.py'), ('broker.py', 'root-broker.py')]:
             save(host / name, (SOURCE / 'integrations/root' / source).read_text())
         name = project + '-root'
-        root = deployment + '/state/vps-manager'
+        root = deployment + '/state/the-architect'
         unit(name + '.socket', f'''[Unit]
 Description=Private socket for approved Root operations
 [Socket]

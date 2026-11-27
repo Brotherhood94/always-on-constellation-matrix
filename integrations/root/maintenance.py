@@ -1,4 +1,4 @@
-"""Host-side staging, releases and scoped Docker recovery for VPS Manager."""
+"""Host-side staging, releases and scoped Docker recovery for TheArchitect."""
 
 from contextlib import contextmanager
 from difflib import unified_diff
@@ -17,7 +17,7 @@ from tempfile import NamedTemporaryFile
 import time
 
 ASSETS = ('index.html', 'dashboard.css', 'dashboard.mjs', 'connections.mjs')
-MANAGERS = {'vps-manager', 'chief-of-staff', 'hiring-manager', 'coach', 'scouter', 'root', 'helper'}
+MANAGERS = {'the-architect', 'chief-of-staff', 'hiring-manager', 'coach', 'scouter', 'root', 'helper'}
 SERVICE = re.compile(r'[a-z0-9][a-z0-9_-]{0,35}')
 JOB = re.compile(r'[a-f0-9]{32}')
 REV = re.compile(r'[a-f0-9]{40,64}')
@@ -461,10 +461,11 @@ process.exit(result.status ?? 1);
             return state['receipts']
         registry = read(self.data / 'agents.json')
         unit = policy['project'] + '-stack.service'
-        try:
-            self.runner('/usr/bin/systemctl', 'is-active', '--quiet', unit, timeout=5)
-        except subprocess.CalledProcessError:
-            return state['receipts']
+        if not read(self.data / 'settings.json', {}).get('control_runtime'):
+            try:
+                self.runner('/usr/bin/systemctl', 'is-active', '--quiet', unit, timeout=5)
+            except subprocess.CalledProcessError:
+                return state['receipts']
         now = self.clock()
         for name in policy['restart']:
             observed = state['services'].setdefault(name, {})

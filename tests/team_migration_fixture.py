@@ -32,7 +32,7 @@ with TemporaryDirectory() as temp, ExitStack() as stack:
     rooms = create_layout(server,owner['user_id'],owner['access_token'])
     save(data / 'rooms.json', rooms)
     registry = {'local_server':server,'agents':{},'team_version':1}
-    for key in [*original, 'scouter','hiring-manager','coach','vps-manager','helper']:
+    for key in [*original, 'scouter','hiring-manager','coach','the-architect','helper']:
         matrix = data / 'state' / key / 'matrix'
         directory(matrix)
         save(matrix / 'matrix-password', password)
@@ -74,7 +74,7 @@ with TemporaryDirectory() as temp, ExitStack() as stack:
         db.execute("UPDATE inbox SET sent='settled'")
     migrate(data,args)
     result = load(data/'agents.json')
-    assert set(result['agents']) == {'manager','coder','scouter','hiring-manager','coach','vps-manager','helper'}
+    assert set(result['agents']) == {'manager','coder','scouter','hiring-manager','coach','the-architect','helper'}
     assert result['agents']['manager']['starter_role'] == 'task-manager'
     assert (coordinator/'matrix/matrix-token').read_text() == token
     assert (coordinator/'instance/fixture-provider').read_text() == 'keep-my-sessions'
@@ -106,7 +106,7 @@ with TemporaryDirectory() as temp, ExitStack() as stack:
     assert set(participant) == {owner['user_id'], '@helper:'+server}
     direct = request('GET', f"{CLIENT}/user/{encoded(owner['user_id'])}/account_data/m.direct", token=owner['access_token'])
     assert helper_dm in direct['@helper:'+server]
-    root_ops = (data/'state/vps-manager/matrix/room-id').read_text().strip()
+    root_ops = (data/'state/the-architect/matrix/room-id').read_text().strip()
     assert root_ops in children and all(root_ops not in links for links in direct.values())
     if os.environ.get('MATRIX_HELPER_SMOKE') == '1':
         operator = login('operator', password, 'HELPERSMOKEOWNER', 'Helper Smoke Operator')

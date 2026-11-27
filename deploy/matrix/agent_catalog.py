@@ -17,7 +17,7 @@ def clean(value, limit):
     return isinstance(value, str) and 0 < len(value.strip()) <= limit and value.isprintable()
 
 
-STARTER_ROLES = {'task-manager', 'coach', 'scouter', 'hiring-manager', 'vps-manager', 'helper'}
+STARTER_ROLES = {'task-manager', 'coach', 'scouter', 'hiring-manager', 'the-architect', 'helper'}
 PRIVATE_ROLES = {'hiring-manager', 'coach', 'scouter'}
 
 
@@ -38,7 +38,7 @@ def contact_keys(value):
 def role_id(key, entry):
     if entry['profile']['role'] == 'coordinator':
         return 'task-manager'
-    return key if key == 'vps-manager' or entry.get('starter_role') == key and key in STARTER_ROLES else 'specialist'
+    return key if key == 'the-architect' or entry.get('starter_role') == key and key in STARTER_ROLES else 'specialist'
 
 
 def persona_for(entry):

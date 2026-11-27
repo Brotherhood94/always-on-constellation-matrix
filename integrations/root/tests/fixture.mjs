@@ -23,7 +23,7 @@ async function api(path, body, token) {
 async function register(name, device) {
   return { ...await api('/register', {username: name, password: 'fixture-password', device_id: device, auth: {type:'m.login.dummy'}}), device };
 }
-const [root, owner, manager] = await Promise.all([register('vps-manager', 'VPSMANAGER'), register('operator', 'FIXTUREOWNER'), register('manager', 'FIXTUREMANAGER')]);
+const [root, owner, manager] = await Promise.all([register('the-architect', 'THEARCHITECT'), register('operator', 'FIXTUREOWNER'), register('manager', 'FIXTUREMANAGER')]);
 async function privateRoom(invite) {
   return (await api('/createRoom', {preset:'private_chat', visibility:'private', creation_content:{'m.federate':false},
     invite, initial_state:[
@@ -42,7 +42,7 @@ await writeFile('/office-token', 'office-fixture');
 await writeFile('/state/agents.json', JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
   dynamicHandoffs: true, agents: [
     { key: 'manager', id: manager.user_id, name: 'Manager', role: 'coordinator', limits: 'Fixture', status: 'Available', capabilities: [] },
-    { key: 'vps-manager', id: root.user_id, name: 'VPS Manager', role: 'worker', limits: 'Fixture', status: 'Available', capabilities: [] },
+    { key: 'the-architect', id: root.user_id, name: 'TheArchitect', role: 'worker', limits: 'Fixture', status: 'Available', capabilities: [] },
   ],
 }));
 await writeFile('/state/model-ready', 'ready');
@@ -141,7 +141,7 @@ try {
   let cursor = (await timeline()).next_batch;
   const thread = await sendEncrypted(reader, agents, 'fixture-thread', mentionMessage('Original task thread', {id: manager.user_id, name: 'Manager'}));
   const forged = await sendEncrypted(managerClient, agents, 'fixture-forged', {
-    ...mentionMessage('Check a synthetic local ID.', {id: root.user_id, name: 'VPS Manager'}),
+    ...mentionMessage('Check a synthetic local ID.', {id: root.user_id, name: 'TheArchitect'}),
     [turnKey]: {request: thread, number: 1},
     'm.relates_to': {rel_type: 'm.thread', event_id: thread, 'm.in_reply_to': {event_id: '$unrelated'}},
   });
@@ -154,7 +154,7 @@ try {
       : dynamic ? 'Root: Check a synthetic local ID.' : 'Root: fixed status fixture';
     const sender = exact ? manager.user_id : owner.user_id;
     const source = await sendEncrypted(exact ? managerClient : reader, agents, 'fixture-request-' + index,
-      {...mentionMessage(body, {id: root.user_id, name: 'VPS Manager'}),
+      {...mentionMessage(body, {id: root.user_id, name: 'TheArchitect'}),
         ...(index === 1 && {'m.relates_to':{rel_type:'m.thread',event_id:thread,is_falling_back:true,'m.in_reply_to':{event_id:thread}},
           [turnKey]: {request:thread, number:1, managed:{version:2,manager:manager.user_id,target:root.user_id}}})});
     const state = await waitFor(() => {
@@ -236,7 +236,7 @@ try {
     assert.equal(new Set(entries.map(record => record.data.execution.task_id)).size, 1);
   }
   const malformed = await sendEncrypted(reader, agents, 'fixture-malformed',
-    mentionMessage('Invalid review\n\nROOT_REVIEW: private-marker', {id: root.user_id, name: 'VPS Manager'}));
+    mentionMessage('Invalid review\n\nROOT_REVIEW: private-marker', {id: root.user_id, name: 'TheArchitect'}));
   const invalid = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE id=? AND source_notified=1')
     .get(digest(agents + ':' + malformed).slice(0,32)));
   assert.equal(invalid.outcome, 'proposal_failed');
@@ -245,10 +245,10 @@ try {
   assert.equal(invalid.proposal_event, null);
   assert.equal(database.prepare('SELECT id FROM tasks WHERE event=?').get(forged), undefined);
   assert.equal(accepted.length, 3);
-  console.log('VPS Manager handoffs and reviewed plans reached the encrypted poll, the owner vote and the source receipt.');
+  console.log('TheArchitect handoffs and reviewed plans reached the encrypted poll, the owner vote and the source receipt.');
   console.log('Invalid input produced a specific reason, without publishing a poll or running a command.');
   const maintenance = await sendEncrypted(reader, agents, 'fixture-maintenance',
-    mentionMessage('maintenance dashboard fixture', {id: root.user_id, name: 'VPS Manager'}));
+    mentionMessage('maintenance dashboard fixture', {id: root.user_id, name: 'TheArchitect'}));
   const approval = await waitFor(() => {
     const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(maintenance);
     assert.equal(task?.outcome ?? null, null, task?.summary);
@@ -272,8 +272,8 @@ try {
 
   const diagnostic = await sendEncrypted(reader, agents, 'fixture-telegram-diagnostics', mentionMessage(
     'Diagnostica il blocco. Parti dallo stato dei servizi e dai log, e individua se il problema è nel destinatario, nel binding o nel bridge. ' +
-    'Se trovi un guasto sul VPS, proponi la correzione minima in Root Operations, con verifica e ripristino. Dopo l’approvazione, ripeti soltanto la prova della bozza.',
-    {id: root.user_id, name: 'VPS Manager'}));
+    'Se trovi un guasto sul VPS, proponi la correzione minima in Control Room, con verifica e ripristino. Dopo l’approvazione, ripeti soltanto la prova della bozza.',
+    {id: root.user_id, name: 'TheArchitect'}));
   const check = await waitFor(() => {
     const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(diagnostic);
     assert.equal(task?.outcome ?? null, null, task?.summary);
@@ -297,7 +297,7 @@ try {
   assert.ok(officeReceipt.content.body.includes(encodeURIComponent(checked.audit_event)));
   assert.doesNotMatch(officeReceipt.content.body, /Fixture diagnostic signals/u);
   const directCheck = await sendEncrypted(reader, agents, 'fixture-synapse-diagnostics',
-    mentionMessage('Diagnostica synapse', {id: root.user_id, name: 'VPS Manager'}));
+    mentionMessage('Diagnostica synapse', {id: root.user_id, name: 'TheArchitect'}));
   const direct = await waitFor(() => {
     const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(directCheck);
     assert.equal(task?.outcome ?? null, null, task?.summary);
@@ -311,12 +311,21 @@ try {
   await waitFor(() => database.prepare('SELECT id FROM tasks WHERE id=? AND outcome=? AND source_notified=1').get(direct.id, 'denied'));
   assert.equal(accepted[5].action, 'reject');
   const badCheck = await sendEncrypted(reader, agents, 'fixture-retry-invalid',
-    mentionMessage('fixture retry stays invalid', {id:root.user_id, name:'VPS Manager'}));
+    mentionMessage('fixture retry stays invalid', {id:root.user_id, name:'TheArchitect'}));
   const failedCheck = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE event=? AND source_notified=1').get(badCheck));
   assert.equal(failedCheck.outcome, 'proposal_failed');
   assert.equal(failedCheck.proposal_event, null);
   assert.equal(accepted.length, 6);
-  console.log('The shared service inspection reached the encrypted poll after one proposal correction; results stayed in Root Operations.');
+  const privateCheck = await sendEncrypted(reader, audit, 'fixture-direct-control', {msgtype:'m.text',body:'Diagnose services'});
+  const privateTask = await waitFor(() => database.prepare('SELECT tasks.*,review_polls.event AS poll_event FROM tasks JOIN review_polls USING(id) WHERE tasks.event=? AND review_polls.event IS NOT NULL').get(privateCheck));
+  assert.equal(privateTask.room, audit);
+  assert.deepEqual(JSON.parse(privateTask.command), {kind:'inspect-services',target:'all'});
+  await timeline();
+  const privatePoll = await reader.getEvent(audit, privateTask.poll_event);
+  await castVote('fixture-direct-control-accept', privateTask.poll_event, privatePoll.content[pollStart].answers[0].id);
+  await waitFor(() => database.prepare('SELECT id FROM tasks WHERE id=? AND outcome=? AND notified=1').get(privateTask.id, 'completed'));
+  assert.equal(accepted[6].source_room, audit);
+  console.log('The shared service inspection reached the encrypted poll after one proposal correction; results stayed in Control Room.');
 
 } catch (error) {
   console.error(error);

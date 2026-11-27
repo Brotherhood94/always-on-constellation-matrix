@@ -3,7 +3,7 @@ import { randomInt } from 'node:crypto';
 const hints = [
   ['office', 'Did you know that you can mention Task Manager in Office to coordinate a task? The result stays in the original thread.'],
   ['graph', 'Did you know that Team connections on the dashboard shows which agent can hand work to which teammate?'],
-  ['dashboard', 'Did you know that the dashboard and Context Intelligence links are pinned in Agents → VPS Alerts?'],
+  ['dashboard', 'Did you know that the dashboard and Context Intelligence links are pinned in Agents → Control Room?'],
   ['desktop', 'Did you know that Office workers can share files through their desktop folder?'],
   ['tailnet:worker', 'Did you know that you can install a remote worker on a Linux machine on your tailnet and connect it to the same Office?'],
   ['tailnet:move', 'Did you know that you can move an always-on agent to another enrolled Tailscale host with the agent move command on the VPS?'],

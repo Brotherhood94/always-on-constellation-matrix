@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 
 const digest = parts => createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 
-function officeEvidence({ roomId, actor, event, kind, matrixEvent, fields, now }) {
+function officeEvidence({ roomId, actor, event, kind, matrixEvent, fields, now, timing }) {
   const trace = 'agents-thread-' + digest([roomId, event.thread]);
   return {
     event: 'agents:' + kind,
@@ -12,6 +12,7 @@ function officeEvidence({ roomId, actor, event, kind, matrixEvent, fields, now }
     data: {
       // Scoped Context sessions have one contributor. Tasks can span multiple contributors.
       session_id: trace + '-' + digest([actor]).slice(0, 20), timestamp: now.toISOString(),
+      ...(timing && { timing }),
       evidence: { room: roomId, actor, thread: event.thread, request: event.request ?? event.id, ...fields },
       execution: { trace_id: trace, task_id: 'agents-request-' + digest([roomId, event.request ?? event.id]),
         ...(!event.replyTo && { sequence: event.number }) },
@@ -25,8 +26,8 @@ export function assignmentEvidence({ roomId, actor, event, now = new Date() }) {
 }
 
 export function executionEvidence({ roomId, actor, event, sent, status, target, step, flow, policyRevision,
-  evidence = [], receipt, need, now = new Date() }) {
-  return officeEvidence({ roomId, actor, event, now, kind: 'execution', matrixEvent: sent,
+  evidence = [], receipt, need, timing, now = new Date() }) {
+  return officeEvidence({ roomId, actor, event, now, kind: 'execution', matrixEvent: sent, timing,
     fields: { assignment: event.id, reply: sent, outcome: status ?? 'progress',
       ...(target && { to: target }), ...(step && { step }), ...(flow && { flow }),
       ...(flow === 'dispatch' && policyRevision && { policyRevision }), ...(evidence.length && { references: evidence }),

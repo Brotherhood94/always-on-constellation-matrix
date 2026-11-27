@@ -131,8 +131,8 @@ def coach_change(data, settings, registry, operation, *, approved=False, approva
     if (not clean(style, 1000) or key in contacts or any(k not in registry['agents'] or
             registry['agents'][k].get('retirement') for k in contacts)):
         raise ValueError('Invalid working style or recipients')
-    if not approved and (('vps-manager' in set(old_contacts).symmetric_difference(contacts)) or
-                         (key == 'vps-manager' and old_contacts != contacts)):
+    if not approved and (('the-architect' in set(old_contacts).symmetric_difference(contacts)) or
+                         (key == 'the-architect' and old_contacts != contacts)):
         return 'needs_approval'
     workshop = compose(data, '--profile', 'agents', 'ps', '-q', 'persona-workshop', capture_output=True, text=True).stdout.strip()
     if not workshop:

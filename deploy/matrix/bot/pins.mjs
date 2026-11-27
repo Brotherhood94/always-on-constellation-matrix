@@ -180,6 +180,7 @@ export function reconcilePins(matrix, links, state, options = {}) {
   const shortcuts = message('Workspace shortcuts', [
     ['📊 Dashboard', [dashboard, 'Check VPS resource history, agent readiness, and integration status.']],
     ['🧠 Context Intelligence · Neo4j Browser', graphSteps],
+    ...(links.telegramBridge ? [['✈️ Telegram', [shortcut('Open Telegram Bridge', links.telegramBridge)]]] : []),
   ]);
   return reconcile(matrix, [
     { key: 'workspace-shortcuts', content: shortcuts, entries: Object.entries({ dashboard, context })

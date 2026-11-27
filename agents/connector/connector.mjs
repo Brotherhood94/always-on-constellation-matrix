@@ -86,7 +86,7 @@ async function connect() {
     const accepted = acceptedMessage({ ...event, room_id: incomingRoom }, {
       roomId, owner: MATRIX_OWNER, userId, agents: Object.keys(names), displayNames: names, activatedAt, planner: MATRIX_PLANNER, routingPolicy: policy, acceptAttachments: !helper,
     });
-    if (accepted) store.enqueue(accepted);
+    if (accepted) store.enqueue({ ...accepted, received: event.origin_server_ts ?? Date.now() });
   });
   client.start().catch(error => {
     console.error('Matrix sync stopped:', error.body?.errcode || error.code || error.name);
@@ -205,6 +205,8 @@ async function deliverAttachments(client, event, reply) {
 }
 
 async function deliver(client, event) {
+  const processing = Date.now();
+  const watch = performance.now();
   if (telegramHandoff && event.reply === null && event.id === event.request && !event.delegator &&
       /\btelegram\b/iu.test(event.body)) {
     const original = await readEncryptedRoomMessage(client, roomId, event.id);
@@ -337,7 +339,12 @@ async function deliver(client, event) {
       ?.find(id => Object.hasOwn(members, id));
     const step = (delivery.issues.length || declaredOutcome(reply)?.status === 'blocked') ? 'blocked' : 'returned';
     const need = needFromReply(reply, catalog.current()?.agents.find(a => a.id === userId), decision);
-    outgoing = { content, notice, target, step, need, policyRevision: decision?.policyRevision };
+    const received = event.received;
+    const timing = { kind: event.delegator ? 'office-handoff' : 'office-turn', id: reactionTransaction('operation', event.id),
+      ...(content[taskOutcomeKey]?.status && { outcome: content[taskOutcomeKey]?.status }),
+      ...(!event.reply && { work_ms: Math.round(performance.now() - watch),
+        ...(Number.isSafeInteger(received) && received <= processing && { queue_ms: processing - received }) }) };
+    outgoing = { content, notice, target, step, need, timing, policyRevision: decision?.policyRevision };
     store.saveOutgoing(event.id, outgoing);
   }
   const { content, notice } = outgoing;
@@ -351,7 +358,8 @@ async function deliver(client, event) {
   store.sent(event.id, sent, outcomeKey, process.env.CONTEXT_INTELLIGENCE_URL &&
     executionEvidence({ roomId, actor: userId, event, sent, status, need: outgoing.need, target: outgoing.target,
       step: flow === 'dispatch' ? undefined : outgoing.step, flow, policyRevision: outgoing.policyRevision,
-      evidence: content[taskOutcomeKey]?.evidence }));
+      evidence: content[taskOutcomeKey]?.evidence, timing: outgoing.timing && { ...outgoing.timing,
+        ...(Number.isSafeInteger(event.received) && event.received <= Date.now() && { total_ms: Date.now() - event.received }) } }));
   console.log('Encrypted agent reply delivered.');
 }
 

@@ -401,7 +401,7 @@ try {
       let approval;
       let assignments;
       const operation = kind==='tool' ? {kind,agent:'coder',tool:{id:'repo-read',repository:'fixture/docs'}} :
-        {kind,agent:'coder',style:'Report one verified result.',contacts:['vps-manager']};
+        {kind,agent:'coder',style:'Report one verified result.',contacts:['the-architect']};
       if(kind==='retire'){
         await writeFile('/state/control-room-id',room);
         const agent={key:'coder',name:'Coder',id:'@coder:'+domain,role:'worker',active:true,placement:'local',contacts:[],persona:{duties:['Write code.']}};

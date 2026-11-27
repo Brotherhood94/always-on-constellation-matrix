@@ -35,16 +35,16 @@ const maximumReviewRequestBytes = 12000;
 const pollResponse = 'org.matrix.msc3381.poll.response';
 export const pollChoice = (task, action) => digest(JSON.stringify([task.id, task.hash, task.proposal_event, action]));
 
-export function requestText(event, root, maximumBytes = 1800) {
+export function requestText(event, root, maximumBytes = 1800, direct = false) {
   const { type, content } = event;
   const mentions = content?.['m.mentions'];
   if (type !== 'm.room.message' || content?.msgtype !== 'm.text' || typeof content.body !== 'string' ||
-      content['m.new_content'] || mentions?.room || mentions?.user_ids?.length !== 1 ||
-      mentions.user_ids[0] !== root) return null;
+      content['m.new_content'] || mentions?.room ||
+      (!direct && (mentions?.user_ids?.length !== 1 || mentions.user_ids[0] !== root))) return null;
   const relation = content['m.relates_to'];
   if (relation && (relation.rel_type !== 'm.thread' || !eventId.test(relation.event_id))) return null;
   const text = content.body.replace(/^(?:>[^\n]*\n)+\n/u, '')
-    .replace(/^\s*@?(?:vps-manager|VPS Manager|root)(?::[a-z0-9.-]+)?[,:\s]+/iu, '').trim();
+    .replace(/^\s*@?(?:the-architect|TheArchitect|root)(?::[a-z0-9.-]+)?[,:\s]+/iu, '').trim();
   const limit = reviewLine(text) === null ? maximumBytes : maximumReviewRequestBytes;
   return text && Buffer.byteLength(text) <= limit ? text : null;
 }
@@ -124,10 +124,17 @@ function reviewLine(text) {
 
 function reviewedPlan(answer) {
   const { plan } = answer;
-  if (!plan || !['shell', 'inspect-file', 'replace-file', 'inspect-services'].includes(plan.kind)) {
+  if (!plan || !['shell', 'inspect-file', 'replace-file', 'inspect-services', 'restart-service'].includes(plan.kind)) {
     throw new ProposalError('Specify a shell, inspect-file, replace-file or inspect-services maintenance plan.');
   }
   if (plan.kind === 'inspect-services') return serviceInspection(plan.target);
+  if (plan.kind === 'restart-service') {
+    const inspection = serviceInspection(plan.target);
+    const command = JSON.stringify({ kind: plan.kind, target: plan.target });
+    return { ...inspection, command, hash: digest(command), summary: `Restart ${plan.target} in this deployment.`,
+      details: { impact: 'Briefly interrupts one running service.', verification: 'Waits for Docker to confirm readiness.',
+        recovery: 'Inspect the service in Control Room if readiness fails.' } };
+  }
   const exact = { kind: plan.kind };
   if (['inspect-file', 'replace-file'].includes(plan.kind)) {
     if (typeof plan.path !== 'string' || plan.path.length > 512 || !/^\/[A-Za-z0-9_./@+=-]+$/u.test(plan.path)) {
@@ -187,6 +194,36 @@ export function serviceDiagnosticProposal(text) {
   return serviceInspection(['services', 'servizi'].includes(target) ? 'all' : target);
 }
 
+export function twinRequest(text) {
+  if (/^(?:twin|(?:crea|avvia|create|start) (?:un |a )?(?:digital )?twin)(?:\b.*)?$/iu.test(text) &&
+      !/^twin (?:models|create)\b/iu.test(text)) return { action: 'choices' };
+  const models = /^twin models ([a-f0-9]{24})$/u.exec(text);
+  if (models) return { action: 'models', account: models[1] };
+  const create = /^twin create ([a-f0-9]{24}) ([a-zA-Z0-9_.-]{3,80}) (none|minimal|low|medium|high|xhigh) ([A-Za-z0-9_.:,-]+)(?: (\d{1,3}))?$/u.exec(text);
+  if (!create) return null;
+  const parts = create[4].split(',').map(part => part.split(':'));
+  const agents = parts.map(([agent]) => agent);
+  const overrides = Object.fromEntries(parts.filter(part => part.length === 3)
+    .map(([agent, model, effort]) => [agent, { model, effort }]));
+  const minutes = Number(create[5] ?? '120');
+  if (agents.length > 8 || agents.some(agent => !/^[a-z0-9][a-z0-9_-]{0,35}$/u.test(agent)) ||
+      new Set(agents).size !== agents.length || minutes < 15 || minutes > 360 ||
+      parts.some(part => part.length !== 1 && (part.length !== 3 || !/^[A-Za-z0-9][A-Za-z0-9._-]{2,79}$/u.test(part[1]) ||
+        !['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].includes(part[2])))) {
+    throw new ProposalError('Choose one to eight agents and a duration from 15 to 360 minutes.');
+  }
+  return { action: 'create', account: create[1], model: create[2], effort: create[3], agents, minutes, overrides };
+}
+
+export function twinProposal({ action, ...selection }, revision) {
+  if (!fingerprint.test(revision)) throw new ProposalError('The deployment snapshot is unavailable.');
+  const command = JSON.stringify({ kind: 'twin-create', ...selection, revision });
+  return { operation: reviewedPlanOperation, summary: 'Start a private digital twin.', command, hash: digest(command),
+    details: { impact: 'Starts a separate Docker workspace and uses the selected provider connection.',
+      verification: 'Probes the selected Amplifier instances and notifies Control Room when ready.',
+      recovery: 'Stop the twin to revoke grants and remove its temporary workspace.' } };
+}
+
 export function reviewBody(task) {
   if (task.operation === maintenanceReleaseOperation) {
     const release = JSON.parse(task.command);
@@ -212,6 +249,10 @@ export function reviewBody(task) {
       'Count known signals in up to 100 log lines per service from the last 30 minutes, for up to six matching instances.',
     'Return only service states and signal counts.',
   ].join('\n');
+  if (plan.kind === 'twin-create') return `Revision ${plan.revision}\nAgents ${plan.agents.join(', ')}\n` +
+    `Account ${plan.account}\nModel ${plan.model} · Reasoning ${plan.effort}\nDuration ${plan.minutes} minutes` +
+    Object.entries(plan.overrides ?? {}).map(([agent, profile]) => `\n${agent} · ${profile.model} · ${profile.effort}`).join('');
+  if (plan.kind === 'restart-service') return `Restart the running Compose service ${plan.target} and verify its state.`;
   if (plan.kind === 'inspect-file') return 'Inspect regular file\n' + plan.path + '\nReturn a bounded redacted preview.';
   return 'Replace ' + plan.path + '\n' +
     'Remove exact text: ' + JSON.stringify(plan.before) + '\n' +
@@ -337,6 +378,11 @@ export function auditRecord(config, entry, stage, time, sequence) {
     data: {
       session_id: 'root-' + entry.id,
       timestamp: new Date(time).toISOString(),
+      ...(stage === 'finished' && { timing: { id: entry.id, kind: 'control-operation', outcome: entry.outcome,
+        total_ms: Math.max(0, entry.finished_at - entry.time),
+        ...(entry.decided && entry.proposed_at && { approval_ms: Math.max(0, entry.decided - entry.proposed_at) }),
+        ...(entry.execution_ms !== null && entry.execution_ms !== undefined && { work_ms: Number(entry.execution_ms) }),
+      }}),
       execution: { trace_id: entry.source_thread, task_id: entry.event, sequence },
       operation: {
         id: entry.id, type: entry.operation, executed_on: process.env.ROOT_HOST ?? 'deployment-host', action: entry.action,

@@ -32,12 +32,6 @@ def progress(path):
 def guide(data, settings, command, passphrase):
     path = data / 'onboarding.json'
     try:
-        if 'element' not in progress(path)['confirmed']:
-            if confirm_element(*element_page(settings)) is None:
-                print(f'\nResume setup with {command} setup-guide')
-                return
-            confirm_sign_in(data)
-
         select_roster(data, path, passphrase)
     except (OSError, MatrixError, ValueError, SubprocessError) as error:
         print(f'Agent registration could not be completed. {error}')
@@ -50,17 +44,28 @@ def guide(data, settings, command, passphrase):
     settings = load(data / 'settings.json')
     selected = settings['agents']
     pending = pending_local_agents(load(data / 'agents.json'))
-    telegram_pending = interactive_terminal() and telegram_agent_pending(data, settings)
-    if set(selected).intersection(pending) or telegram_pending:
+    telegram_pending = (interactive_terminal() and telegram_agent_selected(settings) and
+                        not (data / 'telegram/connector/backend-verified').is_file())
+    local = [key for key in selected if key in pending]
+    if local or telegram_pending:
         try:
-            agent_sign_in(data, selection=selected, telegram_pending=telegram_pending)
-            if telegram_pending and telegram_agent_pending(data, settings):
-                return
+            if settings.get('control_runtime'):
+                from shared_provider import configure_team
+                configure_team(data, [*local, *(['telegram-agent'] if telegram_pending else [])])
+            agent_sign_in(data, selection=selected, telegram_pending=False)
+            if telegram_pending:
+                from shared_provider import prepare_telegram
+                prepare_telegram(data)
         except (KeyboardInterrupt, OSError, ValueError, SubprocessError) as error:
             if not isinstance(error, KeyboardInterrupt):
                 print(f'Provider setup could not be completed. {error}')
-            print(f'Resume provider setup with {command} agent configure')
+            print(f'Resume setup with {command} setup-guide')
             return
+    if 'element' not in progress(path)['confirmed']:
+        if confirm_element(*element_page(settings)) is None:
+            print(f'\nResume setup with {command} setup-guide')
+            return
+        confirm_sign_in(data)
     try:
         enable_management(data, automatic=True)
     except (KeyboardInterrupt, MatrixError, OSError, ValueError, SubprocessError) as error:
@@ -94,8 +99,6 @@ def select_roster(data, path, passphrase, *, selection=CHOOSE_AGENTS, operator_t
         if not current.get('select_agents'):
             return
         settings, registry = open_existing(data)
-        if 'element' not in current['confirmed']:
-            raise ValueError('Confirm Element sign-in first')
         selection = current.setdefault('selection', selection)
         save(path, current)
         authenticated = {'operator_token': operator_token} if operator_token is not None else {}
@@ -131,7 +134,7 @@ def matrix_link(room, event):
 
 
 def office_agent(key, entry):
-    return key not in {'chief-of-staff', 'root', 'vps-manager', 'helper'} and entry['profile']['role'] in {'coordinator', 'worker'}
+    return key not in {'chief-of-staff', 'root', 'the-architect', 'helper'} and entry['profile']['role'] in {'coordinator', 'worker'}
 
 
 def matrix_state(data, key):
@@ -204,7 +207,7 @@ def finish(data):
 
         pins = verified_pins(data, settings, rooms['alerts'])
         if not pins:
-            return {'waiting': 'Waiting for Open dashboard and Open Context Intelligence in VPS Alerts → Pinned messages.'}
+            return {'waiting': 'Waiting for Open dashboard and Open Context Intelligence in Control Room → Pinned messages.'}
 
         attempt = {'agent': key, 'sender': agent, 'room': room,
                    'transaction': sha256(f'constellation-agent-welcome:{room}:{agent}'.encode()).hexdigest()}
@@ -250,7 +253,7 @@ def verified_pins(data, settings, alerts):
             events[key] = event
         for event in dict.fromkeys(events.values()):
             raw = request('GET', f'{path}/event/{encoded(event)}', token=token)
-            if (raw.get('type') != 'm.room.encrypted' or raw.get('sender') != f"@monitor:{settings['server_name']}"
+            if (raw.get('type') != 'm.room.encrypted' or raw.get('sender') != f"@the-architect:{settings['server_name']}"
                     or raw.get('unsigned', {}).get('redacted_because')):
                 return None
         return {key: matrix_link(alerts, event) for key, event in events.items()}

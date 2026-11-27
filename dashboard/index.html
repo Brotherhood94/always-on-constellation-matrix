@@ -25,6 +25,7 @@
       <a href="#connections-heading">Team connections</a>
       <a href="#agents-heading">Agents</a>
       <a href="#integrations-heading">Integrations</a>
+      <a href="#timings-heading">Operation timings</a>
     </nav>
     <section class="panel resources-panel" aria-labelledby="resources-heading">
       <div class="section-heading">
@@ -58,6 +59,16 @@
       </div>
       <div class="table-frame" tabindex="0" role="region" aria-label="Agent inventory">
         <table><thead><tr><th scope="col">Name</th><th scope="col">Health</th><th scope="col">Host</th><th scope="col">Model</th><th scope="col">Profile</th></tr></thead><tbody id="agents"></tbody></table>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="timings-heading">
+      <div class="section-heading"><h2 id="timings-heading">Operation timings</h2>
+        <label class="control">Environment <select id="timings-scope"><option value="workspace">Workspace</option><option value="twin">Digital twins</option></select></label>
+        <label class="control">History <select id="timings-range"><option value="7">Last 7 days</option><option value="30">Last 30 days</option></select></label>
+      </div>
+      <p id="timings-freshness" class="timestamp"></p>
+      <div class="table-frame" tabindex="0" role="region" aria-label="Measured operation durations">
+        <table><thead><tr><th scope="col">Operation</th><th scope="col">Agent</th><th scope="col">Outcome</th><th scope="col">Measured</th><th scope="col">Median</th><th scope="col">P95</th><th scope="col">Work</th><th scope="col">Queue</th><th scope="col">Approval</th></tr></thead><tbody id="timings"></tbody></table>
       </div>
     </section>
     <section class="panel" aria-labelledby="integrations-heading">

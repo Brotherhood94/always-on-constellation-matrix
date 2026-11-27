@@ -123,13 +123,13 @@
       ]
     }
   },
-  "vps-manager": {
-    "name": "VPS Manager",
+  "the-architect": {
+    "name": "TheArchitect",
     "model": "gpt-6.2-sol",
     "effort": "xhigh",
     "profile": {
       "role": "worker",
-      "limits": "Plans maintenance on the deployment VPS. The operator approves every exact privileged operation in Root Operations.",
+      "limits": "Plans maintenance on the deployment VPS. The operator approves every exact privileged operation in Control Room.",
       "capabilities": [
         {
           "code": "host-administration",

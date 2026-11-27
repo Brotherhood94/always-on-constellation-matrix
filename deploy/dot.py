@@ -37,7 +37,7 @@ def install_client(destination):
 
 
 def connect(settings, data, tunnel_id):
-    if not settings['dot'] or not settings['systemd']:
+    if not settings['dot'] or not (settings['systemd'] or settings.get('control_runtime')):
         raise ValueError('Enable Dot and systemd for this deployment')
     dot = data / 'state/dot/matrix'
     if not (dot / 'bridge.sock').is_socket():
@@ -55,6 +55,13 @@ def connect(settings, data, tunnel_id):
         if not re.fullmatch(r'sk-[a-zA-Z0-9_-]+', value):
             raise ValueError('Invalid runtime key format')
         save(credential, value)
+    if settings.get('control_runtime'):
+        from installer import compose_config, load, up
+        save(configuration / 'tunnel-id', tunnel_id + '\n')
+        compose_config(settings, data, load(data / 'agents.json'))
+        up(data, 'dot-tunnel')
+        print('Dot tunnel is ready.')
+        return
     name = settings['project'] + '-dot.service'
     root = safe_path(data)
     unit(name, f'''[Unit]

@@ -123,6 +123,10 @@ def disk_bytes(data, backups):
 
 
 def cpu_total(cgroup):
+    if cgroup is None:
+        fields = [int(value) for value in Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
+        busy = sum(fields) - fields[3] - fields[4]
+        return busy * 1_000_000 // os.sysconf('SC_CLK_TCK')
     return int(dict(line.split() for line in (cgroup / "cpu.stat").read_text().splitlines())["usage_usec"])
 
 
@@ -154,7 +158,7 @@ def integration_status():
     if not ids:
         return {}
     monitored = {"context": "Context Intelligence", "neo4j": "Neo4j", "synapse": "Matrix",
-                 "dot": "Dot", "monitor": "VPS Alerts", "persona-workshop": "Persona Workshop",
+                 "dot": "Dot", "monitor": "Control Room", "persona-workshop": "Persona Workshop",
                  "connector": "Telegram Agent", "telegram-bridge": "Telegram bridge",
                  "telegram-engine": "Telegram engine", "telegram-guide": "Telegram guide"}
     status = {}
@@ -207,6 +211,8 @@ def run():
     data = Path(os.environ["MATRIX_DATA"])
     backup = Path(os.environ["MATRIX_BACKUP_DIR"])
     cgroup = Path("/sys/fs/cgroup/matrix.slice/matrix-workload.slice")
+    if not (cgroup / "cpu.stat").exists():
+        cgroup = None
     state = data / "monitor"
     outbox = state / "outbox"
     acknowledgements = state / "acks"
@@ -231,7 +237,12 @@ def run():
             measured = time.monotonic()
             cpu = cpu_total(cgroup)
             elapsed = measured - previous_time
-            used = int((cgroup / "memory.current").read_text())
+            if cgroup is None:
+                meminfo = Path('/proc/meminfo').read_text().splitlines()
+                available = next((int(line.split()[1]) * 1024 for line in meminfo if line.startswith('MemAvailable:')), 0)
+                used = max(0, capacity - available)
+            else:
+                used = int((cgroup / 'memory.current').read_text())
             with db:
                 if 45 <= elapsed <= 90 and cpu >= previous_cpu:
                     percent = (cpu - previous_cpu) / (elapsed * 1_000_000 * cores) * 100

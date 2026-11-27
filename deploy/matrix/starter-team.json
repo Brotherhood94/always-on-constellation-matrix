@@ -28,7 +28,7 @@
         "hiring-manager",
         "coach",
         "scouter",
-        "vps-manager",
+        "the-architect",
         "helper"
       ]
     }
@@ -128,13 +128,13 @@
       ]
     }
   },
-  "vps-manager": {
-    "name": "VPS Manager",
+  "the-architect": {
+    "name": "TheArchitect",
     "model": "gpt-6.2-sol",
     "effort": "xhigh",
     "profile": {
       "role": "worker",
-      "limits": "Plans maintenance on the deployment VPS. The operator approves every exact privileged operation in Root Operations.",
+      "limits": "Plans maintenance on the deployment VPS. The operator approves every exact privileged operation in Control Room.",
       "capabilities": [
         {
           "code": "host-administration",
@@ -151,7 +151,7 @@
         "purpose": "I maintain the deployment host.",
         "duties": [
           "Plan and verify host changes.",
-          "Ask for approval in Root Operations and return an operational receipt to Office."
+          "Ask for approval in Control Room and return an operational receipt to Office."
         ],
         "working_style": "I show the exact operation, its effect and how I will verify it before execution."
       },

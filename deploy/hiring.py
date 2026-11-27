@@ -12,7 +12,7 @@ from installer import (RUNTIME_UID, commit_registry, compose, compose_config, di
                        operator_lock, prepare_agent_state, publish_inventory, read_password_file,
                        refresh_context, register_entry, save, sync_workshop, up)
 
-MODES = {'chatgpt_codex', 'chatgpt_plan'}
+MODES = {'chatgpt_codex', 'chatgpt_plan', 'openai_api', 'anthropic_api'}
 PENDING = {'pending', 'activating', 'provider_waiting', 'tools_waiting'}
 MAX_REPLY = 1_800_000
 
@@ -46,7 +46,7 @@ def ensure_coordinator(data):
     try:
         return control(data, {'action': 'accounts'})
     except OSError:
-        with (data / 'roster/hiring-start.lock').open('a') as lock:
+        with (data / 'hiring/start.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
                 return control(data, {'action': 'accounts'})
@@ -205,6 +205,7 @@ def reconcile(data):
                 continue
             record['next'] = time.time() + 30
             save(path, record)
+            watch = time.monotonic_ns()
             try:
                 operation = json.loads(record['receipt']['operation'])
                 status = advance(data, settings, registry, operation, path.stem)
@@ -212,3 +213,6 @@ def reconcile(data):
                 print('Approved hire will retry (' + type(error).__name__ + ').', flush=True)
                 status = 'activating'
             save(path, {**record, 'status': status, 'next': time.time() + 30})
+            if settings.get('control_runtime'):
+                from operation_timing import record as timing
+                timing(data / 'runtime/timing', 'hiring-activation', watch, status, actor='hiring-manager')

@@ -137,10 +137,10 @@ def login(username, password, device=None, display=None):
 
 
 def create_layout(server, owner, operator):
-    monitor = f'@monitor:{server}'
+    monitor = f'@the-architect:{server}'
     space = ensure_room(server, 'agents', 'Agents', operator, space=True)
     office = ensure_room(server, 'office', 'Office', operator)
-    alerts = ensure_room(server, 'vps-alerts', 'VPS Alerts', operator, pin_user=monitor)
+    alerts = ensure_room(server, 'control-room', 'Control Room', operator, pin_user=monitor)
     link_child(space, office, server, operator)
     link_child(space, alerts, server, operator)
     invite(alerts, monitor, operator)

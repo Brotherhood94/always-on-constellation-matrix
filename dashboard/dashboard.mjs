@@ -297,12 +297,30 @@ async function fetchJson(path) {
   return response.json();
 }
 
+function renderTimings(snapshot) {
+  const body = document.getElementById('timings');
+  if (!body) return;
+  const range = document.getElementById('timings-range').value;
+  const scope = document.getElementById('timings-scope').value;
+  const rows = (snapshot?.ranges?.[range] ?? []).filter(row => row.scope === scope);
+  const format = ms => Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)} s` : '—';
+  document.getElementById('timings-freshness').textContent = rows.length ? freshness(snapshot?.time, Date.now()) :
+    snapshot ? 'No timing records in this period.' : 'Timing data unavailable.';
+  body.replaceChildren(...rows.map(row => {
+    const el = document.createElement('tr');
+    for (const value of [row.kind, row.actor, row.outcome, `${row.measured}/${row.count}`, format(row.median), format(row.p95),
+      format(row.work), format(row.queue), format(row.approval)]) el.append(make('td', String(value ?? '—'), ''));
+    return el;
+  }));
+}
+
 if (typeof document !== 'undefined') {
   let state = [];
   async function refresh() {
-    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections', 'telegram', 'maintenance'].map(path => fetchJson(path + '.json')));
+    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections', 'telegram', 'maintenance', 'operation-timings'].map(path => fetchJson(path + '.json')));
     state = reports.map(({ status, value }, index) => status === 'fulfilled' ? value : state[index]);
     render(...state);
+    renderTimings(state[7]);
     const release = document.getElementById('maintenance-revision');
     const revision = state[6]?.revision;
     if (release && /^[a-f0-9]{40,64}$/u.test(revision ?? '')) {
@@ -312,6 +330,9 @@ if (typeof document !== 'undefined') {
     }
   }
 
+  for (const key of ['timings-range','timings-scope']) {
+    document.getElementById(key)?.addEventListener('change', () => renderTimings(state[7]));
+  }
   document.getElementById('range').addEventListener('change', () => render(...state));
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => render(...state));
   window.addEventListener('hashchange', () => {

@@ -15,11 +15,11 @@ const pollText = 'org.matrix.msc1767.text';
 const pollResponse = 'org.matrix.msc3381.poll.response';
 const gapId = /^cos-gap-[a-f0-9]{64}$/u;
 const validKey = /^[a-z0-9][a-z0-9_-]{0,35}$/u;
-const protectedKeys = new Set(['manager', 'root', 'vps-manager', 'chief-of-staff', 'remote-worker', 'dot', 'monitor',
+const protectedKeys = new Set(['manager', 'root', 'the-architect', 'chief-of-staff', 'remote-worker', 'dot', 'monitor',
   'telegram-agent', 'telegrambot', 'roster-inviter', 'postgres', 'synapse', 'context', 'neo4j',
-  'persona-workshop', 'vps-manager-ops', 'helper-dm', 'hiring-provider', 'helper']);
+  'persona-workshop', 'the-architect-ops', 'helper-dm', 'hiring-provider', 'helper']);
 
-const starterKeys = new Set(['task-manager','hiring-manager','coach','scouter','vps-manager','manager']);
+const starterKeys = new Set(['task-manager','hiring-manager','coach','scouter','the-architect','manager']);
 export const allowedHireKey = key => validKey.test(key) && !key.startsWith('engine-') && !key.startsWith('acp-') &&
   !protectedKeys.has(key) && !starterKeys.has(key);
 
@@ -107,7 +107,7 @@ export async function submit(payload) {
   }
   const key = (await readFile('/roster-key', 'utf8')).trim();
   return new Promise((resolve, reject) => {
-    const socket = createConnection('/run/office-roster.sock');
+    const socket = createConnection(process.env.ROSTER_SOCKET ?? '/run/office-roster.sock');
     socket.setTimeout(240_000, () => socket.destroy(new Error('Roster operation timed out')));
     socket.setEncoding('utf8');
     let output = '';

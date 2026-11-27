@@ -41,6 +41,7 @@ export class Store {
     if (!columns.includes('reply_to')) this.db.exec('ALTER TABLE inbox ADD COLUMN reply_to TEXT');
     if (!columns.includes('attachment_refs')) this.db.exec('ALTER TABLE inbox ADD COLUMN attachment_refs TEXT');
     if (!columns.includes('managed')) this.db.exec('ALTER TABLE inbox ADD COLUMN managed TEXT');
+    if (!columns.includes('received')) this.db.exec('ALTER TABLE inbox ADD COLUMN received INTEGER');
     if (!columns.includes('outgoing')) this.db.exec('ALTER TABLE inbox ADD COLUMN outgoing TEXT');
     this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS inbox_request_number ON inbox(request, number)');
   }
@@ -50,16 +51,16 @@ export class Store {
     return Number(this.db.prepare("SELECT value FROM settings WHERE name='activatedAt'").get().value);
   }
 
-  enqueue({ id, thread, body, request = id, number = 1, delegator = null, replyTo = null, attachmentRefs, managed }) {
-    this.db.prepare(`INSERT OR IGNORE INTO inbox (id, thread, body, request, number, delegator, reply_to, attachment_refs, managed)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  enqueue({ id, thread, body, request = id, number = 1, delegator = null, replyTo = null, attachmentRefs, managed, received = null }) {
+    this.db.prepare(`INSERT OR IGNORE INTO inbox (id, thread, body, request, number, delegator, reply_to, attachment_refs, managed, received)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, thread, body, request, number, delegator, replyTo,
-        attachmentRefs ? JSON.stringify(attachmentRefs) : null, managed ? JSON.stringify(managed) : null);
+        attachmentRefs ? JSON.stringify(attachmentRefs) : null, managed ? JSON.stringify(managed) : null, received);
   }
 
   next() {
     const row = this.db.prepare(`SELECT id, thread, body, reply, COALESCE(request, id) AS request, number,
-                                        delegator, reply_to AS replyTo, attachment_refs AS attachmentRefs, managed, outgoing
+                                        delegator, reply_to AS replyTo, attachment_refs AS attachmentRefs, managed, outgoing, received
                                  FROM inbox WHERE sent IS NULL ORDER BY rowid LIMIT 1`).get();
     if (row) {
       row.attachmentRefs = row.attachmentRefs ? JSON.parse(row.attachmentRefs) : [];

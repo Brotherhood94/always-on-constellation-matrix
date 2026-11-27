@@ -28,7 +28,7 @@ def preview(registry, retire=()):
     for key in names:
         if key in registry.get('retired', {}):
             raise ValueError(f'Resolve the retired starter ID {key} before migration')
-        if key in entries and key not in {coordinator, 'vps-manager'} and not entries[key].get('starter_role'):
+        if key in entries and key not in {coordinator, 'the-architect'} and not entries[key].get('starter_role'):
             raise ValueError(f'{key} is an existing custom identity. Resolve the name collision before migration.')
     for key in retire:
         if key not in registry.get('retired', {}):
@@ -59,7 +59,7 @@ def open_work(data, entries):
                     return key
         if key == 'chief-of-staff' and desk_pending(state / 'observer/reader.sqlite3'):
             return key
-        if key == 'vps-manager' and (state / 'matrix/gateway.sqlite3').exists():
+        if key == 'the-architect' and (state / 'matrix/gateway.sqlite3').exists():
             with closing(sqlite3.connect((state / 'matrix/gateway.sqlite3').as_uri()+'?mode=ro', uri=True)) as db:
                 if db.execute('SELECT 1 FROM tasks WHERE outcome IS NULL OR notified=0 OR '
                               '(source_thread IS NOT NULL AND source_notified=0) LIMIT 1').fetchone():
@@ -169,7 +169,7 @@ def migrate(data, args):
                 sync_workshop(settings,data,registry)
                 active = [key for key in local if registry['agents'][key]['active']]
                 up(data, *active, *(['helper-dm'] if 'helper' in active else []))
-                service_units(settings,data,broker=registry['agents'].get('vps-manager',{}).get('active',False))
+                service_units(settings,data,broker=registry['agents'].get('the-architect',{}).get('active',False))
                 configure_network(settings,data,settings)
                 journal['phase'] = 'retire'
                 save(path,journal)

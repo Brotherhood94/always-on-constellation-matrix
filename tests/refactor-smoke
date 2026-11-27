@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+cd -- "$(dirname -- "$0")/.."
+if (( EUID == 0 )); then
+  echo 'Run the refactor smoke test as a regular Docker operator.' >&2
+  exit 1
+fi
+work=$(mktemp -d)
+project="constellation-smoke-$$"
+cleanup() {
+  if [[ -e "$work/workspace/compose.yaml" ]]; then
+    ./constellation_matrix --data-dir "$work/workspace" uninstall --purge || true
+  fi
+  rm -rf -- "$work"
+}
+trap cleanup EXIT
+mkdir -p "$work/bin"
+printf '%s\n' '#!/bin/sh' 'echo Unexpected sudo call >&2' 'exit 97' > "$work/bin/sudo"
+chmod +x "$work/bin/sudo"
+export PATH="$work/bin:$PATH"
+python3 - "$work" "$project" <<'PY'
+from pathlib import Path
+import json, socket, sys
+root = Path(sys.argv[1])
+password = root / 'operator-password'
+password.write_text('fixture-operator-password!\n')
+password.chmod(0o600)
+listeners = [socket.socket() for _ in range(5)]
+for listener in listeners:
+    listener.bind(('127.0.0.1', 0))
+ports = dict(zip(('matrix_port','neo4j_port','bolt_port','context_port','hiring_port'),
+                 (listener.getsockname()[1] for listener in listeners)))
+(root/'install.json').write_text(json.dumps({'project':sys.argv[2], 'server_name':'refactor.fixture.test',
+    'owner':'operator', 'agents':[], 'tailscale':False, 'dot':False, 'telegram':False,
+    'owner_password_file':str(password), **ports}))
+PY
+./constellation_matrix --data-dir "$work/workspace" doctor --config "$work/install.json"
+./constellation_matrix --data-dir "$work/workspace" install --config "$work/install.json"
+./constellation_matrix --data-dir "$work/workspace" doctor
+for _ in $(seq 1 36); do
+  if [[ -s "$work/workspace/dashboard/operation-timings.json" ]]; then break; fi
+  sleep 5
+done
+python3 - "$work/workspace/dashboard/operation-timings.json" <<'PY'
+import json, sys
+with open(sys.argv[1]) as source:
+    rows = json.load(source)['ranges']['7']
+assert any(row['kind'] == 'cli-install' and row['outcome'] == 'completed' and row['measured'] >= 1 for row in rows), rows
+PY
+./constellation_matrix --data-dir "$work/workspace" backup
+./constellation_matrix --data-dir "$work/workspace" restore-check

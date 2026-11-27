@@ -47,6 +47,18 @@ providers:
 tools: []
 agents: []
 '''
+mode = os.environ.get('HIRING_PROVIDER_MODE')
+if mode:
+    start = bundle.index('providers:')
+    end = bundle.index('tools:', start)
+    bundle = bundle[:start] + f'''providers:
+  - module: provider-constellation-hiring
+    source: /opt/amplifier-acp/.venv/lib/python3.13/site-packages/amplifier_module_provider_constellation_hiring
+    config:
+      mode: {json.dumps(mode)}
+      default_model: {models.group()}
+      reasoning_effort: {json.dumps(os.environ['AGENT_REASONING'])}
+''' + bundle[end:]
 fixed_bundle = backend / 'telegram-communication.yaml'
 if fixed_bundle.exists():
     previous_bundle = bundle.replace(f'  version: {snapshot_version}\n',

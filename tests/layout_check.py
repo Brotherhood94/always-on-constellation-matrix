@@ -182,12 +182,12 @@ class LayoutTest(unittest.TestCase):
     def test_vps_manager_replaces_root_in_the_same_private_chat(self):
         server = os.environ['MATRIX_SERVER_NAME']
         password = 'synthetic-test-passphrase-88'
-        owner, old, replacement = (login(key, password) for key in ('operator', 'root', 'vps-manager'))
+        owner, old, replacement = (login(key, password) for key in ('operator', 'root', 'the-architect'))
         token = owner['access_token']
         rooms = create_layout(server, owner['user_id'], token)
         invite(rooms['office'], old['user_id'], token)
         join(rooms['office'], old['user_id'], old['access_token'])
-        audit = direct_room(server, rooms['space'], 'root', 'Root Operations', owner['user_id'], token,
+        audit = direct_room(server, rooms['space'], 'root', 'Control Room', owner['user_id'], token,
                             old['user_id'], old['access_token'])
         original = request('PUT', room_route(audit) + '/send/m.room.encrypted/old-root-receipt', {
             'algorithm': 'm.megolm.v1.aes-sha2', 'ciphertext': 'synthetic-envelope',
@@ -205,7 +205,7 @@ class LayoutTest(unittest.TestCase):
         with self.assertRaises(MatrixError):
             request('GET', CLIENT + '/account/whoami', token=old['access_token'])
         self.assertNotIn(old['user_id'], request('GET', room_route(rooms['office']) + '/joined_members', token=token)['joined'])
-        self.assertEqual(audit, direct_room(server, rooms['space'], 'root', 'Root Operations', owner['user_id'],
+        self.assertEqual(audit, direct_room(server, rooms['space'], 'root', 'Control Room', owner['user_id'],
                                            token, replacement['user_id'], replacement['access_token']))
         self.assertEqual(set(request('GET', room_route(audit) + '/joined_members', token=token)['joined']),
                          {owner['user_id'], replacement['user_id']})

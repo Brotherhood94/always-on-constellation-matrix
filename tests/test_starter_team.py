@@ -24,7 +24,7 @@ class StarterTeamTests(unittest.TestCase):
 
     def test_new_operator_can_confirm_starter_team_and_see_each_persona(self):
         presets = installer.starter_profiles()
-        self.assertEqual(set(presets), {'task-manager', 'hiring-manager', 'coach', 'scouter', 'vps-manager', 'helper'})
+        self.assertEqual(set(presets), {'task-manager', 'hiring-manager', 'coach', 'scouter', 'the-architect', 'helper'})
         with patch('agent_picker.terminal_picker', return_value=None), patch('builtins.input', return_value=''), patch('builtins.print'):
             self.assertEqual(select_agents(presets), list(presets))
         roster = {'local_server': 'office.example', 'team_version': 2, 'agents': {}}
@@ -45,12 +45,12 @@ class StarterTeamTests(unittest.TestCase):
     def test_migration_preview_preserves_identity_and_custom_workers(self):
         from team_migration import preview
         base = installer.available_profiles()
-        entries = {k: {**base[k], 'placement':'local'} for k in ('manager','chief-of-staff','coder','reviewer','vps-manager')}
+        entries = {k: {**base[k], 'placement':'local'} for k in ('manager','chief-of-staff','coder','reviewer','the-architect')}
         registry = {'agents':entries}
         plan = preview(registry, ['reviewer'])
         self.assertEqual(plan['task_manager'],'manager')
         self.assertEqual(set(plan['add']),{'hiring-manager','coach','scouter','helper'})
-        self.assertEqual(plan['retain'],['coder','manager','vps-manager'])
+        self.assertEqual(plan['retain'],['coder','manager','the-architect'])
         self.assertTrue(plan['archive_chief'])
         self.assertIn('reviewer',entries)
         with self.assertRaises(ValueError):
@@ -105,7 +105,7 @@ class StarterTeamTests(unittest.TestCase):
         from team_management import coach_change
         registry = {'agents':{k: {**v,'active':True} for k,v in installer.starter_profiles().items()}}
         settings={'server_name':'fixture.test'}
-        op={'kind':'coach','agent':'scouter','style':'Include a publisher link.','contacts':['vps-manager'],
+        op={'kind':'coach','agent':'scouter','style':'Include a publisher link.','contacts':['the-architect'],
             'evidence':'$proof','generation':2}
         with TemporaryDirectory() as tmp:
             data=Path(tmp)

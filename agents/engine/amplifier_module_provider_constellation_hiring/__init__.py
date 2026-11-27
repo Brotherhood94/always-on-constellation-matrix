@@ -26,7 +26,7 @@ class Provider:
         self.config, self.coordinator = config, coordinator
         self.default_model = config['default_model']
         self.reasoning_effort = config.get('reasoning_effort')
-        self.agent = os.environ['AGENT_USERNAME']
+        self.agent = os.environ.get('HIRING_GRANT_ID') or os.environ['AGENT_USERNAME']
         endpoint = os.environ.get('AGENT_MOBILITY_ENDPOINT')
         if endpoint:
             if not endpoint.startswith('https://'):
@@ -42,7 +42,15 @@ class Provider:
         self.client = httpx.AsyncClient(verify=verify, trust_env=False, timeout=httpx.Timeout(360, connect=8))
 
     def get_info(self):
-        upstream = ChatGPTProvider({'auth_mode': self.config['mode'], 'default_model': self.default_model})
+        mode = self.config['mode']
+        if mode == 'openai_api':
+            from amplifier_module_provider_openai import OpenAIProvider
+            upstream = OpenAIProvider(config={'default_model': self.default_model})
+        elif mode == 'anthropic_api':
+            from amplifier_module_provider_anthropic import AnthropicProvider
+            upstream = AnthropicProvider(config={'default_model': self.default_model})
+        else:
+            upstream = ChatGPTProvider({'auth_mode': mode, 'default_model': self.default_model})
         info = upstream.get_info()
         return info.model_copy(update={'id': NAME, 'display_name': 'Managed ' + info.display_name,
                                        'credential_env_vars': [], 'defaults': {'model': self.default_model}})

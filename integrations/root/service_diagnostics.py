@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import subprocess
+import time
 
 
 SERVICE_ID = re.compile(r'[a-z0-9][a-z0-9._@-]{0,79}')
@@ -142,6 +143,8 @@ def inspect_services(data, target, read_config, *, legacy=False):
         groups.append(('Telegram Compose', telegram))
     elif legacy:
         return 'completed', 0, {'findings': 'Telegram is disabled in this deployment.'}
+    if not legacy and (data / 'desktop-compose.yaml').is_file():
+        groups.append(('Desktop Compose', containers(project + '-desktop', 'Desktop Compose', set())))
     if not legacy and settings.get('systemd'):
         groups.append(('systemd', host_units(project, settings.get('tailscale'))))
     findings = [f'{source}: status unavailable' for source, services in groups if services is None]
@@ -169,3 +172,33 @@ def inspect_services(data, target, read_config, *, legacy=False):
     if omitted_logs:
         findings.append('Only the first six matching instances had logs checked. Inspect a specific service for details.')
     return 'completed', 0, {'findings': '\n'.join(findings)}
+
+
+def restart_service(data, target, read_config):
+    settings = read_config(data / 'settings.json')
+    project = settings['project']
+    if target in {'control-runtime', 'the-architect'} or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', project):
+        return 'precondition_failed', None, None
+    groups = [(project, 'Compose')]
+    if settings.get('telegram'):
+        groups.append((project + '-telegram', 'Telegram Compose'))
+    if (data / 'desktop-compose.yaml').is_file():
+        groups.append((project + '-desktop', 'Desktop Compose'))
+    matches = []
+    for name, source in groups:
+        services = containers(name, source, set())
+        if services is None:
+            return 'precondition_failed', None, None
+        matches.extend(service for service in services if service.name == target)
+    if len(matches) != 1 or not matches[0].status.startswith(('running', 'restarting')):
+        return 'precondition_failed', None, None
+    identifier = matches[0].log_id
+    if command('/usr/bin/docker', 'restart', '--time', '4', identifier) is None:
+        return 'failed', None, None
+    for _ in range(18):
+        health = command('/usr/bin/docker', 'inspect', '--format',
+                         '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}', identifier)
+        if health is not None and health.strip() in {'healthy', 'running'}:
+            return 'completed', 0, {'findings': f'{target} restarted and reported {health.strip()}.'}
+        time.sleep(5)
+    return 'verification_failed', None, {'findings': f'{target} did not confirm readiness after restart.'}

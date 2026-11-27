@@ -20,7 +20,7 @@ from context_intelligence_server.handlers.data_layer_1.field_lifters import (
     UniversalLifter,
 )
 from context_intelligence_server.protocol import HookResult
-from context_intelligence_server.execution_timeline import attach_execution, attach_office_step, execution_ids, office_step
+from context_intelligence_server.execution_timeline import attach_execution, attach_office_step, execution_ids, office_step, timing_fields
 from context_intelligence_server.services import HookStateService
 from context_intelligence_server.utils import make_node_id
 
@@ -146,7 +146,7 @@ class DefaultHandler:
             if isinstance(sender, str) and len(sender) <= 512:
                 node_props["performed_by"] = sender
         if (event.startswith("root:") and self.services.graph.workspace == "root-operations"
-                and self.services.graph.created_by == "vps-manager-ops"):
+                and self.services.graph.created_by == "the-architect-ops"):
             operation = data.get("operation")
             receipt = operation.get("id") if isinstance(operation, dict) else None
             if isinstance(receipt, str) and re.fullmatch(r"[a-f0-9]{32}", receipt):
@@ -154,6 +154,8 @@ class DefaultHandler:
         office = office_step(event, evidence, scope, self.services.graph)
         if office:
             node_props.update(office)
+        if event in {'agents:execution', 'root:finished', 'timing:finished', 'telegram:delivery_attempt'}:
+            node_props.update(timing_fields(data.get('timing'), self.services.graph))
         await self.services.graph.upsert_node(event_node_id, node_props)
 
         # Stage 5: HAS_EVENT edge — (Session)-[:HAS_EVENT {occurred_at}]->(Event)

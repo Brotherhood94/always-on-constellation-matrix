@@ -9,12 +9,12 @@ from setup_guide import interactive_terminal
 
 
 def initialize(data, settings, registry):
-    if not settings['systemd']:
-        raise ValueError('VPS Manager maintenance requires the systemd approval broker.')
+    if not (settings['systemd'] or settings.get('control_runtime')):
+        raise ValueError('TheArchitect maintenance requires the systemd approval broker.')
     candidates = settings.get('maintenance_restart_services', [])
     maintenance = Maintenance(data)
     maintenance.initialize(SOURCE, settings['project'], candidates, registry)
-    config_path = data / 'state/vps-manager/config.json'
+    config_path = data / 'state/the-architect/config.json'
     config = load(config_path)
     save(config_path, {**config, 'maintenance': True}, mode=0o444)
     compose_config(settings, data, registry)
@@ -60,8 +60,8 @@ def configure(data, args):
     if args.no_auto_restarts and args.restart_service:
         raise ValueError('Choose restart services or disable automatic restarts.')
     settings, registry = open_existing(data)
-    if not settings['systemd'] or not registry['agents'].get('vps-manager', {}).get('active'):
-        raise ValueError('Configure VPS Manager on a systemd host before enabling maintenance.')
+    if not (settings['systemd'] or settings.get('control_runtime')) or not registry['agents'].get('the-architect', {}).get('active'):
+        raise ValueError('Configure TheArchitect on a systemd host before enabling maintenance.')
     services = args.restart_service
     if services is None:
         services = choose_services(registry, settings) if interactive_terminal() and not args.no_auto_restarts else []
@@ -70,11 +70,17 @@ def configure(data, args):
         if any(not ordinary(name, registry) for name in services):
             raise ValueError('Choose active, local Office connectors for autonomous restart.')
         settings = {**settings, 'maintenance': True, 'maintenance_restart_services': services}
+        if getattr(args, 'auto_config_policy', None):
+            from auto_tune import policy
+            settings['auto_config_policy'] = policy(load(args.auto_config_policy))
         prepare_images(settings, registry)
         initialize(data, settings, registry)
         save(data / 'settings.json', settings)
         service_units(settings, data, broker=True)
-        run('systemctl', 'try-restart', settings['project'] + '-root.service')
-        compose(data, '--profile', 'agents', 'up', '-d', '--no-deps', '--wait', '--wait-timeout', '150', 'engine-vps-manager')
-        compose(data, '--profile', 'agents', 'up', '-d', '--no-deps', '--wait', '--wait-timeout', '150', 'vps-manager')
-    print('VPS Manager maintenance is ready. Review repository releases in Root Operations.')
+        if settings.get('control_runtime'):
+            compose(data, 'restart', 'control-runtime')
+        else:
+            run('systemctl', 'try-restart', settings['project'] + '-root.service')
+        compose(data, '--profile', 'agents', 'up', '-d', '--no-deps', '--wait', '--wait-timeout', '150', 'engine-the-architect')
+        compose(data, '--profile', 'agents', 'up', '-d', '--no-deps', '--wait', '--wait-timeout', '150', 'the-architect')
+    print('TheArchitect maintenance is ready. Review repository releases in Control Room.')

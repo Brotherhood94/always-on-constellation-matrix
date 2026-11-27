@@ -18,10 +18,10 @@ Start with six roles and add specialists as your work grows. Use the record of r
 | **Hiring Manager** | Groups recurring capability gaps across differently worded assignments and proposes new personas or retirements. | **Hiring Manager** private chat |
 | **Coach** | Reviews handoffs in Context Intelligence and revises working styles and permitted contacts through Persona Workshop. | **Coach** private chat |
 | **Scouter** | Researches skills, MCP servers, and tools for existing duties and has the target agent verify approved access. | **Scouter** private chat |
-| **VPS Manager** | Prepares host operations and tested workspace patches for an operator vote. Recovers explicitly opted-in connectors when they fail. | **Office** for requests, **Agents → Rooms → Root Operations** for approval |
+| **TheArchitect** | Prepares host operations and tested workspace patches for an operator vote. Recovers explicitly opted-in connectors when they fail. | **Office** for requests, **Agents → Rooms → Control Room** for approval |
 | **Helper** | Answers setup and troubleshooting questions using the deployed guides and dashboard health. | **Agents → People → Helper** |
 
-Open the dashboard from **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. **Team connections** shows the permitted directions. Follow an arrow to review that route’s changes and recent Office handoffs, or select **View connection changes** for the workspace log. [Team connections and history](docs/team.md#team-connections) · [Starting contact permissions and role examples](docs/team.md#first-interactions)
+Open the dashboard from **Agents → Control Room → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. **Team connections** shows the permitted directions. Follow an arrow to review that route’s changes and recent Office handoffs, or select **View connection changes** for the workspace log. [Team connections and history](docs/team.md#team-connections) · [Starting contact permissions and role examples](docs/team.md#first-interactions)
 
 ![Constellation dashboard with CPU, memory and disk charts, Task Manager's contact routes, and the five-agent roster](assets/screenshots/dashboard.webp)
 
@@ -29,27 +29,19 @@ Open the dashboard from **Agents → VPS Alerts → Pinned messages → Workspac
 
 ## Quick start
 
-From this checkout on an Ubuntu 24.04 VPS, use standard Docker Engine with Compose V2. Start setup as your regular user. The installer invokes sudo for Docker, protected deployment files, and host services. Tailscale Serve gives authorized devices private HTTPS access to Element’s homeserver, the dashboard, and the graph browser. [VPS prerequisites](docs/runbook.md#initial-setup) · [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve)
+On a Linux VPS with Docker Engine and Compose, run setup as your regular user after `docker info` succeeds. Use an enrolled Tailscale node or an existing private HTTPS proxy for Element, the dashboard, and Context Intelligence. [VPS prerequisites](docs/runbook.md#initial-setup)
 
 ```sh
+./constellation_matrix doctor
 ./constellation_matrix install
 ```
 
-1. **Deploy the workspace.** Choose your network, Matrix username, and integrations. Set your Matrix password and a dedicated Context Intelligence password. If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt. The installer then displays the homeserver and Element Desktop sign-in instructions.
-2. **Choose your team.** Confirm Element sign-in in the terminal. Use the arrow keys to review the six preselected roles, press Enter to toggle any of them, and choose **Done**. The installer uses sudo to save the agent registrations and start local Amplifier containers, then opens Amplifier’s provider and model setup for each local agent in the same terminal.
-3. **Open the welcome.** Once the selected agents are ready, Hiring Manager sends a private welcome if selected. Otherwise, a ready Office agent posts it in Office. The welcome points to **Workspace shortcuts**.
+1. Choose your network, operator, passwords, integrations, and starter team.
+2. Connect one provider and pick a model and reasoning effort. Reuse that connection for the team or choose exceptions. The installer checks the selected agents before showing the Element page.
+3. Sign in to Element with the displayed homeserver. Open **Agents → Rooms → Control Room** for the dashboard, Context Intelligence, and enabled integration guides. Finish Telegram QR sign-in in **Telegram Bridge** if you enabled it.
 
-The starter agents use Amplifier’s native provider setup. ChatGPT via Codex is the only starter provider tested with a live account. Anthropic and OpenAI API-key setup have synthetic coverage.
+Resume an interrupted setup with `./constellation_matrix setup-guide`. [Guided setup](docs/setup-guide.md)
 
-The installer can add your Linux user to the `docker` group after you opt in. This grants root-equivalent access for manual Docker commands. Open a new SSH session afterward. Hiring Manager uses the existing roster broker for Docker operations.
-
-If agent sign-in was interrupted, resume it from the same checkout.
-
-```sh
-./constellation_matrix agent configure
-```
-
-Run `./constellation_matrix setup-guide` to resume onboarding or append `--print` for the Element sign-in instructions and guide locations. [Finalize your setup](docs/setup-guide.md)
 
 ### Hire a specialist from Element
 
@@ -67,7 +59,7 @@ Enabling **Telegram** installs **Telegram Agent** automatically. The installer i
 
 ### Finish in Element
 
-- **Agents → VPS Alerts → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
+- **Agents → Control Room → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
 - **Telegram → Rooms → Telegram Bridge → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Telegram Agent verifies the destination and reports the result in the originating thread. Use a draft request to preview a message. [Telegram setup and examples](docs/telegram.md)
 
 ### Send your first task
@@ -126,11 +118,11 @@ Context Intelligence records who handed off an assignment, whether the recipient
 
 *The same demo task in Neo4j Browser. The graph links Task Manager’s dispatch to Scouter’s acceptance and return, and records the verified outcome.*
 
-On a systemd deployment, these management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving VPS Manager in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
+On a systemd deployment, these management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving TheArchitect in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
 
 ## Architecture
 
-Each agent has a Matrix identity, a private workspace, and a persistent Constellation Instance running Amplifier. The **Agents** Space groups **Office**, **VPS Alerts**, and the operator’s private chats with **Hiring Manager**, **Coach**, **Scouter**, and **Helper**. The encrypted approvals room **Root Operations** appears under **Agents → Rooms**. General Office workers also share a desktop for task files.
+Each agent has a Matrix identity, a private workspace, and a persistent Constellation Instance running Amplifier. The **Agents** Space groups **Office**, **Control Room**, and the operator’s private chats with **Hiring Manager**, **Coach**, **Scouter**, and **Helper**. The encrypted approvals room **Control Room** appears under **Agents → Rooms**. General Office workers also share a desktop for task files.
 
 The installer enables startup at boot. Docker restarts application containers, Tailscale Serve provides private dashboard access, and systemd runs host services, including the Dot tunnel once connected. [Architecture notes](docs/architecture.md) · [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 
@@ -193,24 +185,24 @@ flowchart TB
 
 ## Operate and extend
 
-For unattended provisioning, edit the example configuration, check it with `./constellation_matrix validate --config <file>`, and run `sudo ./constellation_matrix install --config <file>`. Run `setup-guide` from an interactive terminal afterwards. [Example configuration](deploy/config.example.json)
+For unattended provisioning, edit the example configuration, check it with `./constellation_matrix validate --config <file>`, and run `./constellation_matrix install --config <file>`. Run `setup-guide` from an interactive terminal afterwards. [Example configuration](deploy/config.example.json)
 
 | Task | Start here |
 | --- | --- |
-| Check the stack | Run `./constellation_matrix status` for the latest dashboard snapshot, or use **Agents → VPS Alerts → Pinned messages** to open the dashboard or Context Intelligence. |
-| Add a local Office worker | Run `sudo ./constellation_matrix agent add --profile /path/to/agent.json --configure`. This opens native Amplifier sign-in after provisioning. See [agent profiles](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
-| Retire a local Office worker | Run `sudo ./constellation_matrix agent remove <id>` to finish accepted work, revoke access, and archive the workspace. [Retirement](docs/runbook.md#retire-a-worker) |
+| Check the stack | Run `./constellation_matrix status` for the latest dashboard snapshot, or use **Agents → Control Room → Pinned messages** to open the dashboard or Context Intelligence. |
+| Add a local Office worker | Run `./constellation_matrix agent add --profile /path/to/agent.json --configure`. This opens native Amplifier sign-in after provisioning. See [agent profiles](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
+| Retire a local Office worker | Run `./constellation_matrix agent remove <id>` to finish accepted work, revoke access, and archive the workspace. [Retirement](docs/runbook.md#retire-a-worker) |
 | Manage staffing | Ask **Hiring Manager** to hire or retire a teammate and review its exact proposal in the private chat. [Staffing](docs/team.md#first-interactions) |
 | Improve handoffs or tools | Ask **Coach** about an Office handoff, or **Scouter** about a missing tool. [Contacts and tool grants](docs/team.md) |
-| Upgrade an existing team | Preview with `sudo ./constellation_matrix agent migrate-team`. [Migration and recovery](docs/team.md#upgrade-an-existing-team) |
-| Ask for VPS maintenance | Mention **VPS Manager** in Office or ask Task Manager to delegate. Review the action in the private [Root Operations chat](integrations/root/README.md). |
-| Release a workspace patch or recover a connector | Enable [VPS Manager maintenance](integrations/root/README.md#repository-maintenance-and-automatic-recovery) on the VPS. Vote on tested patches in Root Operations and choose which connectors can restart automatically. |
+| Upgrade an existing team | Preview with `./constellation_matrix agent migrate-team`. [Migration and recovery](docs/team.md#upgrade-an-existing-team) |
+| Ask for VPS maintenance | Mention **TheArchitect** in Office or ask Task Manager to delegate. Review the action in the private [Control Room chat](integrations/root/README.md). |
+| Release a workspace patch or recover a connector | Enable [TheArchitect maintenance](integrations/root/README.md#repository-maintenance-and-automatic-recovery) on the VPS. Vote on tested patches in Control Room and choose which connectors can restart automatically. |
 | Trace an Office task | Open [Context Intelligence](integrations/context-execution/README.md) to see who handed off the work, whether the recipient accepted it, and how the original assignee closed the task. |
 | Get help with setup or a service | Open **Agents → People → Helper**. On an existing deployment, run `./constellation_matrix agent add --starter helper --configure`. [Helper guide](docs/team.md#ask-helper) |
 | Repair sidebar placement | Run `./constellation_matrix layout` on the VPS and sign in as the Matrix operator. [Layout migration](docs/telegram.md#repair-an-existing-workspace) |
 | Work from ChatGPT or Telegram | [Connect Dot](docs/dot.md) to publish tasks and read their outcomes. Use [Telegram Agent](docs/telegram.md) to open chats, manage groups, send requested messages and summarize registered conversations. |
 | Test a deployed team | Run the [deployment scenarios](docs/acceptance.md#post-deployment-scenarios), from a single Office task through handoffs, approvals, and recovery. |
-| Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check` with sudo. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
+| Verify or recover a deployment | Run `status --refresh`, `backup`, and `restore-check`. See the [acceptance checks](docs/acceptance.md) and [recovery guide](docs/runbook.md#back-up-and-recover). |
 
 ### Move agents between hosts
 
@@ -226,6 +218,16 @@ For enrollment, recovery, and migrating an older remote worker, follow the [host
 
 Helper shares one tip per day in **Agents → People → Helper**, starting after its welcome. Hints become eligible at 10:00 in the deployment timezone and include features such as installing a remote worker or moving an always-on agent. Say **“stop sending hints”** or **“resume daily hints”** in the private chat. [Timing and Italian commands](docs/team.md#daily-helper-hints)
 
+### Control Room and operation timings
+
+**TheArchitect** accepts requests directly in **Control Room** and can receive verified handoffs from Task Manager in Office. The encrypted room contains workspace links, maintenance polls, receipts, and operational alerts. Send **Diagnose services** for a health overview, or **Diagnose Telegram** for a targeted check.
+
+**Operation timings** shows measured work, queue and approval durations for the last seven or thirty days. A weekly Control Room summary identifies groups that consumed the most time in measured phases. [Maintenance and timing guide](integrations/root/README.md)
+
+### Digital twins
+
+Ask TheArchitect to **start a digital twin**. Choose a connection, model, reasoning effort and agent roster in Control Room, then approve the start. `twin list`, `twin status <id>`, `twin access <id>` and `twin stop <id>` manage the separate test workspace. [Digital twin workflow](integrations/root/README.md#start-a-digital-twin)
+
 ## Planned features
 
 - Copy files from workspaces and approved folders to the shared desktop from local and remote agents. The plan includes approval for protected agents. [Shared desktop copy plan](next_features_plans/plan.md#shared-desktop-file-copying)
@@ -236,13 +238,13 @@ Helper shares one tip per day in **Agents → People → Helper**, starting afte
 From the repository on the VPS, remove the workspace services and keep your data and backups.
 
 ```sh
-sudo ./uninstall.sh
+./uninstall.sh
 ```
 
 For a fresh install, purge the workspace. This permanently deletes its data, backups, and Docker volumes.
 
 ```sh
-sudo ./uninstall.sh --purge
+./uninstall.sh --purge
 ```
 
 See the runbook for custom data directories and remote workers. [Uninstall options](docs/runbook.md#uninstall)

@@ -19,7 +19,7 @@ def post(endpoint, payload, key):
         return json.load(response)
 
 
-writers = {name: f'fixture-writer-{name}' for name in ('first', 'second', 'manager', 'analyst', 'vps-manager', 'vps-manager-ops')}
+writers = {name: f'fixture-writer-{name}' for name in ('first', 'second', 'manager', 'analyst', 'the-architect', 'the-architect-ops')}
 reader = 'fixture-reader'
 workspace = 'agents-team'
 publisher = 'fixture-topology-publisher'
@@ -86,21 +86,21 @@ def office(kind, writer, stamp, request, assignment, **fields):
 
 def verify_office():
     # A result can arrive before dispatch or acceptance without losing the links.
-    office('execution', 'vps-manager', 5, '$first', '$delegate-vps', reply='$vps-result', to='@manager:fixture.test',
+    office('execution', 'the-architect', 5, '$first', '$delegate-vps', reply='$vps-result', to='@manager:fixture.test',
            step='returned', operation='a' * 32)
     post('events', {'event': 'root:finished', 'workspace': 'root-operations', 'idempotency_key': 'fixture-vps-audit',
                     'data': {'session_id': 'fixture-vps-audit', 'timestamp': '2026-11-24T16:00:05Z',
-                             'operation': {'id': 'a' * 32}}}, writers['vps-manager-ops'])
+                             'operation': {'id': 'a' * 32}}}, writers['the-architect-ops'])
     office('execution', 'manager', 7, '$first', '$vps-result', reply='$verified', outcome='completed',
            references=['$vps-result'])
     office('execution', 'analyst', 1, '$first', '$first', reply='$spoof', actor='@manager:fixture.test', outcome='blocked')
     office('assignment_accepted', 'manager', 2, '$first', '$first')
     office('execution', 'manager', 3, '$first', '$first', reply='$delegate-analyst', to='@analyst:fixture.test')
     office('assignment_accepted', 'analyst', 4, '$first', '$delegate-analyst', **{'from': '@manager:fixture.test'})
-    office('execution', 'analyst', 8, '$first', '$delegate-analyst', reply='$delegate-vps', to='@vps-manager:fixture.test',
+    office('execution', 'analyst', 8, '$first', '$delegate-analyst', reply='$delegate-vps', to='@the-architect:fixture.test',
            step='returned')
-    office('assignment_accepted', 'vps-manager', 9, '$first', '$delegate-vps', **{'from': '@analyst:fixture.test'})
-    office('assignment_accepted', 'manager', 6, '$first', '$vps-result', **{'from': '@vps-manager:fixture.test'})
+    office('assignment_accepted', 'the-architect', 9, '$first', '$delegate-vps', **{'from': '@analyst:fixture.test'})
+    office('assignment_accepted', 'manager', 6, '$first', '$vps-result', **{'from': '@the-architect:fixture.test'})
     office('assignment_accepted', 'manager', 10, '$second', '$second')
     office('execution', 'manager', 11, '$second', '$second', reply='$unverified', outcome='completed')
     statuses = ('MATCH (t:ExecutionTask {workspace:$workspace,office_thread:"$thread"}) '
@@ -117,8 +117,8 @@ def verify_office():
                 'RETURN h.source AS source,h.target AS target,h.status AS status')
     wait_for(handoffs, lambda rows: {(r['source'], r['target'], r['status']) for r in rows} == {
         ('@manager:fixture.test', '@analyst:fixture.test', 'returned'),
-        ('@analyst:fixture.test', '@vps-manager:fixture.test', 'returned'),
-        ('@vps-manager:fixture.test', '@manager:fixture.test', 'returned'),
+        ('@analyst:fixture.test', '@the-architect:fixture.test', 'returned'),
+        ('@the-architect:fixture.test', '@manager:fixture.test', 'returned'),
     })
     assert query('MATCH (t:ExecutionTask {workspace:$workspace,office_request:"$first"})-[:HAS_OUTCOME]->(e) '
                  'RETURN e.office_reply AS reply,e.office_references AS refs') == [{'reply': '$verified', 'refs': ['$vps-result']}]
@@ -237,7 +237,7 @@ if __name__ == '__main__':
                           'api_keys': {hashlib.sha256(token.encode()).hexdigest(): {'id': identity}
                                        for token, identity in ids.items()},
                           'contributor_grants': {identity: ({'all_workspaces': True, 'capabilities': ['data:read']}
-                              if identity == 'reader' else {'workspaces': ['root-operations' if identity == 'vps-manager-ops'
+                              if identity == 'reader' else {'workspaces': ['root-operations' if identity == 'the-architect-ops'
                                                                          else workspace], 'capabilities': ['data:read','live:write']
                                                                          if identity in {'scouter', 'office-topology@deployment'} else ['live:write']})
                               for identity in ids.values()}}))

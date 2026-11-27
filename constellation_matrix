@@ -1,4 +1,7 @@
 #!/bin/sh
 set -eu
 base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ "$(id -u)" != 0 ] && [ "${CONSTELLATION_RUNTIME:-}" != compose ]; then
+  exec python3 -B "$base/deploy/operator_runtime.py" "$@"
+fi
 exec python3 -B "$base/deploy/installer.py" "$@"

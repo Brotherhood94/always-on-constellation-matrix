@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-const modes = { chatgpt_codex: 'ChatGPT Codex', chatgpt_plan: 'ChatGPT Plan' };
+const modes = { chatgpt_codex: 'ChatGPT Codex', chatgpt_plan: 'ChatGPT Plan', openai_api: 'OpenAI API', anthropic_api: 'Anthropic API' };
 const voteStages = ['mode', 'account', 'model', 'effort', 'tools'];
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const escapeMarkdown = value => String(value ?? '').replace(/[\\`*_{}\[\]<>#+|]/gu, '\\$&');
@@ -75,14 +75,15 @@ export function createHireConfiguration({ db, access, send }) {
     const { stage, mode, account, model, effort, login } = state;
     const title = 'Configure ' + template.agent;
     if (stage === 'mode') {
-      await show(request, saved, state, title + ' · choose a ChatGPT connection mode',
+      await show(request, saved, state, title + ' · choose a provider connection',
         Object.entries(modes).map(([value, label]) => ({ value, label })));
     } else if (stage === 'account') {
       const { accounts = [] } = await access({ action: 'accounts' });
       await show(request, saved, state, title + ' · choose an account',
         [...accounts.filter(item => item.mode === mode).map(item =>
           ({ value: item, label: item.label + (item.ready ? '' : ' · reconnect') })),
-        { value: 'connect', label: 'Connect a ' + modes[mode] + ' account' }]);
+        ...(!mode.endsWith('_api') ? [{ value: 'connect', label: 'Connect a ' + modes[mode] + ' account' }] : [])],
+        mode.endsWith('_api') ? 'Connect API keys from the VPS terminal with the provider setup command.' : '');
     } else if (stage === 'login') {
       const status = await access({ action: 'login-status', id: login });
       if (status.status === 'ready') {

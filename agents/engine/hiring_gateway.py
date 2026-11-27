@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import hmac
+import inspect
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 import json
@@ -22,7 +23,9 @@ from amplifier_core import llm_errors
 from amplifier_core.message_models import ChatRequest
 from amplifier_module_provider_openai_chatgpt import ChatGPTProvider, models, oauth, plan_auth
 
-MODES = {'chatgpt_codex': 'ChatGPT Codex', 'chatgpt_plan': 'ChatGPT Plan'}
+LOGIN_MODES = {'chatgpt_codex': 'ChatGPT Codex', 'chatgpt_plan': 'ChatGPT Plan'}
+API_MODES = {'openai_api': 'OpenAI API', 'anthropic_api': 'Anthropic API'}
+MODES = {**LOGIN_MODES, **API_MODES}
 EFFORT = {'none', 'minimal', 'low', 'medium', 'high', 'xhigh'}
 IDENTIFIER = re.compile(r'[a-f0-9]{24}')
 TOKEN = re.compile(r'[a-f0-9]{64}')
@@ -136,6 +139,13 @@ class Connections:
             config['default_model'] = model
         if effort and effort != 'none':
             config['reasoning_effort'] = effort
+        coordinator = SimpleNamespace(hooks=hooks) if hooks else None
+        if record['mode'] in API_MODES:
+            from amplifier_module_provider_anthropic import AnthropicProvider
+            from amplifier_module_provider_openai import OpenAIProvider
+            cls = OpenAIProvider if record['mode'] == 'openai_api' else AnthropicProvider
+            model_config = {name: config[name] for name in ('default_model', 'reasoning_effort') if name in config}
+            return cls(api_key=(home / 'api-key').read_text().strip(), config=model_config, coordinator=coordinator)
         return self.provider(config, SimpleNamespace(hooks=hooks) if hooks else None)
 
     async def fetch_models(self, record, *, path=None):
@@ -144,7 +154,8 @@ class Connections:
             rows = await asyncio.wait_for(provider.list_models(filters={}), timeout=25)
             return [model_choices(model) for model in rows if MODEL.fullmatch(model.id)]
         finally:
-            await provider.close()
+            if (close := getattr(provider, "close", None)) and inspect.isawaitable(pending := close()):
+                await pending
 
     def models(self, account, *, fresh=False):
         with self.locked(account):
@@ -171,7 +182,7 @@ class Connections:
         return self.jobs / (key(identifier) + '.json')
 
     def begin(self, identifier, mode, account=None):
-        if mode not in MODES or (account and self.record(account)['mode'] != mode):
+        if mode not in LOGIN_MODES or (account and self.record(account)['mode'] != mode):
             raise ValueError('Invalid ChatGPT mode')
         path = self.enrollment(identifier)
         with self.guard:
@@ -282,6 +293,30 @@ class Connections:
             save(directory / 'account.json', record)
             self.catalogs[account] = (self.clock(), models)
 
+    def connect_key(self, mode, secret):
+        if mode not in API_MODES or not isinstance(secret, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,512}', secret):
+            raise ValueError('Invalid provider API key.')
+        identity = digest(secret)
+        with self.guard:
+            for record in self.accounts():
+                if record['mode'] == mode and record['identity'] == identity:
+                    return {'status': 'ready', 'account': {key: value for key, value in record.items() if key != 'identity'}}
+            account = secrets.token_hex(12)
+            record = {'id': account, 'mode': mode, 'ready': True, 'identity': identity,
+                      'label': API_MODES[mode] + ' · ' + account[-6:]}
+            with TemporaryDirectory(dir=self.state) as temp:
+                draft = Path(temp) / 'profile'
+                draft.mkdir(mode=0o700)
+                (draft / 'api-key').touch(mode=0o600)
+                (draft / 'api-key').write_text(secret)
+                catalog = asyncio.run(self.fetch_models(record, path=draft))
+                if not catalog:
+                    raise ValueError('The account returned no available models.')
+                save(draft / 'account.json', record)
+                draft.rename(self.profile(account))
+            self.catalogs[account] = (self.clock(), catalog)
+            return {'status': 'ready', 'account': {key: value for key, value in record.items() if key != 'identity'}}
+
     def public_accounts(self):
         return [{field: record[field] for field in ('id', 'mode', 'label', 'ready')} for record in self.accounts()]
 
@@ -296,14 +331,22 @@ class Connections:
             raise ValueError('The selected model or reasoning effort is no longer available')
         file = self.grants / (agent + '.json')
         wanted = {'account': account, 'model': model, 'effort': effort, 'credential': digest(credential)}
+        if 'expires_at' in payload:
+            expiry = payload['expires_at']
+            if not agent.startswith('tw-') or type(expiry) is not int or not self.clock() < expiry <= self.clock() + 21600:
+                raise ValueError('Invalid twin grant expiration.')
+            wanted['expires_at'] = expiry
         if file.exists() and read(file) != wanted:
             raise ValueError('This agent already has a different provider grant')
         save(file, wanted)
         return {'status': 'granted'}
 
     def generation(self, agent, authorization, payload, emit, *, relayed=False):
+        watch = time.monotonic_ns()
         file = self.grants / (key(agent, AGENT) + '.json')
         grant = read(file)
+        if grant.get('expires_at', float('inf')) <= self.clock():
+            raise PermissionError('Provider access has expired')
         if not relayed and not hmac.compare_digest(digest(key(authorization, TOKEN)), grant['credential']):
             raise PermissionError('Invalid agent credential')
         account = grant['account']
@@ -326,20 +369,28 @@ class Connections:
             try:
                 return await provider.complete(request)
             finally:
-                await provider.close()
+                if (close := getattr(provider, 'close', None)) and inspect.isawaitable(pending := close()):
+                    await pending
 
         # One credential owner serializes inference and catalog calls for this account.
         with self.locked(account):
-            if not file.is_file() or read(file) != grant:
+            if not file.is_file() or read(file) != grant or grant.get('expires_at', float('inf')) <= self.clock():
                 raise PermissionError('Provider access has ended')
             record = self.record(account)
             if not record['ready']:
                 raise llm_errors.AuthenticationError('The connected ChatGPT account needs reauthorization')
+            queue = round((time.monotonic_ns() - watch) / 1_000_000)
+            outcome = 'completed'
             try:
                 reply = asyncio.run(complete())
             except Exception as error:
-                self.update_status(record, provider_error(error))
+                outcome = provider_error(error)
+                self.update_status(record, outcome)
                 raise
+            finally:
+                if path := os.environ.get('OPERATION_TIMING_OUTBOX'):
+                    from operation_timing import record as record_timing
+                    record_timing(Path(path), 'provider-inference', watch, outcome, actor=agent, queue_ms=queue)
             self.update_status(record)
             emit({'result': reply.model_dump(mode='json')})
 
@@ -349,6 +400,8 @@ class Connections:
             return {'accounts': self.public_accounts()}
         if action == 'catalog':
             return {'models': self.models(payload['account'])}
+        if action == 'connect-key':
+            return self.connect_key(payload['mode'], payload['key'])
         if action == 'begin':
             return self.begin(payload['id'], payload['mode'], payload.get('account'))
         if action == 'login-status':

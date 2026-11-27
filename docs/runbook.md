@@ -14,35 +14,15 @@ The workspace and integrations checklist opens with **Done** highlighted. On a f
 
 Enter a Matrix operator password of at least 12 characters, then re-enter it on the confirmation screen. Both fields mask what you type. Save it for signing in to Element. On a fresh install, choose and confirm a separate Context Intelligence password for Neo4j Browser. Use at least 12 printable characters and avoid `/` and a leading `-`.
 
-The installer then uses sudo to start Docker services, write protected deployment files, and enable startup at boot. If sudo prompts for a password, enter the Linux password for the VPS account shown in the prompt.
+Select the team in the terminal and connect a provider account. Choose a common profile and change individual settings if needed. When the selected agents have passed their readiness checks, the terminal displays the Element homeserver. Sign in and open **Agents → Rooms → Control Room** to finish optional integration setup.
 
-After the workspace boots, sign in to Element and confirm sign-in in the terminal. Then use ↑ and ↓ to browse the agent checklist and Enter to toggle agents. Choose **Done** to register the roster. An empty choice lets you add agents later. [Guided setup](setup-guide.md)
+Use `./constellation_matrix setup-guide` to resume. `./constellation_matrix agent configure` resumes pending agents. For unattended provisioning, provide `owner_password_file` and optionally `neo4j_password_file` in a validated `install --config` document. Keep those files outside the checkout with mode `0600`.
 
-After registration, the installer starts the selected local Amplifier Instances together and opens provider and model setup one agent at a time in the same terminal. The dashboard shows **Sign-in required** for pending agents. Use the following command to resume an interrupted provider setup.
-
-```sh
-./constellation_matrix agent configure
-```
-
-Each agent runs Amplifier’s own provider manager. It offers Anthropic for Claude, OpenAI with an API key, and ChatGPT for Codex sign-in. The terminal clears between provider selection, credential prompts, sign-in, and model selection. Add or edit a provider, follow its login prompts, pick the model, and choose **Done**. Amplifier keeps credentials and settings in that Instance’s private persistent home. Constellation starts the agent’s Matrix connector after its request and session-resume checks pass. [Amplifier provider setup](https://github.com/microsoft/amplifier-app-cli#readme)
-
-Check the agent name at the top of each page. **Add a provider** creates an additional connection for that agent. Choose **Done** to verify that agent and move to the next one in batch setup. Each agent can use a different provider and model.
-
-After all selected agents are active and joined in Matrix, the installer publishes the welcome and prints its link. Hiring Manager welcomes you in its private chat when selected. Legacy installations with Chief of Staff keep their existing welcome. Otherwise, a ready Office agent posts in Office. Remote workers complete enrollment on their own host and must be confirmed on the coordinator before the welcome. Run `./constellation_matrix setup-guide` to resume setup or retry a pending welcome. Append `--print` for the sign-in instructions and guide locations.
-
-Pass an agent ID to `agent configure` to configure a single agent. Reconfiguring an active agent temporarily pauses its connector. Existing `agent sign-in` commands open the same setup flow.
-
-State goes in `/srv/constellation-matrix` by default. Use `--data-dir` before the subcommand to select a dedicated directory for another deployment. Give that deployment a different Compose project and local ports. In config-file mode, provide `owner_password_file` and optionally `neo4j_password_file`. Keep both files outside the checkout with mode `0600`. The installer generates a Neo4j password when the file is omitted and preserves an existing Neo4j password on reruns. Resolve relative paths from the directory where you run the command. Use `./constellation_matrix validate --config /path/to/install.json` to check the configuration before installation.
+State defaults to `$XDG_STATE_HOME/constellation-matrix` or `~/.local/state/constellation-matrix`. Give a separate test deployment its own `--data-dir`, project and port settings.
 
 ## Host privileges
 
-Run `install`, `setup-guide`, and `agent configure` from a regular shell. The CLI invokes sudo for the deployment steps that use Docker, protected files, or system services. Matrix operator sign-in for roster registration and Telegram layout runs in your regular session. Amplifier provider setup runs as the container’s ordinary user.
-
-`status`, `telegram status`, and `setup-guide --print` read published information without sudo. After upgrading the checkout, run `sudo ./constellation_matrix status --refresh` to publish the current dashboard files and refresh Docker inventory. Pass your usual `--data-dir` when using a custom deployment directory.
-
-Use explicit sudo for administrative operations such as uninstall, backup, host timers, remote mounts, and Dot tunnel installation. This workflow keeps standard Docker and the existing Docker socket permissions.
-
-The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 8444 for Neo4j Browser, and TLS TCP 17687 for Bolt. For a different private proxy, set `tailscale` to false and provide the dashboard and browser URLs in the install config. Serve the deployment’s `dashboard/` directory and proxy to the configured loopback ports, which default to 18008 for Matrix, 17474 for Neo4j Browser, and 17688 for Bolt.
+Run Constellation from the regular Linux account that can already use Docker. `./constellation_matrix doctor` checks daemon and Compose access. The Docker control runtime handles protected state and exposes scoped operations to agent containers.
 
 ## Connect in Element
 
@@ -50,38 +30,38 @@ The default private endpoints use HTTPS 443 for Matrix, 8443 for the dashboard, 
 2. Open Element Desktop and choose **Sign in** on the welcome screen. Under **Account provider**, find the current server (usually `matrix.org`) and click **Edit** to its right, above **Continue**.
 3. In **Choose your account provider**, paste the installer’s HTTPS Matrix homeserver URL into **Other account provider** and select **Continue**.
 4. Back on the sign-in page, confirm **Account provider** matches your homeserver. Enter your Matrix operator credentials in **Username** and **Password**, then select **Sign in**. [Element onboarding](https://docs.element.io/latest/element-support/quick-start-guide/onboarding/)
-5. In the left sidebar, open **Agents → Office**. The Space also links VPS Alerts and the private agent chats you selected. Open **Agents → VPS Alerts → Pinned messages** and look for **Workspace shortcuts**, which contains both links. The monitor publishes it after the operator joins VPS Alerts and Element registers its encryption keys. The monitor keeps the same pinned event across later device sign-ins and replaces it when the guide changes.
+5. In the left sidebar, open **Agents → Office**. The Space also links Control Room and the private agent chats you selected. Open **Agents → Control Room → Pinned messages** and look for **Workspace shortcuts**, which contains both links. The monitor publishes it after the operator joins Control Room and Element registers its encryption keys. The monitor keeps the same pinned event across later device sign-ins and replaces it when the guide changes.
 
 In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar** if you want rooms in Spaces omitted from your Home view.
 
 ## Sign in to Context Intelligence
 
-Open **Context Intelligence** from the dashboard or VPS Alerts to launch Neo4j Browser. Enter `neo4j` and your Context Intelligence password, then select **Connect**. You can retrieve the stored password privately on the VPS.
+Open **Context Intelligence** from the dashboard or Control Room to launch Neo4j Browser. Enter `neo4j` and your Context Intelligence password, then select **Connect**. You can retrieve the stored password privately on the VPS.
 
 ```sh
 sudo cat -- /srv/constellation-matrix/context/neo4j-password
 ```
 
-Find the deployment URLs and the password retrieval command for your data directory in **Agents → VPS Alerts → Pinned messages → Workspace shortcuts**.
+Find the deployment URLs and the password retrieval command for your data directory in **Agents → Control Room → Pinned messages → Workspace shortcuts**.
 
 ## Connect Dot and Telegram
 
-For Dot, open **Agents → VPS Alerts → Pinned messages → Connect Dot**. Set up the OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. If you enabled Telegram, Telegram Agent installs automatically and its Amplifier sign-in runs in the same terminal sequence as the other agents. To resume it independently, run `./constellation_matrix telegram setup`. After linking your Telegram account in Element and configuring Telegram Agent’s Amplifier provider, follow the Telegram guide to open a test chat and verify a request from Office. [Dot setup](dot.md) · [Telegram setup](telegram.md)
+For Dot, open **Agents → Control Room → Pinned messages → Connect Dot**. Set up the OpenAI Secure MCP Tunnel, then connect the private app in ChatGPT. If you enabled Telegram, Telegram Agent installs automatically and its Amplifier sign-in runs in the same terminal sequence as the other agents. To resume it independently, run `./constellation_matrix telegram setup`. After linking your Telegram account in Element and configuring Telegram Agent’s Amplifier provider, follow the Telegram guide to open a test chat and verify a request from Office. [Dot setup](dot.md) · [Telegram setup](telegram.md)
 
 ## Boot and service placement
 
 | Where | Services and startup |
 | --- | --- |
-| Docker Compose | Synapse, PostgreSQL, Neo4j, Context Intelligence, the private proxy, Persona Workshop, agent Instances and connectors, the VPS Alerts bot, and optional Dot bridge, Telegram and desktop SFTP containers. Docker uses restart policies, and the workspace’s systemd unit starts the primary Compose project at boot. |
+| Docker Compose | Synapse, PostgreSQL, Neo4j, Context Intelligence, the private proxy, Persona Workshop, agent Instances and connectors, the Control Room bot, and optional Dot bridge, Telegram and desktop SFTP containers. Docker uses restart policies, and the workspace’s systemd unit starts the primary Compose project at boot. |
 | Tailscale | The optional host daemon serves the static dashboard directory and proxies private endpoints. The installer enables the daemon when Tailscale is selected. |
 | systemd | The resource collector reads host cgroups. The backup timer coordinates consistent Docker and filesystem snapshots. The Root broker uses a host socket for approved host commands. The optional Dot tunnel uses a host service with systemd credentials for its private socket connection. |
 
-The installer enables Docker, containerd, the stack unit, the collector, and the backup timer. Root’s socket is enabled when Root is activated. Dot’s tunnel service is enabled by `dot-connect`. Enable Telegram’s optional scheduled jobs separately with `sudo ./constellation_matrix telegram enable-operations`.
+The installer enables Docker, containerd, the stack unit, the collector, and the backup timer. Root’s socket is enabled when Root is activated. Dot’s tunnel service is enabled by `dot-connect`. Enable Telegram’s optional scheduled jobs separately with `./constellation_matrix telegram enable-operations`.
 
 ```sh
 systemctl is-enabled docker.service containerd.service
 systemctl is-enabled constellation-matrix-stack.service constellation-matrix-monitor.service constellation-matrix-backup.timer
-sudo ./constellation_matrix status --refresh
+./constellation_matrix status --refresh
 ```
 
 Use your configured project name in the unit names. After a staging reboot, confirm the signed-in agents and integrations return to service, then run a small Office task. [Docker boot setup](https://docs.docker.com/engine/install/linux-postinstall/#configure-docker-to-start-on-boot-with-systemd) · [Deployment scenarios](acceptance.md#post-deployment-scenarios)
@@ -107,7 +87,7 @@ Save a profile like the one below. Use capability names and resource scopes that
 ```
 
 ```sh
-sudo ./constellation_matrix agent add --profile /path/to/qa.json --configure
+./constellation_matrix agent add --profile /path/to/qa.json --configure
 ```
 
 Run the command from the VPS checkout. Omit `--configure` to provision first, then use the command below to finish or resume native Amplifier sign-in.
@@ -121,7 +101,7 @@ The registry has one active coordinator and observer when those roles are enable
 ### Retire a worker
 
 ```sh
-sudo ./constellation_matrix agent remove qa
+./constellation_matrix agent remove qa
 ```
 
 Confirm by typing the worker ID. Automation can pass `--yes`. The worker stops accepting assignments while it finishes accepted work. If the terminal reports that it is still draining, check the worker and run the same command to resume. The host management service retries pending retirements.
@@ -130,18 +110,18 @@ Retirement removes the worker from Office, the dashboard, Docker Compose, and Pe
 
 Hiring Manager can retire local specialists and other starter roles with operator approval. The operator can also retire Hiring Manager from the VPS. [Starter team and migration](team.md)
 
-### Upgrade from Root to VPS Manager
+### Upgrade from Root to TheArchitect
 
-From the updated VPS checkout, run the migration, then complete VPS Manager’s native Amplifier sign-in.
+From the updated VPS checkout, run the migration, then complete TheArchitect’s native Amplifier sign-in.
 
 ```sh
-sudo ./constellation_matrix agent migrate-root
-./constellation_matrix agent configure vps-manager
+./constellation_matrix agent migrate-root
+./constellation_matrix agent configure the-architect
 ```
 
-Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. VPS Manager joins the existing encrypted **Root Operations** chat with a new Matrix identity. Update saved install configurations to use `vps-manager` where they previously listed `root`. [VPS Manager guide](../integrations/root/README.md)
+Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. TheArchitect joins the existing encrypted **Control Room** chat with a new Matrix identity. Update saved install configurations to use `the-architect` where they previously listed `root`. [TheArchitect guide](../integrations/root/README.md)
 
-For approved workspace changes or opted-in connector recovery, follow [VPS Manager maintenance](../integrations/root/README.md#repository-maintenance-and-automatic-recovery). Pause automatic recovery before planned service work.
+For approved workspace changes or opted-in connector recovery, follow [TheArchitect maintenance](../integrations/root/README.md#repository-maintenance-and-automatic-recovery). Pause automatic recovery before planned service work.
 
 ## Move agents between hosts
 
@@ -150,7 +130,7 @@ Use the same repository revision on the coordinator VPS and each worker. Workers
 ### Enroll a worker
 
 1. On the worker, generate a dedicated Ed25519 key and copy its public key to the VPS as shown in [Prepare the host and desktop key](#1-worker--prepare-the-host-and-desktop-key).
-2. On the VPS, authorize the key with `sudo ./constellation_matrix remote desktop --public-key /path/to/worker-desktop.pub`. Use the printed host public key to [pin and mount the shared desktop](#pin-and-mount-the-shared-desktop). Use `/mnt/constellation-desktop` and the same VPS DNS name in the mount source.
+2. On the VPS, authorize the key with `./constellation_matrix remote desktop --public-key /path/to/worker-desktop.pub`. Use the printed host public key to [pin and mount the shared desktop](#pin-and-mount-the-shared-desktop). Use `/mnt/constellation-desktop` and the same VPS DNS name in the mount source.
 3. On the VPS, generate a short-lived invitation and transfer it to the worker over your normal SSH connection.
 
 ```sh
@@ -181,7 +161,7 @@ Run these commands from the VPS checkout. Omitting `--to` opens a host picker. T
 
 The old agent remains available during destination preflight. It then drains its current work while routing pauses. The destination gets the workspace, Matrix device and encryption state, Amplifier sessions, and any supported credentials over an authenticated, encrypted connection. Matrix and the shared desktop stay on the VPS. The dashboard shows **Draining** or **Moving** during the interruption. Check **Persona and duties** afterwards for the health time and move outcome.
 
-Task Manager, Hiring Manager, Coach, Scouter, Helper, and general Office workers can move. For Telegram Agent, the Amplifier Instance moves while the VPS retains the Matrix connector, pending requests, delivery receipts, and mautrix bridge. VPS Manager stays on the host it administers. Context Intelligence, Persona Workshop, and Dot’s tunnel also stay on the VPS.
+Task Manager, Hiring Manager, Coach, Scouter, Helper, and general Office workers can move. For Telegram Agent, the Amplifier Instance moves while the VPS retains the Matrix connector, pending requests, delivery receipts, and mautrix bridge. TheArchitect stays on the host it administers. Context Intelligence, Persona Workshop, and Dot’s tunnel also stay on the VPS.
 
 ### Resume or roll back
 
@@ -243,7 +223,7 @@ From the VPS checkout, register the optional remote specialist. Existing deploym
 
 ```sh
 handoff="$HOME/.constellation-remote-worker"
-sudo ./constellation_matrix agent add --profile agents/examples/remote-worker.json
+./constellation_matrix agent add --profile agents/examples/remote-worker.json
 ```
 
 Authorize the worker key and copy the desktop host public key printed by `remote desktop` for use in the next step. The enrollment file contains the worker’s scoped Matrix and Context Intelligence credentials. Keep it outside the checkout with mode `0600`.
@@ -251,8 +231,8 @@ Authorize the worker key and copy the desktop host public key printed by `remote
 ```sh
 handoff="$HOME/.constellation-remote-worker"
 worker_host='worker.example.ts.net'
-sudo ./constellation_matrix remote desktop --public-key "$handoff/desktop.pub"
-sudo ./constellation_matrix remote export remote-worker \
+./constellation_matrix remote desktop --public-key "$handoff/desktop.pub"
+./constellation_matrix remote export remote-worker \
   --host "$worker_host" --output "$handoff/enrollment.json"
 sudo chown "$(id -u):$(id -g)" "$handoff/enrollment.json"
 ```
@@ -306,7 +286,7 @@ For a standalone worker, run `remote attach` from the worker checkout. Complete 
 
 ```sh
 worker_host='worker.example.ts.net'
-sudo ./constellation_matrix --data-dir /srv/constellation-worker remote attach \
+./constellation_matrix --data-dir /srv/constellation-worker remote attach \
   --enrollment "$handoff/enrollment.json" --desktop-mount /mnt/constellation-desktop \
   --workshop-host "$worker_host"
 ```
@@ -329,11 +309,11 @@ Use the HTTPS management origin printed by `remote attach`. `remote confirm` che
 ```sh
 handoff="$HOME/.constellation-remote-worker"
 worker_host='worker.example.ts.net'
-sudo ./constellation_matrix persona-connect remote-worker \
+./constellation_matrix persona-connect remote-worker \
   --url "https://$worker_host:19444" \
   --token-file "$handoff/workshop-token" --ca-file "$handoff/workshop-ca.pem"
-sudo ./constellation_matrix remote confirm remote-worker --receipt "$handoff/receipt.json"
-sudo ./constellation_matrix status --refresh
+./constellation_matrix remote confirm remote-worker --receipt "$handoff/receipt.json"
+./constellation_matrix status --refresh
 ```
 
 Check that **Remote Worker** appears as **Registered**. In Office, ask a local worker to write a test file under `desktop/`, then ask Task Manager to delegate reading and appending a line to **Remote Worker**. Have the local worker read the result back. After the next worker reboot, check the mount with `findmnt --mountpoint /mnt/constellation-desktop` and repeat the Office check. [Deployment scenarios](acceptance.md#post-deployment-scenarios)
@@ -343,8 +323,8 @@ After confirmation, remove the transfer copies of `enrollment.json` and `worksho
 ## Back up and recover
 
 ```sh
-sudo ./constellation_matrix backup
-sudo ./constellation_matrix restore-check
+./constellation_matrix backup
+./constellation_matrix restore-check
 ```
 
 The checkpoint briefly stops the deployment’s running services to capture consistent PostgreSQL, Neo4j, Matrix, agent, and desktop state. The encrypted Restic repository keeps seven successful checkpoints. Keep the Restic password outside the VPS’s failure domain. The restore check verifies an unpacked copy in an isolated directory.

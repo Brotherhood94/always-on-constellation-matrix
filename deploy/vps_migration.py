@@ -46,14 +46,14 @@ def revoke_legacy(data, settings, rooms, operator):
     user = f"@root:{settings['server_name']}"
     audit = (data / 'state/root/matrix/room-id').read_text().strip()
     if not audit or audit == rooms['office']:
-        raise ValueError('Could not identify the legacy Root Operations chat')
+        raise ValueError('Could not identify the legacy Control Room chat')
     alias = encoded(f"#root-dm:{settings['server_name']}")
     existing = missing(CLIENT + '/directory/room/' + alias, operator)
     if (existing or {}).get('room_id') != audit:
-        raise ValueError('Restore the #root-dm alias to the original Root Operations room before migrating')
+        raise ValueError('Restore the #root-dm alias to the original Control Room room before migrating')
     for room in (audit, rooms['office']):
         if membership(room, user, operator) in {'invite', 'join'}:
-            request('POST', room_route(room) + '/kick', {'user_id': user, 'reason': 'Replaced by VPS Manager'}, operator)
+            request('POST', room_route(room) + '/kick', {'user_id': user, 'reason': 'Replaced by TheArchitect'}, operator)
     account_data = f"{CLIENT}/user/{encoded(rooms['owner'])}/account_data/m.direct"
     direct = missing(account_data, operator) or {}
     if audit in direct.get(user, []):
@@ -92,22 +92,22 @@ def archive_legacy(data):
 
 
 def migrate_root(data, password_file, confirmed):
-    journal = data / 'vps-manager-migration.json'
+    journal = data / 'the-architect-migration.json'
     with operator_lock(data):
         settings, registry = open_existing(data)
         progress = load(journal) if journal.exists() else {}
         if progress.get('phase') == 'complete':
-            print('VPS Manager is already provisioned.')
+            print('TheArchitect is already provisioned.')
             return
         if 'root' not in registry['agents'] and not progress:
             raise ValueError('This deployment has no legacy Root agent to migrate')
         if not settings['systemd']:
-            raise ValueError('VPS Manager requires systemd on the deployment host')
+            raise ValueError('TheArchitect requires systemd on the deployment host')
         if not progress:
-            if 'vps-manager' in registry['agents'] or 'vps-manager' in registry.get('retired', {}):
-                raise ValueError('Resolve the existing VPS Manager identity before migration')
+            if 'the-architect' in registry['agents'] or 'the-architect' in registry.get('retired', {}):
+                raise ValueError('Resolve the existing TheArchitect identity before migration')
             if not confirmed and (not sys.stdin.isatty() or input(
-                    'Type migrate to retire Root and keep its Root Operations chat: ').strip() != 'migrate'):
+                    'Type migrate to retire Root and keep its Control Room chat: ').strip() != 'migrate'):
                 raise ValueError('Migration requires confirmation. Use --yes for a scripted migration.')
             progress = {'phase': 'stopping'}
             save(journal, progress)
@@ -127,25 +127,25 @@ def migrate_root(data, password_file, confirmed):
             if legacy:
                 registry.setdefault('retired', {})['root'] = {'name': legacy['name'],
                                                                'at': datetime.now(timezone.utc).isoformat()}
-            settings['agents'] = ['vps-manager' if key == 'root' else key for key in settings['agents']]
+            settings['agents'] = ['the-architect' if key == 'root' else key for key in settings['agents']]
             overrides = settings.get('subscriptions', {}).get('overrides', {})
             if 'root' in overrides:
-                overrides['vps-manager'] = overrides.pop('root')
-            if 'vps-manager' not in registry['agents']:
-                register_entry(settings, registry, 'vps-manager', load(PRESETS)['vps-manager'])
+                overrides['the-architect'] = overrides.pop('root')
+            if 'the-architect' not in registry['agents']:
+                register_entry(settings, registry, 'the-architect', load(PRESETS)['the-architect'])
             compose_config(settings, data, registry)
             compose(data, 'build', 'context')
             refresh_context(data, retire='root')
-            prepare_agent_state(data, 'vps-manager', registry['agents']['vps-manager'], rooms, operator, settings)
+            prepare_agent_state(data, 'the-architect', registry['agents']['the-architect'], rooms, operator, settings)
             prepare_images(settings, registry)
-            up(data, 'engine-vps-manager')
+            up(data, 'engine-the-architect')
             sync_workshop(settings, data, registry)
             up(data, *(key for key, entry in registry['agents'].items()
                        if entry['placement'] == 'local' and entry['active']))
-            commit_registry(data / 'agents.json', registry, actor=settings['owner'], reason='VPS Manager migration')
+            commit_registry(data / 'agents.json', registry, actor=settings['owner'], reason='TheArchitect migration')
             save(data / 'settings.json', settings)
             publish_inventory(settings, data, registry)
             save(journal, {'phase': 'complete'})
         finally:
             request('POST', CLIENT + '/logout', {}, operator)
-    print('Root was retired. Activate VPS Manager with agent configure vps-manager.')
+    print('Root was retired. Activate TheArchitect with agent configure the-architect.')

@@ -17,7 +17,7 @@ from provision import MatrixError
 
 INVITER = 'roster-inviter'
 TEAM_MANAGERS = {'hiring-manager', 'coach', 'scouter'}
-PROTECTED = RESERVED | TEAM_MANAGERS | {'task-manager'} | {'manager', 'chief-of-staff', 'root', 'vps-manager', 'remote-worker'}
+PROTECTED = RESERVED | TEAM_MANAGERS | {'task-manager'} | {'manager', 'chief-of-staff', 'root', 'the-architect', 'remote-worker'}
 
 
 def local_worker(key, entry):
@@ -122,7 +122,7 @@ def archive_worker(data, key):
             part = database.with_name(database.name + suffix)
             if part.is_file() and not part.is_symlink():
                 part.rename(archive / part.name)
-    if key == 'vps-manager':
+    if key == 'the-architect':
         for relative in ('matrix/gateway.sqlite3', 'matrix/gateway.sqlite3-wal', 'matrix/gateway.sqlite3-shm', 'execution'):
             source = state / relative
             if source.exists():
@@ -176,7 +176,7 @@ def retire_locked(data, settings, registry, key, *, actor=None, approval=None):
                         reason='retirement started', approval=approval)
     if progress == 'draining':
         matrix = data / 'state' / key / 'matrix'
-        if key == 'vps-manager':
+        if key == 'the-architect':
             pending = drain_host(matrix / 'gateway.sqlite3')
         elif registry.get('team_version') == 2:
             pending = desk_pending(matrix / 'connector.sqlite3') or drain_queue(matrix / 'connector.sqlite3', team=True)
@@ -190,7 +190,7 @@ def retire_locked(data, settings, registry, key, *, actor=None, approval=None):
         services = [key, 'engine-' + key] + (['helper-dm'] if key == 'helper' else [])
         compose(data, '--profile', 'agents', 'stop', *services)
         compose(data, '--profile', 'agents', 'rm', '-f', *services)
-        if key == 'vps-manager' and settings['systemd']:
+        if key == 'the-architect' and settings['systemd']:
             from host_services import remove_host_broker
             remove_host_broker(settings)
         progress = entry['retirement'] = 'stopped'
@@ -223,8 +223,8 @@ def retire_locked(data, settings, registry, key, *, actor=None, approval=None):
                 run('docker', 'network', 'rm', *networks)
     if key in TEAM_MANAGERS:
         (data / 'roster' / (key + '.key')).unlink(missing_ok=True)
-    if key == 'vps-manager':
-        (data / 'context/vps-manager-ops.token').unlink(missing_ok=True)
+    if key == 'the-architect':
+        (data / 'context/the-architect-ops.token').unlink(missing_ok=True)
     archive_worker(data, key)
     registry.setdefault('retired', {})[key] = {'name': entry['name'], 'at': datetime.now(timezone.utc).isoformat()}
     save(data / 'settings.json', settings)
@@ -298,7 +298,7 @@ def prepare_invitation(data, settings, operator):
 
 
 def prepare_management(data, settings, registry, operator):
-    if (settings['systemd']
+    if ((settings['systemd'] or settings.get('control_runtime'))
             and {'hiring-manager', 'chief-of-staff'}.intersection(registry['agents']) and not invitation_ready(data)):
         prepare_invitation(data, settings, operator)
 
@@ -320,7 +320,7 @@ def enable_management(data, password_file=None, *, automatic=False):
         if automatic and not needs_hiring_upgrade and settings.get('roster_management') and all(
                 (data / 'roster' / (key + '.key')).exists() for key in authorities if key != 'chief-of-staff'):
             return
-        if not settings['systemd'] or not authorities:
+        if not (settings['systemd'] or settings.get('control_runtime')) or not authorities:
             if automatic:
                 return
             raise ValueError('Enable systemd and activate Chief of Staff before enabling roster management')
@@ -337,7 +337,10 @@ def enable_management(data, password_file=None, *, automatic=False):
             private_secret(auth / ('bridge-key' if key == 'chief-of-staff' else key + '.key'), uid=RUNTIME_UID)
         if needs_hiring_upgrade:
             prepare_images(settings, registry)
-        roster_units(settings, data)
+        if settings.get('control_runtime'):
+            up(data, 'control-runtime')
+        else:
+            roster_units(settings, data)
         settings['roster_management'] = True
         compose_config(settings, data, registry)
         up(data, *authorities)

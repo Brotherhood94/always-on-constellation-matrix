@@ -112,12 +112,16 @@ def read_plan(raw):
         raise ValueError('Invalid reviewed plan.')
     plan = json.loads(raw)
     fields = {'shell': {'script', 'verify'}, 'inspect-file': {'path'},
-              'replace-file': {'path', 'before', 'after', 'verify'}, 'inspect-services': {'target'},
+              'replace-file': {'path', 'before', 'after', 'verify'}, 'inspect-services': {'target'}, 'restart-service': {'target'},
+              'twin-create': {'account', 'model', 'effort', 'agents', 'minutes', 'revision', 'overrides'},
               'telegram-diagnostics': set()}
     kind = plan.get('kind') if isinstance(plan, dict) else None
     if not isinstance(kind, str) or kind not in fields or set(plan) != {'kind', *fields[kind]}:
         raise ValueError('Invalid reviewed plan.')
-    if kind == 'inspect-services' and (not isinstance(plan['target'], str) or not SERVICE_ID.fullmatch(plan['target'])):
+    if kind == 'twin-create':
+        from twin import validate
+        validate(plan)
+    if kind in {'inspect-services', 'restart-service'} and (not isinstance(plan['target'], str) or not SERVICE_ID.fullmatch(plan['target'])):
         raise ValueError('Invalid service inspection target.')
     for name in ('script', 'verify'):
         if name in plan and (not isinstance(plan[name], str) or not plan[name].strip() or
@@ -166,7 +170,7 @@ def redacted_preview(path, content):
 
 
 def replace_regular(path, expected, content, metadata):
-    with NamedTemporaryFile(dir=path.parent, prefix='.vps-manager-', delete=False) as handle:
+    with NamedTemporaryFile(dir=path.parent, prefix='.the-architect-', delete=False) as handle:
         temporary = Path(handle.name)
         try:
             handle.write(content)
@@ -191,6 +195,16 @@ def read_diagnostic_config(path):
 def execute_plan(raw, state, identifier, *, run_script=execute_script):
     plan = read_plan(raw)
     kind = plan['kind']
+    if kind == 'twin-create':
+        from twin import enqueue
+        try:
+            enqueue(state.parents[2], identifier, plan)
+        except ValueError as error:
+            return 'precondition_failed', None, {'findings': str(error)}
+        return 'completed', 0, {'findings': 'Digital twin queued. Use twin status ' + identifier + '.'}
+    if kind == 'restart-service':
+        from service_diagnostics import restart_service
+        return restart_service(state.parents[2], plan['target'], read_diagnostic_config)
     if kind in {'inspect-services', 'telegram-diagnostics'}:
         return inspect_services(state.parents[2], plan.get('target', 'telegram'), read_diagnostic_config,
                                 legacy=kind == 'telegram-diagnostics')
@@ -255,11 +269,13 @@ def matrix_event(port, token, room, event):
 
 
 def verify_matrix_receipt(config, payload, fetch_event):
-    source, review = config['agents'], config['audit']
-    if (payload.get('source_room') != source or payload.get('review_room') != review or
+    source, review = payload.get('source_room'), config['audit']
+    if (source not in {config['agents'], review} or payload.get('review_room') != review or
             payload['id'] != sha(source + ':' + payload['request'])[:32]):
         raise ValueError('Unexpected source or review room.')
     request = fetch_event(source, payload['request'])
+    if source == review and request.get('sender') != config['owner']:
+        raise ValueError('Only the operator may request an operation in Control Room.')
     proposal = fetch_event(review, payload['proposal'])
     poll = fetch_event(review, payload['poll'])
     vote = fetch_event(review, payload['decision'])
@@ -298,7 +314,7 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
     validate(payload, approvers, operations, now)
     operation = payload['operation']
     if require_review and ('proposal' not in payload or operation == REVIEWED_SCRIPT):
-        raise ValueError('VPS Manager requires a reviewed operation with verification.')
+        raise ValueError('TheArchitect requires a reviewed operation with verification.')
     digest, identifier, receipt = payload['hash'], payload['id'], payload['decision']
     existing = db.execute(
         'SELECT digest, decision, requested, approver, action, outcome, exit_code, result FROM audit WHERE id=?',
@@ -341,7 +357,7 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
                 outcome, code, result = plan_runner(payload['plan'], identifier)
             elif operation == MAINTENANCE_RELEASE:
                 if maintenance is None:
-                    raise ValueError('VPS Manager maintenance is disabled.')
+                    raise ValueError('TheArchitect maintenance is disabled.')
                 try:
                     with maintenance.locked():
                         release = json.loads(payload['plan'])
@@ -369,7 +385,7 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
 def maintenance_request(maintenance, config, payload, fetch_event):
     action = payload.get('maintenance')
     if maintenance is None or action not in {'prepare', 'seal', 'scan'}:
-        raise ValueError('VPS Manager maintenance is disabled.')
+        raise ValueError('TheArchitect maintenance is disabled.')
     with maintenance.locked():
         if action == 'scan':
             return {'receipts': maintenance.scan()[-10:]}
@@ -385,7 +401,8 @@ def maintenance_request(maintenance, config, payload, fetch_event):
 
 
 def serve(config, state, operations_path):
-    if os.geteuid() != 0 or os.environ.get('LISTEN_PID') != str(os.getpid()) or os.environ.get('LISTEN_FDS') != '1':
+    container = os.environ.get('CONSTELLATION_RUNTIME') == 'compose'
+    if not container and (os.geteuid() != 0 or os.environ.get('LISTEN_PID') != str(os.getpid()) or os.environ.get('LISTEN_FDS') != '1'):
         raise SystemExit('Run this broker through its root systemd socket.')
     os.umask(0o077)
     allow = frozenset((config['owner'],))
@@ -414,7 +431,11 @@ def serve(config, state, operations_path):
         def verifier(payload):
             verify_matrix_receipt(config, payload, fetch_event)
 
-    listener = socket.socket(fileno=3)
+    if container:
+        from control_runtime import listener as open_listener
+        listener = open_listener(state.parents[2] / 'runtime/executor.sock', config['gateway_uid'])
+    else:
+        listener = socket.socket(fileno=3)
     while True:
         peer, _ = listener.accept()
         with peer:
@@ -429,9 +450,16 @@ def serve(config, state, operations_path):
                 if len(body) > MAX_MESSAGE or not body.endswith(b'\n'):
                     raise ValueError('Invalid request size.')
                 payload = json.loads(body)
-                if isinstance(payload, dict) and 'maintenance' in payload:
+                if container and isinstance(payload, dict) and payload.get('twin') in {'choices', 'models'}:
+                    from twin import choices, models
+                    result = choices(state.parents[2]) if payload['twin'] == 'choices' else models(state.parents[2], payload['account'])
+                elif isinstance(payload, dict) and 'maintenance' in payload:
                     result = maintenance_request(maintenance, config, payload, fetch_event)
                 else:
+                    if container and (payload['operation'] not in {REVIEWED_PLAN, MAINTENANCE_RELEASE} or
+                                      (payload['operation'] == REVIEWED_PLAN and read_plan(payload['plan'])['kind']
+                                       not in {'inspect-services', 'restart-service', 'twin-create'})):
+                        raise ValueError('The deployment broker accepts only scoped workspace operations.')
                     result = handle(db, payload, allow, read_operations(operations_path), verify_review=verifier,
                                     require_review=True, plan_runner=lambda raw, key: execute_plan(raw, state, key),
                                     maintenance=maintenance)
@@ -470,6 +498,6 @@ if __name__ == '__main__':
     config_path = Path(sys.argv[1])
     require_root_file(config_path)
     config = json.loads(config_path.read_text())
-    if not config['root'].startswith('@vps-manager:'):
+    if not config['root'].startswith('@the-architect:'):
         raise SystemExit('Migrate the legacy Root agent before enabling the host broker.')
     serve(config, Path(sys.argv[2]), Path(sys.argv[3]))

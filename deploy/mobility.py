@@ -18,7 +18,7 @@ from mobility_runtime import Runtime, TELEGRAM, checkpoint, desktop_ready
 from mobility_transport import Channel, ID, LEASE_SECONDS, active_report, choice_peer, hostname, root, secret_digest, tail_ip, tailscale
 from remote import private_json
 
-BLOCKED = {'vps-manager', 'root', 'chief-of-staff', 'dot'}
+BLOCKED = {'the-architect', 'root', 'chief-of-staff', 'dot'}
 TERMINAL = {'complete', 'rolled-back', 'cancelled'}
 
 
@@ -49,6 +49,10 @@ def settings_subset(settings):
 
 def install_unit(data, config, mode, project):
     from host_services import safe_path, stage_roster_runtime, unit
+    if os.environ.get('CONSTELLATION_RUNTIME') == 'compose':
+        if mode == 'worker':
+            deploy_worker_control(data, config, project)
+        return
     if not isinstance(project, str) or not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,62}', project):
         raise ValueError('Invalid deployment service name')
     source = safe_path(stage_roster_runtime(data))
@@ -76,6 +80,26 @@ WantedBy=multi-user.target
 ''')
     run('systemctl', 'daemon-reload')
     run('systemctl', 'enable', '--now', name + '.service')
+
+
+def deploy_worker_control(data, config, project):
+    from operator_runtime import image
+    binary = os.environ.get('CONSTELLATION_TAILSCALE_BIN')
+    if not binary:
+        raise ValueError('The enrolled worker requires access to its Tailscale service.')
+    mounts = [(SOURCE, SOURCE, 'ro'), (data, data, 'rw'),
+              (config['desktop'], config['desktop'], 'rw'),
+              ('/var/run/docker.sock', '/var/run/docker.sock', 'rw'),
+              ('/var/run/tailscale/tailscaled.sock', '/var/run/tailscale/tailscaled.sock', 'rw'),
+              (binary, '/usr/bin/tailscale', 'ro')]
+    manifest = data / 'worker-control.yaml'
+    save(manifest, {'name': project + '-worker-control', 'services': {'worker': {
+        'image': image(), 'restart': 'unless-stopped', 'init': True, 'network_mode': 'host',
+        'environment': {'CONSTELLATION_RUNTIME': 'compose'},
+        'volumes': [f'{source}:{target}:{mode}' for source, target, mode in mounts],
+        'command': ['python3', '-B', str(SOURCE / 'deploy/mobility.py'), str(data), 'worker'],
+    }}})
+    run('docker', 'compose', '-f', str(manifest), 'up', '-d')
 
 
 def server_endpoint(data, settings, state):
@@ -107,7 +131,7 @@ def server_endpoint(data, settings, state):
 def invite_host(data, args):
     with operator_lock(data):
         settings, _ = open_existing(data)
-        if not settings['tailscale'] or not settings['systemd']:
+        if not settings['tailscale'] or not (settings['systemd'] or settings.get('control_runtime')):
             raise ValueError('Host enrollment requires Tailscale and the VPS systemd deployment')
         nodes = tailscale()
         peer = choice_peer(nodes, args.hostname)
@@ -132,7 +156,8 @@ def invite_host(data, args):
 
 
 def enroll_host(data, args):
-    if platform.system() != 'Linux' or not Path('/run/systemd/system').is_dir():
+    if platform.system() != 'Linux' or (os.environ.get('CONSTELLATION_RUNTIME') != 'compose'
+                                         and not Path('/run/systemd/system').is_dir()):
         raise ValueError('Enroll a Linux host or VM running systemd and standard Docker')
     if (data / 'settings.json').exists():
         raise ValueError('Choose a worker data directory separate from the coordinator')

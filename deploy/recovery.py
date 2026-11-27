@@ -48,7 +48,7 @@ def backup(data, mode):
         return
 
     compose = ('docker', 'compose', '--project-directory', str(data), '--profile', 'agents')
-    running = services(data)
+    running = [name for name in services(data) if name != 'control-runtime']
     telegram = tuple()
     if any((data / name).exists() for name in ('telegram/connector/config.json', 'telegram/guide/token')):
         source = Path(__file__).resolve().parents[1] / 'integrations/telegram/compose.yaml'
@@ -67,7 +67,9 @@ def backup(data, mode):
             run(*compose, 'stop', *running)
         attempt = run(*restic, 'backup', '--tag', 'constellation-pending', '--json',
                       '--exclude', str(repository), '--exclude', str(key),
-                      '--exclude', str(data / 'staging'), '--exclude', str(data / 'mobility/archives'), str(data), stdout=subprocess.PIPE, text=True)
+                      '--exclude', str(data / 'staging'), '--exclude', str(data / 'mobility/archives'),
+                      '--exclude', str(data / 'twins'), '--exclude', str(data / 'runtime/executor.sock'),
+                      '--exclude', str(data / 'runtime/roster.sock'), str(data), stdout=subprocess.PIPE, text=True)
         snapshot = next(json.loads(line)['snapshot_id'] for line in reversed(attempt.stdout.splitlines())
                         if json.loads(line).get('message_type') == 'summary')
         run(*restic, 'tag', '--add', 'constellation', '--remove', 'constellation-pending', snapshot)

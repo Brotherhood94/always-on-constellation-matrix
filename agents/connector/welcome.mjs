@@ -22,7 +22,7 @@ if (encryption.algorithm !== 'm.megolm.v1.aes-sha2') {
   throw new Error('The welcome requires an encrypted Matrix room');
 }
 const intro = 'Hi! I’m ' + name + '. Welcome to Constellation.';
-const shortcuts = 'In Element, open Agents → VPS Alerts → Pinned messages for these shortcuts.';
+const shortcuts = 'In Element, open Agents → Control Room → Pinned messages for these shortcuts.';
 const links = pins.dashboard === pins.context
   ? [['Open workspace shortcuts', pins.dashboard]]
   : [['Open dashboard', pins.dashboard], ['Open Context Intelligence', pins.context]];

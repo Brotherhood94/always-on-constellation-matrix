@@ -8,7 +8,7 @@ import tty
 
 TITLE = '✨ Finalize your Constellation setup'
 WELCOME_TITLE = '👋 Welcome to Constellation'
-WELCOME_INSTRUCTIONS = ('  After signing in to Element, choose and configure the agents to install.\n'
+WELCOME_INSTRUCTIONS = ('  Your selected agents were configured before Element sign-in.\n'
                         '  When they are ready, an agent sends a welcome in Element and the wizard prints its link.')
 
 
@@ -23,10 +23,10 @@ def heading(title):
 
 
 def element_locations(settings):
-    lines = ['  • Agents → VPS Alerts → Pinned messages → Workspace shortcuts'
+    lines = ['  • Agents → Control Room → Pinned messages → Workspace shortcuts'
              ' has the dashboard and Context Intelligence.']
     if settings['dot']:
-        lines.append('  • Agents → VPS Alerts → Pinned messages → Connect Dot has the tunnel setup.')
+        lines.append('  • Agents → Control Room → Pinned messages → Connect Dot has the tunnel setup.')
     if settings['telegram']:
         lines.append('  • Enabling Telegram also installs Telegram Agent automatically.\n'
                      '    In Element, see Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.')
@@ -71,8 +71,7 @@ def read_page_key(fd):
 
 def confirm_element(title, body):
     page = (f'{heading(TITLE)}\n\n{heading(title)}\n{body}\n\n'
-            '  After signing in, continue here to select your agents.\n'
-            '  Amplifier will then open provider and model setup for each selected local agent.\n')
+            '  Sign in to Element to finish setup.\n')
     if os.environ.get('TERM') in (None, '', 'dumb'):
         print(page, flush=True)
         try:

@@ -34,6 +34,7 @@ RUN uv pip install --no-deps --python /opt/amplifier-acp/.venv/bin/python \
     && rm -rf /root/.cache/uv
 RUN groupadd -g 991 telegram && useradd -M -u 991 -g 991 -d /instance telegram
 COPY --chmod=0755 integrations/telegram/engine/start integrations/telegram/engine/backend /usr/local/bin/
+COPY agents/engine/amplifier_module_provider_constellation_hiring /opt/amplifier-acp/.venv/lib/python3.13/site-packages/amplifier_module_provider_constellation_hiring
 COPY integrations/telegram/engine/initialize.py integrations/telegram/engine/sign_in.py /opt/telegram/
 ENV HOME=/instance AGENT_INSTANCE_CERTIFICATE_NAMES='["telegram-engine"]' \
     TELEGRAM_CODEX_TOKEN_FILE=/instance/backend/codex-oauth.json

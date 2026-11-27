@@ -32,7 +32,7 @@ class InstallerTest(unittest.TestCase):
     def setUp(self):
         self.presets = load(PRESETS)
         self.raw = {
-            'server_name': 'fixture.test', 'owner': 'operator', 'agents': ['manager', 'coder', 'vps-manager', 'chief-of-staff'],
+            'server_name': 'fixture.test', 'owner': 'operator', 'agents': ['manager', 'coder', 'the-architect', 'chief-of-staff'],
             'subscriptions': {'default': 'Work', 'overrides': {'coder': 'Personal'}}, 'dot': True, 'telegram': True,
         }
         self.settings = normalized(self.raw, self.presets)
@@ -46,15 +46,15 @@ class InstallerTest(unittest.TestCase):
         default = definition(self.settings, data, self.registry, secrets)['services']
         enabled = definition({**self.settings, 'maintenance': True}, data, self.registry, secrets)['services']
         source = str(data / 'maintenance/drafts')
-        self.assertFalse(any(mount['source'] == source for mount in default['engine-vps-manager']['volumes']))
+        self.assertFalse(any(mount['source'] == source for mount in default['engine-the-architect']['volumes']))
         recipients = [name for name, service in enabled.items() if any(
             isinstance(mount, dict) and mount.get('source') == source for mount in service.get('volumes', [])
         )]
-        self.assertEqual(recipients, ['engine-vps-manager'])
+        self.assertEqual(recipients, ['engine-the-architect'])
         self.assertIn('/workspace/constellation-matrix', [mount['target'] for mount in
-                      enabled['engine-vps-manager']['volumes'] if mount['source'] == source])
-        self.assertEqual(enabled['vps-manager']['environment']['VPS_MAINTENANCE'], 'true')
-        for name in ('vps-manager', 'engine-vps-manager'):
+                      enabled['engine-the-architect']['volumes'] if mount['source'] == source])
+        self.assertEqual(enabled['the-architect']['environment']['VPS_MAINTENANCE'], 'true')
+        for name in ('the-architect', 'engine-the-architect'):
             self.assertFalse(any(mount['source'].endswith('docker.sock') for mount in enabled[name]['volumes']))
 
     def test_agent_checklist_shows_profiles_and_toggles_agents(self):
@@ -346,7 +346,7 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('Your Matrix operator password from setup', rendered)
         self.assertIn('Agents → Office', rendered)
         self.assertIn('Tailscale', rendered)
-        self.assertIn('Agents → VPS Alerts → Pinned messages', rendered)
+        self.assertIn('Agents → Control Room → Pinned messages', rendered)
         self.assertIn('Pinned messages → Workspace shortcuts', rendered)
         self.assertNotIn(self.settings['dashboard_url'], rendered)
         self.assertNotIn(self.settings['context_url'], rendered)
@@ -420,47 +420,47 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(restore.call_count, 3)
         self.assertIn('→ I’m signed in (Enter)', output.getvalue())
 
-    def test_basic_terminal_continues_from_element_to_agent_setup(self):
+    def test_basic_terminal_confirms_element_after_agent_setup(self):
         with patch.dict('setup_guide.os.environ', {'TERM': 'dumb'}), \
              patch('builtins.input', side_effect=['', EOFError]) as prompt, redirect_stdout(StringIO()) as output:
             self.assertEqual(confirm_element('Element', 'Install Element.'), 'next')
             self.assertIsNone(confirm_element('Element', 'Install Element.'))
         self.assertEqual(prompt.call_count, 2)
-        self.assertIn('Amplifier will then open provider and model setup', output.getvalue())
+        self.assertIn('Sign in to Element to finish setup', output.getvalue())
         self.assertNotIn('\x1b[2J', output.getvalue())
 
-    def test_wizard_resumes_element_and_immediately_opens_agent_selection(self):
-        settings = {**self.settings, 'agents': []}
-        with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
+    def test_wizard_selects_agents_and_verifies_providers_before_element(self):
+        settings = {**self.settings, 'agents': ['manager'], 'telegram': False}
+        with TemporaryDirectory() as work, redirect_stdout(StringIO()):
             data = Path(work)
-            registry = {'agents': {}}
+            registry = {'agents': {'manager': {'active': False, 'placement': 'local'}}}
             save(data / 'settings.json', settings)
             save(data / 'agents.json', registry)
             save(data / 'onboarding.json', {'confirmed': [], 'select_agents': True})
-            command = 'sudo ./constellation_matrix'
-            with patch('onboarding.confirm_element', return_value=None) as confirm, \
-                 patch('onboarding.select_agents') as picker:
-                guide(data, settings, command, None)
-            picker.assert_not_called()
-            self.assertEqual(confirm.call_args.args[0], '💬 Element Desktop')
-            self.assertEqual(load(data / 'onboarding.json'), {'confirmed': [], 'select_agents': True})
-            self.assertIn(f'{command} setup-guide', output.getvalue())
+            order = []
 
             def pick(_):
-                self.assertEqual(load(data / 'onboarding.json')['confirmed'], ['element'])
-                return []
+                order.append('roster')
+                return ['manager']
 
-            with patch('onboarding.confirm_element', return_value='next') as confirm, \
-                 patch('onboarding.select_agents', side_effect=pick) as picker, \
+            def sign_in(*_, **__):
+                order.append('provider')
+                registry['agents']['manager']['active'] = True
+                save(data / 'agents.json', registry)
+
+            def element(*_):
+                order.append('element')
+                return None
+
+            with patch('onboarding.confirm_element', side_effect=element), \
+                 patch('onboarding.select_agents', side_effect=pick), \
                  patch('onboarding.open_existing', return_value=(settings, registry)), \
-                 patch('onboarding.provision_selected_agents') as provision:
-                guide(data, settings, command, None)
-                guide(data, settings, command, None)
-            confirm.assert_called_once()
-            picker.assert_called_once()
-            provision.assert_called_once_with(data, settings, registry, [], None)
-            self.assertTrue(load(data / 'onboarding.json')['welcome']['skipped'])
-            self.assertEqual((data / 'onboarding.json').stat().st_mode & 0o777, 0o600)
+                 patch('onboarding.provision_selected_agents') as provision, \
+                 patch('onboarding.agent_sign_in', side_effect=sign_in):
+                guide(data, settings, './constellation_matrix', None)
+            provision.assert_called_once_with(data, settings, registry, ['manager'], None)
+            self.assertEqual(order, ['roster', 'provider', 'element'])
+            self.assertFalse(load(data / 'onboarding.json').get('select_agents'))
 
     def test_legacy_element_confirmation_and_welcome_receipt_survive(self):
         settings = {**self.settings, 'agents': []}
@@ -568,8 +568,8 @@ class InstallerTest(unittest.TestCase):
         rooms = {'owner': '@operator:fixture.test', 'office': '!office', 'alerts': '!alerts'}
         with TemporaryDirectory() as work, patch('installer.login', side_effect=[
                 {'user_id': rooms['owner'], 'access_token': 'operator-session'},
-                {'access_token': 'monitor-session'}]), patch('installer.private_secret'), \
-             patch('installer.create_layout', return_value=rooms), patch('installer.prepare_agent_state'), \
+                {'user_id': '@the-architect:fixture.test', 'access_token': 'monitor-session'}]), patch('installer.private_secret'), \
+             patch('installer.create_layout', return_value=rooms), patch('installer.prepare_agent_state'), patch('installer.join'), \
              patch('installer.os.fchown'), patch('installer.request') as matrix, \
              patch('roster.prepare_management') as prepare:
             data = Path(work)
@@ -585,23 +585,19 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(matrix.call_args.args[-1], 'operator-session')
             self.assertFalse((data / 'bot/office-setup.json').exists())
 
-    def test_office_setup_notice_is_provisioned_once_for_a_pending_interactive_roster(self):
+    def test_control_room_uses_architect_identity_before_agent_selection(self):
         settings = {**self.settings, 'dot': False, 'telegram': False}
-        rooms = {'owner': '@operator:fixture.test', 'office': '!office', 'alerts': '!alerts'}
+        rooms = {'owner': '@operator:fixture.test', 'office': '!office', 'alerts': '!control'}
         with TemporaryDirectory() as work, patch('installer.login', return_value={
-                'user_id': rooms['owner'], 'access_token': 'operator-session'}), patch('installer.private_secret'), \
-                patch('installer.create_layout', return_value=rooms), patch('installer.invite') as invite, \
+                'user_id': '@the-architect:fixture.test', 'access_token': 'session'}), patch('installer.private_secret'), \
+                patch('installer.create_layout', return_value=rooms), patch('installer.join') as join, \
                 patch('installer.os.fchown'), patch('installer.request'), patch('roster.prepare_management'):
-            data = Path(work) / 'workspace path'
-            (data / 'bot').mkdir(parents=True)
-            path = data / 'bot/office-setup.json'
-            for _ in range(2):
-                provision_layout(settings, data, {'agents': {}}, 'synthetic-password', office_setup=True)
-            invite.assert_called_once_with('!office', '@monitor:fixture.test', 'operator-session')
-            self.assertEqual(load(path), {'room': '!office', 'pending': True,
-                                          'command': f"./constellation_matrix --data-dir '{data}' setup-guide"})
-            close_office_setup_notice(data)
-            self.assertFalse(load(path)['pending'])
+            data = Path(work)
+            (data / 'bot').mkdir()
+            provision_layout(settings, data, {'agents': {}}, 'synthetic-password', office_setup=True)
+            join.assert_called_once_with('!control', '@the-architect:fixture.test', 'session')
+            self.assertEqual((data / 'bot/room-id').read_text().strip(), '!control')
+            self.assertFalse((data / 'bot/office-setup.json').exists())
 
     def test_setup_resumes_management_before_the_welcome_without_repeating_provider_setup(self):
         settings = {**self.settings, 'agents': ['chief-of-staff'], 'dot': False, 'telegram': False}
@@ -702,7 +698,7 @@ class InstallerTest(unittest.TestCase):
                 'context': {'event': '$shortcuts', 'body': f"Open Context Intelligence — {self.settings['context_url']}"},
             }})
             pinned = {'pinned': ['$shortcuts', '$unrelated']}
-            event = {'type': 'm.room.encrypted', 'sender': '@monitor:fixture.test'}
+            event = {'type': 'm.room.encrypted', 'sender': '@the-architect:fixture.test'}
             request.side_effect = [{'pinned': ['$unrelated']}, pinned, event]
             self.assertIsNone(verified_pins(data, self.settings, '!alerts'))
             self.assertEqual(verified_pins(data, self.settings, '!alerts'), {
@@ -738,7 +734,7 @@ class InstallerTest(unittest.TestCase):
 
     def test_last_local_agent_configuration_prints_element_setup(self):
         self.registry['agents']['chief-of-staff']['active'] = True
-        self.registry['agents']['vps-manager']['active'] = True
+        self.registry['agents']['the-architect']['active'] = True
         register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
         with TemporaryDirectory() as work:
             data = Path(work).resolve()
@@ -909,7 +905,7 @@ class InstallerTest(unittest.TestCase):
                 self.assertFalse(coder['active'])
 
     def test_batch_sign_in_resumes_with_pending_local_agents(self):
-        self.registry['agents']['vps-manager']['active'] = True
+        self.registry['agents']['the-architect']['active'] = True
         self.registry['agents']['chief-of-staff']['active'] = True
         register_entry(self.settings, self.registry, 'remote-worker', self.presets['remote-worker'])
         with TemporaryDirectory() as work, redirect_stdout(StringIO()):
@@ -978,7 +974,7 @@ class InstallerTest(unittest.TestCase):
         desktop = [v for v in services['engine-coder']['volumes'] if v['target'] == '/workspace/desktop']
         self.assertEqual(len(desktop), 1)
         self.assertFalse(desktop[0]['read_only'])
-        for key in ('vps-manager', 'chief-of-staff'):
+        for key in ('the-architect', 'chief-of-staff'):
             self.assertFalse(any(v['target'].endswith('/desktop') for v in services['engine-' + key]['volumes']))
         self.assertTrue(doc['networks']['acp-coder']['internal'])
         self.assertNotIn('memory', services['engine-coder']['networks'])

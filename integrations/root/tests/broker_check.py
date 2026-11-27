@@ -134,7 +134,7 @@ with TemporaryDirectory() as directory:
 
 with TemporaryDirectory() as directory:
     deployment = Path(directory)
-    state = deployment / 'state/vps-manager/execution'
+    state = deployment / 'state/the-architect/execution'
     state.mkdir(parents=True)
     (deployment / 'settings.json').write_text(json.dumps({
         'project': 'isolated-fixture', 'telegram': True, 'systemd': True, 'tailscale': True,

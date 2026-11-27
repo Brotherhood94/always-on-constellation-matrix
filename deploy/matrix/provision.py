@@ -124,7 +124,7 @@ def main(username):
     token = own["access_token"]
     try:
         agents = room(server, "Agents", "agents", token)
-        alerts = room(server, "VPS Alerts", "vps-alerts", token)
+        alerts = room(server, "Control Room", "vps-alerts", token)
         user = monitor["user_id"]
         route = f"/_matrix/client/v3/rooms/{quote(alerts, safe='')}"
         try:
@@ -136,7 +136,7 @@ def main(username):
         if member.get("membership") not in ("invite", "join"):
             request("POST", route + "/invite", {"user_id": user}, token)
         write_bot_secret(data / "bot" / "room-id", alerts)
-        print(f"Account: {own['user_id']}\nAgents: {agents}\nVPS Alerts: {alerts}")
+        print(f"Account: {own['user_id']}\nAgents: {agents}\nControl Room: {alerts}")
     finally:
         request("POST", "/_matrix/client/v3/logout", {}, token)
 

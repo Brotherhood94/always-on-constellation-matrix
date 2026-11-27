@@ -142,3 +142,27 @@ async def connection_report(body: Office, request: Request):
         'handoffs': handoffs[:500], 'unclassified': legacy is not None,
         'changesLimited': len(revisions) > 100, 'handoffsLimited': len(handoffs) > 500,
     }
+
+
+@router.post('/timings', dependencies=[Depends(require_read)])
+async def operation_timings(request: Request):
+    require_workspace_access(request, WORKSPACE, 'data:read')
+    if request.scope.get('state', {}).get('contributor_id') != PUBLISHER:
+        raise HTTPException(403, 'Only the deployment can publish the timings dashboard')
+    async with request.app.state.neo4j_query_driver.session(default_access_mode=READ_ACCESS) as session:
+        ranges = {}
+        for days in (7, 30):
+            query = await session.run(
+                'MATCH (e:Event) WHERE e.workspace IN $workspaces AND e.timing_id IS NOT NULL '
+                'AND e.occurred_at >= datetime($since) '
+                "WITH coalesce(e.timing_environment,'workspace') AS scope,e.timing_actor AS actor,e.timing_kind AS kind,e.timing_outcome AS outcome,e.timing_id AS identity, "
+                'max(e.timing_total_ms) AS total,max(e.timing_work_ms) AS work,max(e.timing_queue_ms) AS queue, '
+                'max(e.timing_approval_ms) AS approval '
+                'RETURN scope,actor,kind,outcome,count(*) AS count,count(total) AS measured,sum(total) AS total, '
+                'sum(work) AS work,sum(queue) AS queue,sum(approval) AS approval, '
+                'percentileCont(total,0.5) AS median,percentileCont(total,0.95) AS p95 '
+                'ORDER BY work DESC,total DESC,kind,actor LIMIT 100',
+                workspaces=['agents-team', 'root-operations', 'telegram'],
+                since=(datetime.now(timezone.utc) - timedelta(days=days)).isoformat())
+            ranges[str(days)] = [dict(row) async for row in query]
+    return {'ranges': ranges}

@@ -103,7 +103,7 @@ def office_step(event: str, evidence: Any, scope: tuple[str, str] | None, graph:
     if references:
         fields["office_references"] = references
     receipt = evidence.get("operation")
-    if match[1] == "vps-manager" and isinstance(receipt, str) and re.fullmatch(r"[a-f0-9]{32}", receipt):
+    if match[1] == "the-architect" and isinstance(receipt, str) and re.fullmatch(r"[a-f0-9]{32}", receipt):
         fields["office_operation"] = receipt
     return fields
 
@@ -255,3 +255,22 @@ async def update_timelines(tx: Any, groups: dict[str, list[dict]], workspace: st
         if workspace == "agents-team" and query == _TASK_EVENTS:
             for projection in (_OFFICE_OUTCOME, _OFFICE_HANDOFFS):
                 await (await tx.run(projection, workspace=workspace, owner=owner)).consume()
+
+
+def timing_fields(value, graph):
+    if not isinstance(value, dict) or not _KEY.fullmatch(str(value.get('id') or '')):
+        return {}
+    kind = value.get('kind')
+    if not isinstance(kind, str) or not re.fullmatch('[a-z][a-z0-9-]{0,31}', kind):
+        return {}
+    outcome = value.get('outcome') or 'recorded'
+    if not isinstance(outcome, str) or not re.fullmatch('[a-z][a-z0-9_-]{0,31}', outcome):
+        return {}
+    phases = {name: value[name] for name in ('total_ms', 'work_ms', 'queue_ms', 'approval_ms')
+              if type(value.get(name)) is int and 0 <= value[name] <= 90 * 86400 * 1000}
+    actor = value.get('actor')
+    attributed = graph.created_by == 'office-topology@deployment' and isinstance(actor, str) and re.fullmatch(r'[a-z0-9_-]{1,64}', actor)
+    environment = value.get('environment')
+    return {'timing_environment': 'twin' if (isinstance(environment, str) and re.fullmatch(r'[a-f0-9]{32}', environment)) or str(actor).startswith('tw-') else 'workspace',
+            'timing_id': value['id'], 'timing_kind': kind, 'timing_actor': actor if attributed else graph.created_by,
+            'timing_outcome': outcome, **{'timing_' + name: value for name, value in phases.items()}}

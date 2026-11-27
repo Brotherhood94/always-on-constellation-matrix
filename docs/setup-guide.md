@@ -1,12 +1,16 @@
 # Finalize your Constellation setup
 
-The terminal opens the Element sign-in screen after deploying the workspace. Press Enter once you have signed in. Press Ctrl+C to pause. Resume from the VPS checkout or append `--print` to print the sign-in instructions and guide locations. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
+The terminal opens the Element sign-in screen after configuring the selected agents. Press Enter once you have signed in. Press Ctrl+C to pause. Resume from the VPS checkout or append `--print` to print the sign-in instructions and guide locations. If you installed with a custom data directory, pass the same `--data-dir` before `setup-guide`.
 
 ```sh
 ./constellation_matrix setup-guide
 ```
 
-Enter passwords, API keys, and verification codes in their destination app or private VPS terminal. The guide asks for sudo when it needs to change deployment state. The printable guide reads setup information without sudo.
+Enter passwords, API keys, and verification codes in their destination app or private VPS terminal.
+
+## 🤖 Select agents and connect a provider
+
+Choose your team in the terminal. Connect an existing account or add one provider connection. Choose the model and reasoning effort, then reuse that profile for the other agents or configure exceptions. The installer verifies each selected agent and shows Element after the checks finish.
 
 ## 💬 Element Desktop
 
@@ -17,21 +21,15 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 ## 📌 Finish in Element
 
-- **Agents → VPS Alerts → Pinned messages → Workspace shortcuts.** Open the dashboard to see resources and agent readiness. Open Context Intelligence to launch Neo4j Browser and sign in as `neo4j` with the dedicated password. The pin includes the command to retrieve the password privately on your VPS.
-- **Agents → VPS Alerts → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. An empty list is expected before you activate any Office agents. [Dot setup](dot.md)
+- **Agents → Control Room → Pinned messages → Workspace shortcuts.** Open the dashboard to see resources and agent readiness. Open Context Intelligence to launch Neo4j Browser and sign in as `neo4j` with the dedicated password. The pin includes the command to retrieve the password privately on your VPS.
+- **Agents → Control Room → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. Compare the roster with the agents you configured. [Dot setup](dot.md)
 - **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Follow the QR sign-in steps when the terminal asks you to link Telegram. After setup, mention Task Manager in Office for Telegram work or Telegram Agent here for a private request. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
 
-VPS Alerts publishes its pins after you join and Element registers your first device’s encryption keys. Later sign-ins reuse the same pins. On a new device, restore your Matrix encryption keys if Element cannot show the original messages.
-
-## 🤖 Select agents
-
-On a fresh interactive install, **Agents → Office** displays a **Finish setting up Office** message. Continue in the same VPS terminal if the installer is open. After confirming Element sign-in, use the arrow keys and Enter to review the six preselected starter agents and adjust your roster. Choose **Done** to register the agents. The installer uses sudo to save the agent registrations in the protected deployment directory and start local Amplifier containers. If prompted, enter the Linux password for the VPS account shown in the sudo prompt.
-
-The installer automatically opens Amplifier’s provider and model setup for each selected local agent in the same terminal. If you closed the installer or it was interrupted, run `./constellation_matrix setup-guide` to resume from the first unfinished step. If your agents are already registered, `./constellation_matrix agent configure` goes straight to Amplifier provider setup. Remote workers complete enrollment on their own host and are confirmed on the VPS. [Agent setup](runbook.md#initial-setup) · [Remote workers](runbook.md#add-a-remote-worker)
+Control Room publishes its pins after you join and Element registers your first device’s encryption keys. Later sign-ins reuse the same pins. On a new device, restore your Matrix encryption keys if Element cannot show the original messages.
 
 ## 📨 Configure Telegram Agent
 
-When Telegram is enabled, the installer registers **Telegram Agent** in Office and includes it in the numbered provider setup. Follow the credential import and QR sign-in prompts in the same flow. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.
+When Telegram is enabled, the installer registers **Telegram Agent** in Office and includes it in the numbered provider setup. Complete bridge credentials and QR sign-in after the Element page. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.
 
 If you closed the installer, resume the Telegram step on its own.
 
@@ -43,7 +41,7 @@ If you closed the installer, resume the Telegram step on its own.
 
 ## 👋 Receive the welcome and send a task
 
-When all selected agents are ready, Hiring Manager sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery. The welcome links to the **Workspace shortcuts** pin in **VPS Alerts**.
+When all selected agents are ready, Hiring Manager sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery. The welcome links to the **Workspace shortcuts** pin in **Control Room**.
 
 On a systemd VPS, Hiring Manager can propose hires and retirements as soon as setup finishes. Review each exact operation in its private chat. [Manage Office workers](team.md#first-interactions)
 

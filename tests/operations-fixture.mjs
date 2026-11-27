@@ -288,7 +288,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
       assert.equal(welcome.room_id, variant.room);
       assert.deepEqual(welcome.content['m.mentions']?.user_ids ?? [], []);
       assert.ok(welcome.content.body.includes('Hi! I’m ' + variant.name));
-      assert.ok(welcome.content.body.includes('VPS Alerts → Pinned messages'));
+      assert.ok(welcome.content.body.includes('Control Room → Pinned messages'));
       assert.equal(pins.dashboard, pins.context);
       assert.ok(welcome.content.formatted_body.includes('Open workspace shortcuts'));
       assert.equal(welcome.content.formatted_body.split(pins.dashboard).length - 1, 1);
@@ -532,7 +532,7 @@ try {
   assert.match(telegramInstructions.body, /mention Task Manager and say “Telegram:/u);
   assert.match(telegramInstructions.body, /@Telegram Agent, add the Telegram user with ID 1001/u);
   assert.doesNotMatch(telegramInstructions.body, /!tg pm|5\. Element/u);
-  console.log('A fresh VPS Alerts installation waited for operator keys and published one readable pin with both links.');
+  console.log('A fresh Control Room installation waited for operator keys and published one readable pin with both links.');
   const officeSetup = await eventually(async () => {
     const receipt = await readState(officeReceipt);
     return receipt.closed && receipt.event;
@@ -565,7 +565,7 @@ try {
   const changed = await managedShortcut([first]);
   await verifyShortcut(changed, updated);
   pinReader.crypto.engine.machine.close();
-  console.log('VPS Alerts replaced both legacy pins with one readable shortcut and retained the operator pin.');
+  console.log('Control Room replaced both legacy pins with one readable shortcut and retained the operator pin.');
 
   const dot = join(base, 'dot');
   const bridgeSecret = 'synthetic-private-bridge-token-0123456789';
