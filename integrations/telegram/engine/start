@@ -4,7 +4,7 @@ umask 077
 if [ ! -s /instance/config.json ]; then
     agent-instance --home /instance init --name Telegram --bind 0.0.0.0 --port 19443 >/dev/null
 fi
-python3 -B /opt/telegram/initialize.py
+/opt/amplifier-acp/.venv/bin/python -B /opt/telegram/initialize.py
 agent-instance --home /instance config validate >/dev/null
 if [ ! -s /exchange/credential.json ]; then
     agent-instance --home /instance token create --name 'Telegram Matrix Connector' --scopes acp --expires-in 25920000 --local >/exchange/credential.pending

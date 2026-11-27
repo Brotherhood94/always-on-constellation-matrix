@@ -31,6 +31,7 @@ jobs:
       - run: bash integrations/telegram/tests/bridge-smoke
       - run: docker build -t matrix-telegram-engine:0.1.2 -f integrations/telegram/engine/Dockerfile .
       - run: bash integrations/telegram/tests/engine-smoke
+      - run: bash integrations/telegram/tests/engine-smoke --shared-provider
       - run: sudo apt-get update && sudo apt-get install -y restic
       - run: sudo env VERIFY_RESTIC=1 bash tests/install-smoke
 

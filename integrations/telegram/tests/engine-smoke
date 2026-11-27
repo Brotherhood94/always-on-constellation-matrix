@@ -5,8 +5,13 @@ net=$base-net
 instance=$base-instance
 exchange=$base-exchange
 engine=$base-engine
-image=matrix-telegram-engine:0.1.2
+image=${TELEGRAM_ENGINE_TEST_IMAGE:-matrix-telegram-engine:0.1.2}
 connector=matrix-telegram-connector:0.2.1
+provider_env=()
+if [[ ${1:-} == --shared-provider ]]; then
+  provider_env=(-e HIRING_PROVIDER_MODE=chatgpt_codex -e AGENT_USERNAME=telegram-agent
+                -e AGENT_REASONING=low -e HIRING_GRANT_ID=fixture-grant)
+fi
 cleanup() {
   docker rm -f "$engine" >/dev/null 2>&1 || true
   docker network rm "$net" >/dev/null 2>&1 || true
@@ -19,7 +24,7 @@ docker volume create "$exchange" >/dev/null
 docker run --rm --network none --user 0:0 -v "$instance:/instance" -v "$exchange:/exchange" \
   --entrypoint /bin/sh "$image" -c 'chown 991:991 /instance /exchange'
 docker run -d --name "$engine" --network "$net" --network-alias telegram-engine --read-only --tmpfs /tmp \
-  -e TELEGRAM_MODEL=gpt-6.2-sol -v "$instance:/instance" -v "$exchange:/exchange" \
+  -e TELEGRAM_MODEL=gpt-6.2-sol "${provider_env[@]}" -v "$instance:/instance" -v "$exchange:/exchange" \
   -v "$exchange:/telegram-mcp" "$image" >/dev/null
 ready=false
 for _ in {1..25}; do
@@ -36,6 +41,7 @@ fi
 docker exec -i "$engine" /opt/amplifier-acp/.venv/bin/python -B - <<'PY'
 import asyncio
 import json
+import os
 from pathlib import Path
 from shutil import copytree
 
@@ -48,8 +54,16 @@ config = load_config('/instance/workspace', home=acp['appHome'], legacy_home=acp
 _, loaded, _ = asyncio.run(load_root_bundle(config, acp['bundle']))
 assert not loaded.hooks, [row['module'] for row in loaded.hooks]
 assert not loaded.tools and not loaded.agents
-assert [row['module'] for row in loaded.providers] == ['provider-openai-chatgpt']
-assert loaded.providers[0]['config']['auth_mode'] == 'chatgpt_codex'
+if os.environ.get('HIRING_PROVIDER_MODE'):
+    assert [row['module'] for row in loaded.providers] == ['provider-constellation-hiring']
+    assert loaded.providers[0]['config']['mode'] == 'chatgpt_codex'
+    instance = json.loads(Path('/instance/config.json').read_text())
+    assert instance['config']['backend']['env'] == {
+        'AGENT_USERNAME': 'telegram-agent', 'HIRING_GRANT_ID': 'fixture-grant',
+    }
+else:
+    assert [row['module'] for row in loaded.providers] == ['provider-openai-chatgpt']
+    assert loaded.providers[0]['config']['auth_mode'] == 'chatgpt_codex'
 assert acp['runtimeImmutable'] is True
 
 # Use the deployed plan and replace only its provider for offline inference.
