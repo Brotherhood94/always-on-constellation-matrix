@@ -117,7 +117,7 @@ class LayoutTest(unittest.TestCase):
         server = os.environ['MATRIX_SERVER_NAME']
         password = 'synthetic-test-passphrase-88'
         owner = login('operator', password)
-        monitor = login('monitor', password)
+        monitor = login('the-architect', password)
         chief = login('chief-of-staff', password)
         dot = login('dot', password)
         analyst = login('analyst', password)

@@ -33,7 +33,7 @@ client.start().catch(error => {
 });
 
 const welcome = 'Ask me how to set up Element, connect Dot or Telegram, understand agent handoffs, ' +
-  'or troubleshoot a service shown on the dashboard.';
+  'or troubleshoot a service shown on the dashboard.\n\nTry asking “Come posso impostare Dot?”';
 const setting = store.db.prepare("SELECT value FROM settings WHERE name='welcome'");
 const savePin = store.db.prepare("INSERT OR REPLACE INTO settings VALUES ('welcome', ?)");
 
@@ -46,20 +46,20 @@ async function welcomePin() {
     details.user_id === owner && details.device_id === id && details.keys?.['curve25519:' + id] &&
     details.algorithms?.includes('m.megolm.v1.aes-sha2')).map(([id, details]) => details.keys['curve25519:' + id]).sort();
   if (!devices.length) return;
-  const deviceKey = digest(devices);
+  const deliveryKey = digest({ devices, welcome });
   const prior = JSON.parse(setting.get()?.value ?? '{}');
   const pinned = await client.getRoomStateEventContent(roomId, 'm.room.pinned_events', '').catch(error => {
     if (error.body?.errcode !== 'M_NOT_FOUND') throw error;
   });
-  if (prior.key === deviceKey && pinned?.pinned?.includes(prior.event)) return;
+  if (prior.key === deliveryKey && pinned?.pinned?.includes(prior.event)) return;
   if (!await privateRoom()) return;
-  const event = prior.key === deviceKey ? prior.event : await sendEncrypted(client, roomId, 'helper-welcome-' + deviceKey,
+  const event = prior.key === deliveryKey ? prior.event : await sendEncrypted(client, roomId, 'helper-welcome-' + deliveryKey,
     { msgtype: 'm.text', body: welcome });
   if (!await privateRoom()) return;
   await client.doRequest('PUT', route + '/state/m.room.pinned_events', null, {
     pinned: [...new Set([...(pinned?.pinned ?? []).filter(id => id !== prior.event), event])],
   }, 15000);
-  savePin.run(JSON.stringify({ key: deviceKey, event }));
+  savePin.run(JSON.stringify({ key: deliveryKey, event }));
 }
 
 let nextPin = 0;

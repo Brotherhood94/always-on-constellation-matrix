@@ -89,6 +89,7 @@ let helperExit = once(helper, 'exit');
 try {
   await until(() => access('/tmp/matrix-agent-ready').then(() => true, () => false), 'Helper readiness');
   const welcome = await until(() => byBody('Ask me how to set up Element'), 'the decrypted welcome');
+  assert.match(welcome.content.body, /Come posso impostare Dot\?/u);
   await until(async () => {
     const pins = await client.getRoomStateEventContent(privateRoom, 'm.room.pinned_events', '').catch(() => null);
     return pins?.pinned?.length === 1 && pins.pinned[0] === welcome.event_id;

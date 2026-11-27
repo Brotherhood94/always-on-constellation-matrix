@@ -74,6 +74,7 @@ test('support evidence cites the deployed guide and reports stale and missing he
       { path: 'docs/setup-guide.md', link: 'https://example.test/fixture/setup-guide.md',
         body: '# Set up Element\nConnect Element Desktop to the custom Matrix homeserver.' },
       { path: 'docs/team.md', body: '# Team\nCoordinate Office handoffs.' },
+      { path: 'docs/dot.md', body: '# Connect Dot\nCreate a Secure MCP Tunnel and add the Constellation Office plugin.' },
     ] }));
     await writeFile(join(folder, 'integrations.json'), JSON.stringify({ time: 1, services: {
       'Context Intelligence': 'healthy', 'Private token': 'secret-token',
@@ -84,6 +85,8 @@ test('support evidence cites the deployed guide and reports stale and missing he
     assert.match(result.health.services.age, /^Stale/);
     assert.deepEqual(result.health.services.states, [['Context Intelligence', 'healthy']]);
     assert.match(result.health.agents.age, /^Missing/);
+    const dot = JSON.parse(await supportEvidence('Come posso impostare Dot?', { docs, dashboard: folder, now: 200 }));
+    assert.equal(dot.sources[0].link, 'docs/dot.md');
   } finally {
     await rm(folder, { recursive: true, force: true });
   }
