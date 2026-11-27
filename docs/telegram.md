@@ -33,7 +33,27 @@ Ask “Dot, ask Task Manager in Office to send a Telegram message to Project Roo
 
 ## Get the Telegram API credentials
 
-In a browser, sign in at [Telegram API development tools](https://my.telegram.org/apps) and open or create an application. The installer accepts the numeric **App api_id** and prompts privately for the **App api_hash**, or imports an existing private `~/telegram-api.json` with mode `0600`. If your file is elsewhere on the VPS, enter its path when prompted. Use `telegram_api_file` in an unattended install config to import that file and start the bridge before the operator signs in. The installer keeps the bridge’s credentials in its private deployment data.
+1. Sign in with your phone number and the confirmation code Telegram sends to your account. [Telegram API development tools](https://my.telegram.org/apps)
+
+2. Open **API development tools**. Create an application or reopen your existing application. Copy **App api_id** and **App api_hash**. [Telegram API credentials](https://core.telegram.org/api/obtaining_api_id)
+
+3. In a second VPS terminal, create a private file outside the checkout and open it in a text editor. If you already have a private Telegram API JSON file, skip to step 4.
+
+   ```sh
+   (umask 077; touch ~/telegram-api.json)
+   chmod 600 ~/telegram-api.json
+   nano ~/telegram-api.json
+   ```
+
+   Replace both sample values. Keep the numeric ID unquoted and the hash quoted.
+
+   ```json
+   {"api_id": 123456, "api_hash": "REPLACE_WITH_YOUR_APP_API_HASH"}
+   ```
+
+4. Paste the VPS path at the **Telegram API JSON path** prompt. Press Enter to use the displayed default. If no default file is available, Enter opens the ID prompt and the masked hash prompt.
+
+For unattended setup, use `telegram_api_file` in the install config. The installer imports the credentials into private deployment data.
 
 ## Install the bridge
 

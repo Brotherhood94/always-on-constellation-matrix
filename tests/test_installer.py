@@ -13,7 +13,7 @@ from unittest.mock import DEFAULT, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
-from agent_picker import agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
+from agent_picker import BACK, agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, agent_activate, agent_sign_in, close_office_setup_notice, context_config, install, interactive, load, main,
     normalized, onboarding_profiles, operator_lock, password, prepare_graph_password, prepare_storage,
@@ -161,6 +161,26 @@ class InstallerTest(unittest.TestCase):
              patch('builtins.input', side_effect=['invalid', '2', '']):
             self.assertEqual(choose_option('Choose', options), 'second')
             self.assertEqual(choose_option('Choose', options, 'second'), 'second')
+
+    def test_provider_menu_handles_back_and_scrolls_a_long_catalog(self):
+        screen = Mock()
+        screen.getmaxyx.return_value = (12, 80)
+        options = {str(index): 'Model ' + str(index) for index in range(20)}
+        screen.getch.side_effect = [curses.KEY_LEFT]
+        self.assertIs(menu(screen, 'Choose a model', {**options, BACK: 'Back'}, '0'), BACK)
+        screen.getch.side_effect = [curses.KEY_DOWN] * 19 + [curses.KEY_ENTER]
+        self.assertEqual(menu(screen, 'Choose a model', options, '0', details=('Account · Test',)), '19')
+        rendered = [call.args[2] for call in screen.addnstr.call_args_list]
+        self.assertIn('Left / B: back', ' '.join(rendered))
+        self.assertIn('> Model 19', rendered)
+
+    def test_provider_numbered_fallback_shows_profile_and_accepts_back(self):
+        with patch('agent_picker.terminal_picker', return_value=None), redirect_stdout(StringIO()) as output, \
+             patch('builtins.input', return_value='b'):
+            result = choose_option('Choose', {'one': 'One'}, back=True, details=('Model · fixture',))
+        self.assertIs(result, BACK)
+        self.assertIn('Model · fixture', output.getvalue())
+        self.assertIn('2. Back', output.getvalue())
 
     def test_username_page_edits_and_retries_on_the_same_screen(self):
         screen = Mock()

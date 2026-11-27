@@ -10,7 +10,13 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 ## 🤖 Select agents and connect a provider
 
-Choose your team in the terminal. Connect an existing account or add one provider connection. Choose the model and reasoning effort, then reuse that profile for the other agents or configure exceptions. The installer verifies each selected agent and shows Element after the checks finish.
+1. Choose your team and select or connect a provider account.
+
+2. Choose the model and reasoning effort. Press **←** or **B** to return to the previous menu.
+
+3. Review the provider, account, model, and reasoning effort. The **Shared provider profile** screen shows the values every agent inherits. Apply them to the whole team or choose different settings for individual agents.
+
+4. Wait for the installer to verify the agents, then sign in to Element.
 
 ## 💬 Element Desktop
 

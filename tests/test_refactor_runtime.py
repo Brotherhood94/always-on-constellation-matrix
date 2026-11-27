@@ -7,11 +7,12 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'deploy'))
+from agent_picker import BACK
 from auto_tune import policy, propose
 from deployment_snapshot import publish
 from operation_timing import record
 from operator_runtime import main as operator_main
-from shared_provider import configure_team
+from shared_provider import catalog, configure_team
 from twin import validate
 
 
@@ -43,6 +44,7 @@ class RefactorTest(unittest.TestCase):
     def test_default_provider_profile_is_reused_and_resume_does_not_prompt_again(self):
         profile = {'account': 'a' * 24, 'mode': 'chatgpt_codex', 'model': 'fixture-model', 'effort': 'low'}
         with TemporaryDirectory() as directory, patch('shared_provider.catalog', return_value=profile) as catalog, \
+                patch('shared_provider.ensure_coordinator', return_value={'accounts': []}), \
                 patch('shared_provider.choose_option', return_value='all'), patch('shared_provider.bind') as bind:
             data = Path(directory)
             configure_team(data, ['task-manager', 'helper', 'telegram-agent'])
@@ -50,6 +52,37 @@ class RefactorTest(unittest.TestCase):
         catalog.assert_called_once()
         self.assertEqual([call.args[1] for call in bind.call_args_list], ['task-manager', 'helper', 'telegram-agent', 'helper'])
         self.assertTrue(all(call.args[2] == profile for call in bind.call_args_list))
+
+    def test_profile_review_can_return_to_effort_model_and_account_without_reconnecting(self):
+        account = {'id': 'a' * 24, 'label': 'Work account', 'ready': True, 'mode': 'chatgpt_plan'}
+        models = {'models': [{'id': 'model-a', 'efforts': ['low']},
+                             {'id': 'model-b', 'efforts': ['medium', 'high']}]}
+        selections = [account['id'], BACK, account['id'], 'model-a', BACK, 'model-b',
+                      'medium', BACK, 'high', 'use']
+        with patch('shared_provider.ensure_coordinator', return_value={'accounts': [account]}), \
+                patch('shared_provider.control', return_value=models) as provider, \
+                patch('shared_provider.choose_option', side_effect=selections) as choose:
+            profile = catalog(Path('/fixture'))
+        self.assertEqual(profile, {'account': account['id'], 'mode': 'chatgpt_plan', 'model': 'model-b', 'effort': 'high'})
+        self.assertEqual(provider.call_count, 2)
+        self.assertTrue(all(call.args[1]['action'] == 'catalog' for call in provider.call_args_list))
+        self.assertEqual(choose.call_args_list[-2].args[2], 'medium')
+        self.assertIn('Reasoning effort · high', choose.call_args.kwargs['details'])
+
+    def test_shared_profile_displays_exact_values_and_can_revisit_the_previous_agent(self):
+        default = {'account': 'a' * 24, 'mode': 'chatgpt_codex', 'model': 'fixture-model', 'effort': 'medium'}
+        override = {**default, 'model': 'other-model', 'effort': 'high'}
+        account = {'id': default['account'], 'mode': default['mode'], 'label': 'Work account'}
+        with TemporaryDirectory() as directory, patch('shared_provider.catalog', side_effect=[default, override]) as select, \
+                patch('shared_provider.ensure_coordinator', return_value={'accounts': [account]}), \
+                patch('shared_provider.choose_option', side_effect=['custom', 'reuse', BACK, 'change', 'reuse']) as choose, \
+                patch('shared_provider.bind') as bind:
+            configure_team(Path(directory), ['task-manager', 'helper'])
+        self.assertEqual([call.args[2] for call in bind.call_args_list], [override, default])
+        self.assertEqual(select.call_args.kwargs, {'preferred': default, 'back': True})
+        for call in choose.call_args_list:
+            self.assertEqual(call.kwargs['details'], ('Provider · ChatGPT Codex', 'Account · Work account',
+                                                     'Model · fixture-model', 'Reasoning effort · medium'))
 
     def test_config_snapshot_does_not_copy_compose_credentials_or_commands(self):
         with TemporaryDirectory() as directory:

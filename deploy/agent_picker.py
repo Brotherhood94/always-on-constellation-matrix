@@ -6,6 +6,7 @@ import sys
 from textwrap import wrap
 
 ENTER = (curses.KEY_ENTER, ord('\n'), ord('\r'))
+BACK = object()
 
 
 def terminal_picker(picker, *args, **kwargs):
@@ -18,24 +19,35 @@ def terminal_picker(picker, *args, **kwargs):
     return None
 
 
-def menu(screen, title, options, default):
+def menu(screen, title, options, default, *, details=()):
     keys = list(options)
     focused = keys.index(default)
+    start = 0
+    hint = 'Up/Down: move   Enter: choose'
+    if BACK in options:
+        hint += '   Left / B: back'
     while True:
         height, width = screen.getmaxyx()
         screen.erase()
-        if height < len(keys) + 4 or width < 24:
+        if height < 6 or width < 24:
             screen.addnstr(0, 0, 'Resize the terminal to see the choices.', width - 1)
             screen.refresh()
             screen.getch()
             continue
 
         screen.addnstr(0, 0, title, width - 1, curses.A_BOLD)
-        screen.addnstr(1, 0, 'Up/Down: move   Enter: choose', width - 1)
-        for index, key in enumerate(keys):
+        screen.addnstr(1, 0, hint, width - 1)
+        notes = [line for detail in details for line in wrap(detail, width - 1)]
+        notes = notes[:height - 6]
+        for row, note in enumerate(notes, start=3):
+            screen.addnstr(row, 0, note, width - 1)
+        first = 4 + len(notes) if notes else 3
+        visible = min(len(keys), height - first - 1)
+        start = max(0, min(start, focused, len(keys) - visible), focused - visible + 1)
+        for index in range(start, start + visible):
             active = index == focused
-            label = f"{'>' if active else ' '} {options[key]}"
-            screen.addnstr(3 + index, 0, label, width - 1, curses.A_REVERSE if active else 0)
+            label = f"{'>' if active else ' '} {options[keys[index]]}"
+            screen.addnstr(first + index - start, 0, label, width - 1, curses.A_REVERSE if active else 0)
 
         screen.refresh()
         keypress = screen.getch()
@@ -43,27 +55,36 @@ def menu(screen, title, options, default):
             focused = max(0, focused - 1)
         elif keypress == curses.KEY_DOWN:
             focused = min(len(keys) - 1, focused + 1)
+        elif BACK in options and keypress in (curses.KEY_LEFT, ord('b'), ord('B')):
+            return BACK
         elif keypress in ENTER:
             return keys[focused]
 
 
-def choose_option(title, options, default=None):
+def choose_option(title, options, default=None, *, back=False, details=()):
     default = next(iter(options)) if default is None else default
-    answer = terminal_picker(menu, title, options, default)
+    if back:
+        options = {**options, BACK: 'Back'}
+    answer = terminal_picker(menu, title, options, default, details=details)
     if answer is not None:
         return answer
-    return choose_numbered_option(title, options, default)
+    return choose_numbered_option(title, options, default, details=details)
 
 
-def choose_numbered_option(title, options, default):
+def choose_numbered_option(title, options, default, *, details=()):
     keys = list(options)
     print(title)
+    if details:
+        print('\n'.join(details), end='\n\n')
     for number, label in enumerate(options.values(), start=1):
         print(f'  {number}. {label}')
+    hint = ' · B to go back' if BACK in options else ''
     while True:
-        number = input(f'Choice [{keys.index(default) + 1}]: ').strip()
+        number = input(f'Choice [{keys.index(default) + 1}]{hint}: ').strip()
         if not number:
             return default
+        if number.lower() == 'b' and BACK in options:
+            return BACK
         for index, key in enumerate(keys, start=1):
             if number == str(index):
                 return key
