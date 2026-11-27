@@ -15,14 +15,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import BACK, agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
-    PRESETS, agent_activate, agent_sign_in, close_office_setup_notice, context_config, install, interactive, load, main,
+    PRESETS, RUNTIME_UID, agent_activate, agent_sign_in, close_office_setup_notice, context_config, install, interactive, load, main,
     normalized, onboarding_profiles, operator_lock, password, prepare_graph_password, prepare_storage,
     provision_layout, provision_selected_agents, register_entry, save, show_element_setup, tailscale_dns, telegram,
     telegram_agent_pending,
 )
 from agent_catalog import document
 from compose import definition
-from dot import connect as connect_dot
+from dot import connect as connect_dot, prepare_tunnel_files
 from onboarding import finish, guide, verified_pins
 from remote import compose_remote
 from setup_guide import confirm_element
@@ -774,6 +774,47 @@ class InstallerTest(unittest.TestCase):
                 'dashboard': 'https://matrix.to/#/%21alerts/%24shortcuts',
                 'context': 'https://matrix.to/#/%21alerts/%24shortcuts',
             })
+
+    def test_docker_tunnel_uses_connector_identity_with_isolated_read_only_mounts(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            (data / 'dot').mkdir()
+            save(data / 'dot/tunnel-id', 'tunnel_' + 'a' * 32)
+            settings = {**self.settings, 'control_runtime': True, 'systemd': False}
+            services = definition(settings, data, self.registry, {'POSTGRES_PASSWORD': 'fixture'})['services']
+        connector, tunnel = services['dot'], services['dot-tunnel']
+        self.assertEqual(tunnel['user'], connector['user'])
+        self.assertEqual(tunnel['user'], f'{RUNTIME_UID}:{RUNTIME_UID}')
+        self.assertEqual(tunnel['cap_drop'], ['ALL'])
+        self.assertTrue(all(mount['read_only'] for mount in tunnel['volumes']))
+        self.assertEqual({mount['source'] for mount in tunnel['volumes']}, {
+            str(data / path) for path in ('dot/runtime-key', 'dot/tunnel-client', 'state/dot/matrix/tunnel')
+        })
+        self.assertEqual(connector['environment']['DOT_BRIDGE_DIR'], '/state/tunnel')
+        self.assertIn('/state/tunnel/bridge.sock', connector['healthcheck']['test'][-1])
+        self.assertEqual(tunnel['depends_on'], {'dot': {'condition': 'service_healthy'}})
+
+    def test_docker_tunnel_migrates_credentials_without_rotating_them(self):
+        with TemporaryDirectory() as work, patch('dot.os.chown') as chown, patch('installer.os.fchown'):
+            data = Path(work)
+            (data / 'dot').mkdir()
+            matrix = data / 'state/dot/matrix'
+            matrix.mkdir(parents=True)
+            credential = data / 'dot/runtime-key'
+            save(credential, 'sk-fixture')
+            save(matrix / 'bridge-token', 'a' * 64)
+            prepare_tunnel_files(data)
+            chown.assert_any_call(credential, RUNTIME_UID, RUNTIME_UID, follow_symlinks=False)
+            self.assertEqual(credential.read_text(), 'sk-fixture')
+            self.assertEqual(credential.stat().st_mode & 0o777, 0o600)
+            token = matrix / 'tunnel/bridge-token'
+            self.assertEqual(token.read_text(), 'a' * 64)
+            save(matrix / 'bridge-token', 'b' * 64)
+            prepare_tunnel_files(data)
+            self.assertEqual(token.read_text(), 'a' * 64)
+            credential.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, 'private, readable regular file'):
+                prepare_tunnel_files(data)
 
     def test_dot_startup_retries_quietly_and_explains_persistent_failure(self):
         with TemporaryDirectory() as work, patch('dot.Path.is_socket', return_value=True), \

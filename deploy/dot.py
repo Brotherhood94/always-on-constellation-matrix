@@ -2,14 +2,16 @@
 from getpass import getpass
 from hashlib import sha256
 import io
+import os
 from pathlib import Path
 import platform
 import re
+import stat
 from subprocess import CalledProcessError
 from urllib.request import urlopen
 from zipfile import ZipFile
 
-from installer import directory, run, save
+from installer import CONNECTOR, RUNTIME_UID, SOURCE, directory, docker_build, private_secret, run, save
 from host_services import safe_path, unit
 
 RELEASE = 'v0.0.21'
@@ -36,11 +38,27 @@ def install_client(destination):
         destination.chmod(0o755)
 
 
+def prepare_tunnel_files(data):
+    credential = data / 'dot/runtime-key'
+    stored = credential.lstat()
+    if not stat.S_ISREG(stored.st_mode) or stored.st_mode & 0o077 or not stored.st_mode & stat.S_IRUSR:
+        raise ValueError('The Dot runtime key must be a private, readable regular file')
+    if (stored.st_uid, stored.st_gid) != (RUNTIME_UID, RUNTIME_UID):
+        os.chown(credential, RUNTIME_UID, RUNTIME_UID, follow_symlinks=False)
+
+    matrix = data / 'state/dot/matrix'
+    bridge = matrix / 'tunnel'
+    directory(bridge, uid=RUNTIME_UID)
+    token = bridge / 'bridge-token'
+    if not token.exists():
+        save(token, private_secret(matrix / 'bridge-token', uid=RUNTIME_UID), uid=RUNTIME_UID)
+
+
 def connect(settings, data, tunnel_id):
     if not settings['dot'] or not (settings['systemd'] or settings.get('control_runtime')):
         raise ValueError('Enable Dot and systemd for this deployment')
     dot = data / 'state/dot/matrix'
-    if not (dot / 'bridge.sock').is_socket():
+    if not settings.get('control_runtime') and not (dot / 'bridge.sock').is_socket():
         raise ValueError('Start Dot and wait for its Unix socket first')
     if not re.fullmatch(r'tunnel_(?:[a-z0-9]{4}_)?[a-z0-9]{32}', tunnel_id):
         raise ValueError('Use a valid OpenAI tunnel ID')
@@ -57,6 +75,7 @@ def connect(settings, data, tunnel_id):
         save(credential, value)
     if settings.get('control_runtime'):
         from installer import compose_config, load, up
+        docker_build(CONNECTOR, SOURCE / 'agents/connector')
         save(configuration / 'tunnel-id', tunnel_id + '\n')
         compose_config(settings, data, load(data / 'agents.json'))
         up(data, 'dot-tunnel')

@@ -600,6 +600,9 @@ def compose_config(settings, data, registry):
     environment = base_environment(settings, data)
     env_write(data, environment)
     context_config(settings, data, registry)
+    if settings.get('control_runtime') and settings['dot'] and (data / 'dot/tunnel-id').is_file():
+        from dot import prepare_tunnel_files
+        prepare_tunnel_files(data)
     manifest = data / 'compose.yaml'
     networks = load(manifest).get('networks', {}) if manifest.exists() else {}
     workshop_internal = networks.get('workshop-targets', {}).get('internal', True)
@@ -1695,6 +1698,9 @@ def main():
         persona_draft(data, args.role, args.observation)
     elif args.command == 'dot-connect':
         from dot import connect
+        if not (data / 'settings.json').is_file():
+            raise ValueError(f'No workspace found at {data}. For a Docker-managed workspace, run dot-connect '
+                             'without sudo from the account that installed it.')
         with operator_lock(data):
             settings, _ = open_existing(data)
             connect(settings, data, args.tunnel_id)

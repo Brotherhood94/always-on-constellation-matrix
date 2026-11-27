@@ -16,10 +16,11 @@ import { telegramTaskPayload } from './telegram-intent.mjs';
 import { staffingReceipt, staffingReceiptKey } from './staffing-office.mjs';
 
 const { MATRIX_URL: url, MATRIX_SERVER_NAME: serverName, DOT_STATE: state } = process.env;
+const bridge = process.env.DOT_BRIDGE_DIR ?? state;
 process.umask(0o077);
 const userId = `@dot:${serverName}`;
 const roomId = (await readFile(join(state, 'room-id'), 'utf8')).trim();
-const secret = Buffer.from((await readFile(join(state, 'bridge-token'), 'utf8')).trim());
+const secret = Buffer.from((await readFile(join(bridge, 'bridge-token'), 'utf8')).trim());
 if (secret.length < 32) throw new Error('Dot bridge credentials are missing');
 const agents = Object.fromEntries(Object.entries(agentNames).map(([id, name]) => [id, { id: `@${id}:${serverName}`, name }]));
 const catalog = createCatalog(serverName, process.env.MATRIX_CATALOG_PATH);
@@ -309,7 +310,7 @@ const http = createServer({ requestTimeout: 45000, maxHeaderSize: 16384 }, async
     if (!res.headersSent) res.writeHead(500).end();
   }
 });
-const socket = join(state, 'bridge.sock');
+const socket = join(bridge, 'bridge.sock');
 await unlink(socket).catch(error => { if (error.code !== 'ENOENT') throw error; });
 http.listen(socket);
 await connectMatrix();

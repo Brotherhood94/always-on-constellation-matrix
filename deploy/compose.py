@@ -85,18 +85,21 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                                            'NEO4J_PASSWORD="$${auth#neo4j/}" cypher-shell -u neo4j "RETURN 1" >/dev/null'],
                                   'interval': '8s', 'timeout': '7s', 'retries': 20}},
     }
-    if settings.get('control_runtime') and settings['dot'] and (data / 'dot/tunnel-id').is_file():
+    dot_tunnel = settings.get('control_runtime') and settings['dot'] and (data / 'dot/tunnel-id').is_file()
+    if dot_tunnel:
         from operator_runtime import image
         services['dot-tunnel'] = {
-            **common, 'image': image(), 'init': True, 'network_mode': 'host',
-            'read_only': True, 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'],
+            **restricted, 'image': image(), 'network_mode': 'host',
             'entrypoint': ['/dot/tunnel-client'],
             'command': ['run', '--control-plane.tunnel-id', (data / 'dot/tunnel-id').read_text().strip(),
                         '--control-plane.api-key', 'file:/dot/runtime-key', '--mcp.server-url',
                         'url=http://localhost/mcp,unix-socket=/bridge/bridge.sock', '--mcp.extra-headers',
                         'X-Dot-Bridge-Token: file:/bridge/bridge-token', '--mcp.oauth-discovery', 'disabled',
                         '--health.listen-addr', '127.0.0.1:18786'],
-            'volumes': [volume(data / 'dot', '/dot', True), volume(data / 'state/dot/matrix', '/bridge', True)],
+            'volumes': [volume(data / 'dot/tunnel-client', '/dot/tunnel-client', True),
+                        volume(data / 'dot/runtime-key', '/dot/runtime-key', True),
+                        volume(data / 'state/dot/matrix/tunnel', '/bridge', True)],
+            'depends_on': {'dot': {'condition': 'service_healthy'}},
             'healthcheck': health('curl', '-fsS', 'http://127.0.0.1:18786/readyz'),
         }
     if settings.get('control_runtime'):
@@ -131,6 +134,11 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                            'command': ['node', '/app/dot-bridge.mjs'],
                            'environment': {**matrix, **catalog, 'DOT_STATE': '/state'},
                            'volumes': [volume(state / 'dot/matrix', '/state'), volume(dashboard, '/catalog', True)]}
+        if dot_tunnel:
+            services['dot']['environment']['DOT_BRIDGE_DIR'] = '/state/tunnel'
+            services['dot']['healthcheck'] = health(
+                'node', '-e', "const socket = require('node:net').connect('/state/tunnel/bridge.sock'); "
+                "socket.on('connect', () => socket.end()); socket.on('error', () => process.exit(1));")
         if settings['telegram']:
             services['dot']['volumes'].append(volume(data / 'telegram/dot-requests', '/telegram-dot', True))
     if not settings.get('twin') and (settings.get('control_runtime') or 'hiring-manager' in registry['agents'] or
