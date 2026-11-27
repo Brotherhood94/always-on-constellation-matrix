@@ -58,25 +58,56 @@ class TelegramSetupTest(unittest.TestCase):
             with redirect_stdout(StringIO()) as output, patch('telegram_setup.interactive_terminal', return_value=True), \
                     patch('telegram_setup.Path.home', return_value=data), patch.dict('os.environ', {'SUDO_USER': ''}), \
                     patch('telegram_setup.run_telegram', side_effect=stages), patch('telegram_setup.telegram', side_effect=consume), \
-                    patch('builtins.input', return_value='1234'), patch('telegram_setup.getpass.getpass', return_value=digest):
+                    patch('builtins.input', side_effect=['', '1234']) as prompt, \
+                    patch('telegram_setup.getpass.getpass', return_value=digest):
                 setup(data)
             self.assertEqual(len(prepared), 1)
             self.assertFalse(prepared[0].exists())
             self.assertNotIn(digest, output.getvalue())
             self.assertIn('~/telegram-api.json', output.getvalue())
-            self.assertIn('--api-file /path/to/telegram-api.json', output.getvalue())
+            self.assertIn('Telegram API JSON path', prompt.call_args_list[0].args[0])
 
-    def test_setup_reuses_the_mounted_operator_file_without_prompting(self):
+    def test_setup_accepts_the_mounted_operator_file_as_the_default(self):
         with TemporaryDirectory() as work:
             data = Path(work)
             file = data / 'telegram-api.json'
             file.touch(mode=0o600)
             with patch.dict('os.environ', {'CONSTELLATION_RUNTIME': 'compose',
                                            'CONSTELLATION_TELEGRAM_API_FILE': str(file)}):
-                output, actions, _, prompts = self.run_setup(data, ['credentials', 'ready', ''])
+                output, actions, _, prompts = self.run_setup(data, ['credentials', 'ready', ''], inputs=[''])
             self.assertEqual(actions, [call(data, ['prepare', str(file)])])
-            self.assertEqual(prompts, 0)
+            self.assertEqual(prompts, 1)
             self.assertIn('~/telegram-api.json', output)
+
+    def test_setup_accepts_a_custom_vps_path_and_retries_an_unreadable_path(self):
+        with TemporaryDirectory() as work:
+            data = Path(work)
+            home = '/home/fixture'
+            secret = 'b' * 32
+            content = json.dumps({'api_id': 1234, 'api_hash': secret}).encode()
+            stages = [SimpleNamespace(stdout=stage) for stage in ('credentials', 'ready', '')]
+            imported = []
+
+            def prepare(workspace, args):
+                self.assertEqual(workspace, data)
+                self.assertEqual(args[0], 'prepare')
+                file = Path(args[1])
+                self.assertEqual(file.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(file.read_bytes(), content)
+                imported.append(file)
+
+            with redirect_stdout(StringIO()) as output, patch('telegram_setup.interactive_terminal', return_value=True), \
+                    patch.dict('os.environ', {'CONSTELLATION_RUNTIME': 'compose', 'CONSTELLATION_OPERATOR_HOME': home,
+                                              'CONSTELLATION_TELEGRAM_API_FILE': ''}), \
+                    patch('operator_runtime.read_operator_credentials', side_effect=[ValueError('Unreadable file'), content]) as read, \
+                    patch('telegram_setup.run_telegram', side_effect=stages), patch('telegram_setup.telegram', side_effect=prepare), \
+                    patch('builtins.input', side_effect=['/missing.json', '~/telegram credentials.json']):
+                setup(data)
+            self.assertEqual(read.call_args_list, [call(Path('/missing.json')), call(Path(home) / 'telegram credentials.json')])
+            self.assertEqual(len(imported), 1)
+            self.assertFalse(imported[0].exists())
+            self.assertIn('Unreadable file', output.getvalue())
+            self.assertNotIn(secret, output.getvalue())
 
     def test_qr_can_pause_and_requires_confirmed_login_to_continue(self):
         data = Path('/srv/isolated-fixture')

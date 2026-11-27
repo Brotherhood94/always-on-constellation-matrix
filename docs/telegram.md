@@ -33,7 +33,7 @@ Ask “Dot, ask Task Manager in Office to send a Telegram message to Project Roo
 
 ## Get the Telegram API credentials
 
-In a browser, sign in at [Telegram API development tools](https://my.telegram.org/apps) and open or create an application. The installer accepts the numeric **App api_id** and prompts privately for the **App api_hash**, or imports an existing private `~/telegram-api.json` with mode `0600`. Use `telegram_api_file` in an unattended install config to import that file and start the bridge before the operator signs in. The installer keeps the bridge’s credentials in its private deployment data.
+In a browser, sign in at [Telegram API development tools](https://my.telegram.org/apps) and open or create an application. The installer accepts the numeric **App api_id** and prompts privately for the **App api_hash**, or imports an existing private `~/telegram-api.json` with mode `0600`. If your file is elsewhere on the VPS, enter its path when prompted. Use `telegram_api_file` in an unattended install config to import that file and start the bridge before the operator signs in. The installer keeps the bridge’s credentials in its private deployment data.
 
 ## Install the bridge
 

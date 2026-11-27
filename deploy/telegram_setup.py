@@ -15,6 +15,45 @@ from setup_guide import heading, interactive_terminal
 PROBE_AUTHENTICATION_ERROR = 42
 
 
+def prompt_credentials(data, home, compose_runtime, default):
+    print('Save a private ~/telegram-api.json on the VPS with mode 0600, or enter a different VPS path.\n'
+          'Get your App api_id and App api_hash from https://my.telegram.org/apps.', flush=True)
+    prompt = ('Telegram API JSON path [~/telegram-api.json]: ' if default else
+              'Telegram API JSON path (Enter to type the ID and hash): ')
+    while True:
+        supplied = input(prompt).strip()
+        if not supplied:
+            if default:
+                telegram(data, ['prepare', str(default)])
+                return
+            try:
+                api_id = int(input('Telegram App api_id: ').strip())
+            except ValueError as error:
+                raise ValueError('Enter the numeric Telegram App api_id') from error
+            api_hash = getpass.getpass('Telegram App api_hash: ').strip()
+            content = json.dumps({'api_id': api_id, 'api_hash': api_hash}).encode()
+            break
+        path = home / supplied[2:] if supplied.startswith('~/') else Path(supplied).absolute()
+        if not compose_runtime:
+            if path.is_file():
+                telegram(data, ['prepare', str(path)])
+                return
+            print('The private Telegram API JSON file does not exist.', flush=True)
+            continue
+        from operator_runtime import read_operator_credentials
+        try:
+            content = read_operator_credentials(path)
+        except ValueError as error:
+            print(error, flush=True)
+        else:
+            break
+    with tempfile.TemporaryDirectory(prefix='constellation-telegram-') as directory:
+        credentials = Path(directory) / 'api.json'
+        with open(credentials, 'xb', opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
+            stream.write(content)
+        telegram(data, ['prepare', str(credentials)])
+
+
 def setup(data, arguments=(), *, install_agent=True, owner_passphrase=None):
     parser = argparse.ArgumentParser(prog='constellation_matrix telegram setup', allow_abbrev=False)
     parser.add_argument('--api-file', type=Path, help='Private Telegram API credentials JSON')
@@ -48,32 +87,17 @@ def setup(data, arguments=(), *, install_agent=True, owner_passphrase=None):
             if stage == 'credentials':
                 path = args.api_file
                 if path is None:
-                    if os.environ.get('CONSTELLATION_RUNTIME') == 'compose':
+                    compose_runtime = os.environ.get('CONSTELLATION_RUNTIME') == 'compose'
+                    if compose_runtime:
+                        home = Path(os.environ.get('CONSTELLATION_OPERATOR_HOME') or Path.home())
                         mounted = os.environ.get('CONSTELLATION_TELEGRAM_API_FILE')
                         default = Path(mounted) if mounted else None
                     else:
                         sudo_user = os.environ.get('SUDO_USER')
                         home = Path(getpwnam(sudo_user).pw_dir) if sudo_user else Path.home()
                         default = home / 'telegram-api.json'
-                    if default and default.is_file():
-                        path = default
-                        print('Using the private ~/telegram-api.json file from the VPS.')
-                    else:
-                        print('Open https://my.telegram.org/apps and copy App api_id and App api_hash.\n'
-                              'You can enter them below or save them in a private ~/telegram-api.json on the VPS (mode 0600).\n'
-                              'If you have a file, press Ctrl+C and resume with:\n'
-                              f'  {command} --api-file /path/to/telegram-api.json', flush=True)
-                        try:
-                            api_id = int(input('Telegram App api_id: ').strip())
-                        except ValueError as error:
-                            raise ValueError('Enter the numeric Telegram App api_id') from error
-                        api_hash = getpass.getpass('Telegram App api_hash: ').strip()
-                        with tempfile.TemporaryDirectory(prefix='constellation-telegram-') as directory:
-                            credentials = Path(directory) / 'api.json'
-                            with open(credentials, 'x', opener=lambda path, flags: os.open(path, flags, 0o600)) as stream:
-                                json.dump({'api_id': api_id, 'api_hash': api_hash}, stream)
-                            telegram(data, ['prepare', str(credentials)])
-                        continue
+                    prompt_credentials(data, home, compose_runtime, default if default and default.is_file() else None)
+                    continue
                 if not path.is_file():
                     raise ValueError('The private Telegram API credentials file does not exist')
                 telegram(data, ['prepare', str(path.absolute())])

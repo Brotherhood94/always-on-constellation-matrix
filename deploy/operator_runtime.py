@@ -35,11 +35,11 @@ def preflight():
             raise ValueError('Select the standard local Docker Engine for Constellation.')
 
 
-def mount(path, *, readonly=False):
+def mount(path, *, readonly=False, target=None):
     item = str(path)
     if ',' in item or '\n' in item:
         raise ValueError('Use file paths without commas or newlines.')
-    return ['--mount', f'type=bind,source={item},target={item}' + (',readonly' if readonly else '')]
+    return ['--mount', f'type=bind,source={item},target={target or item}' + (',readonly' if readonly else '')]
 
 
 def selected_data(args):
@@ -88,6 +88,27 @@ def telegram_setup_file(args):
     return path if path.is_file() and not path.is_symlink() else None
 
 
+def read_operator_credentials(path):
+    target = '/run/telegram-api.json'
+    check = '''import os, stat, sys
+path = sys.argv[1]
+mode = os.stat(path).st_mode
+if not stat.S_ISREG(mode) or mode & 0o077:
+    sys.exit(1)
+with open(path, 'rb') as credential:
+    sys.stdout.buffer.write(credential.read())
+'''
+    try:
+        return subprocess.check_output([
+            *DOCKER, 'run', '--rm', '--network', 'none', '--read-only', '--log-driver', 'none',
+            '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true',
+            '--user', os.environ['CONSTELLATION_OPERATOR_USER'], *mount(path, readonly=True, target=target),
+            image(), 'python3', '-B', '-c', check, target,
+        ], stderr=subprocess.DEVNULL, timeout=30)
+    except (KeyError, OSError, subprocess.SubprocessError) as error:
+        raise ValueError('Enter the path to a readable private JSON file on the VPS. Set its permissions to 0600.') from error
+
+
 def main():
     args = sys.argv[1:]
     if not args or args in (['-h'], ['--help']) or args[0] == 'validate':
@@ -108,7 +129,8 @@ def main():
             if key in os.environ:
                 command.extend(['-e', key + '=' + os.environ[key]])
         if sys.stdin.isatty() and sys.stdout.isatty():
-            command.append('-t')
+            command.extend(['-t', '-e', f'CONSTELLATION_OPERATOR_HOME={Path.home()}',
+                            '-e', f'CONSTELLATION_OPERATOR_USER={os.getuid()}:{os.getgid()}'])
         mounts = inputs(args, data)
         if credential_file := telegram_setup_file(args):
             mounts[credential_file] = True
