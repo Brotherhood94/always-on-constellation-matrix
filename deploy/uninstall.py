@@ -55,8 +55,13 @@ def uninstall(data, *, purge=False):
             if purge and (not settings.get('server_name') or not registry_file.is_file()
                           or registry.get('local_server') != settings['server_name']):
                 raise ValueError('Select the data directory of a Constellation deployment')
+            for item in (data / 'twins').glob('*/job.json'):
+                job = load(item)
+                if job['status'] != 'stopped' and not job.get('cleaned'):
+                    raise ValueError(f"Stop the digital twin and wait for cleanup before uninstalling: twin stop {job['id']}")
             projects = [project, project + '-telegram', project + '-desktop']
-            remove_units(project)
+            if settings.get('systemd', True):
+                remove_units(project)
             if (data / 'telegram').is_dir() and (data / '.env').is_file():
                 run('docker', 'compose', '--env-file', str(data / '.env'), '-p', project + '-telegram',
                     '-f', str(SOURCE / 'integrations/telegram/compose.yaml'),

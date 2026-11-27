@@ -197,7 +197,11 @@ SQL
     PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" bootstrap "$TELEGRAM_DATA"
     "${compose[@]}" --profile agent up -d --wait --wait-timeout 120 telegram-engine
     PYTHONPATH="${PYTHONPATH:-$stack_dir}:$dir" python3 -B "$dir/telegram_provision.py" channel "$TELEGRAM_DATA"
-    echo 'Dedicated Constellation Instance is ready. Run telegram sign-in.'
+    if [[ -r "$TELEGRAM_DATA/managed-provider.compose.yaml" ]]; then
+      echo 'Telegram Agent will use the shared provider connection.'
+    else
+      echo 'Dedicated Constellation Instance is ready. Run telegram sign-in.'
+    fi
     ;;
   sign-in)
     [[ ! -e "$TELEGRAM_DATA/connector/relocation-drain" ]] || { echo 'Finish the pending Telegram Agent move first.' >&2; exit 1; }

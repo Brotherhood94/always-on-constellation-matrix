@@ -336,6 +336,8 @@ class Connections:
             if not agent.startswith('tw-') or type(expiry) is not int or not self.clock() < expiry <= self.clock() + 21600:
                 raise ValueError('Invalid twin grant expiration.')
             wanted['expires_at'] = expiry
+            if 'environment' in payload:
+                wanted['environment'] = key(payload['environment'], re.compile(r'[a-f0-9]{32}'))
         if file.exists() and read(file) != wanted:
             raise ValueError('This agent already has a different provider grant')
         save(file, wanted)
@@ -390,7 +392,8 @@ class Connections:
             finally:
                 if path := os.environ.get('OPERATION_TIMING_OUTBOX'):
                     from operation_timing import record as record_timing
-                    record_timing(Path(path), 'provider-inference', watch, outcome, actor=agent, queue_ms=queue)
+                    record_timing(Path(path), 'provider-inference', watch, outcome, actor=agent, queue_ms=queue,
+                                  environment=grant.get('environment'))
             self.update_status(record)
             emit({'result': reply.model_dump(mode='json')})
 

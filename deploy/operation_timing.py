@@ -1,6 +1,7 @@
 """Durable metadata-only timing records and their weekly rollup."""
 from datetime import datetime, timezone
 from hashlib import sha256
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -37,8 +38,15 @@ def record(path, kind, start, outcome, *, actor=None, queue_ms=None, environment
 
 
 def refresh(data, now):
+    outbox = data / 'runtime/timing'
+    with (outbox / 'refresh.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        publish(data, now, outbox)
+
+
+def publish(data, now, outbox):
     from connection_history import context_request, replace_json
-    for item in sorted((data / 'runtime/timing').glob('*.json'))[:32]:
+    for item in sorted((*outbox.glob('*.json'), *(outbox / 'provider').glob('*.json')))[:32]:
         payload = json.loads(item.read_text())
         context_request(data, '/events', payload)
         item.unlink()

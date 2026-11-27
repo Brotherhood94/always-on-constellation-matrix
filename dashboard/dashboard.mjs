@@ -302,13 +302,13 @@ function renderTimings(snapshot) {
   if (!body) return;
   const range = document.getElementById('timings-range').value;
   const scope = document.getElementById('timings-scope').value;
-  const rows = (snapshot?.ranges?.[range] ?? []).filter(row => row.scope === scope);
+  const rows = (snapshot?.ranges?.[range] ?? []).filter(row => scope === 'twin' ? /^[a-f0-9]{32}$/u.test(row.scope) : row.scope === scope);
   const format = ms => Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)} s` : '—';
-  document.getElementById('timings-freshness').textContent = rows.length ? freshness(snapshot?.time, Date.now()) :
-    snapshot ? 'No timing records in this period.' : 'Timing data unavailable.';
+  document.getElementById('timings-freshness').textContent = snapshot ? freshness(snapshot.time, Date.now()) + (rows.length ? '' : ' · No timing records in this period.') :
+    'Timing data unavailable.';
   body.replaceChildren(...rows.map(row => {
     const el = document.createElement('tr');
-    for (const value of [row.kind, row.actor, row.outcome, `${row.measured}/${row.count}`, format(row.median), format(row.p95),
+    for (const value of [scope === 'twin' ? `${row.kind} · ${row.scope.slice(0, 8)}` : row.kind, row.actor, row.outcome, `${row.measured}/${row.count}`, format(row.median), format(row.p95),
       format(row.work), format(row.queue), format(row.approval)]) el.append(make('td', String(value ?? '—'), ''));
     return el;
   }));

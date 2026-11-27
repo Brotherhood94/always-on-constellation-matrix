@@ -103,7 +103,9 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
         services['control-runtime'] = {
             **common, 'image': image(), 'init': True, 'network_mode': 'host',
             'environment': {'CONSTELLATION_RUNTIME': 'compose', 'PYTHONUNBUFFERED': '1',
-                            'PYTHONPATH': str(SOURCE / 'deploy')},
+                            'PYTHONPATH': str(SOURCE / 'deploy'),
+                            **({'CONSTELLATION_TAILSCALE_BIN': os.environ['CONSTELLATION_TAILSCALE_BIN']}
+                               if settings['tailscale'] and os.environ.get('CONSTELLATION_TAILSCALE_BIN') else {})},
             'env_file': [str(data / '.env')],
             'volumes': [volume(SOURCE, str(SOURCE), True), volume(data, str(data)),
                         volume('/var/run/docker.sock', '/var/run/docker.sock'),
@@ -111,7 +113,8 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                             volume('/var/run/tailscale/tailscaled.sock', '/var/run/tailscale/tailscaled.sock')]
                            if settings['tailscale'] and os.environ.get('CONSTELLATION_TAILSCALE_BIN') else [])],
             'command': ['python3', '-B', str(SOURCE / 'deploy/control_runtime.py'), str(data)],
-            'healthcheck': health('test', '-S', str(data / 'runtime/roster.sock')),
+            'healthcheck': health('python3', '-c', 'import socket,sys; s=socket.socket(socket.AF_UNIX); '
+                                  's.settimeout(2); s.connect(sys.argv[1])', str(data / 'runtime/roster.sock')),
         }
     services['private-edge'] = {
         **restricted,
@@ -142,7 +145,7 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
             'environment': {'HIRING_PUBLIC_URL': public_url, **({'OPERATION_TIMING_OUTBOX': '/timing',
                             'PYTHONPATH': '/runtime-support'} if settings.get('control_runtime') else {})},
             'ports': [port(settings.get('hiring_port', 18792), 8081)],
-            'volumes': [volume(data / 'hiring', '/hiring'), *([volume(data / 'runtime/timing', '/timing'),
+            'volumes': [volume(data / 'hiring', '/hiring'), *([volume(data / 'runtime/timing/provider', '/timing'),
                         volume(SOURCE / 'deploy/operation_timing.py', '/runtime-support/operation_timing.py', True)]
                         if settings.get('control_runtime') else [])],
             'healthcheck': health('curl', '-fsS', 'http://127.0.0.1:8082/health'),
@@ -299,8 +302,21 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
         }
     if twin := settings.get('twin'):
         from operator_runtime import image
+        for key, config in twin.get('service_config', {}).items():
+            if key not in services:
+                continue
+            service = services[key]
+            if config.get('memory'):
+                service['mem_limit'] = config['memory']
+            if 'healthcheck' in service:
+                service['healthcheck'].update({name: value for name, value in config.get('checks', {}).items()
+                                               if name in ('interval', 'timeout', 'start_period', 'retries')})
         for link in network.values():
             link['internal'] = True
+        # Host CLI and SSH forwarding reach only loopback bindings on these two services.
+        network['twin-ingress'] = {}
+        for service in ('synapse', 'private-edge'):
+            services[service]['networks'].append('twin-ingress')
         network['hiring-models'] = {'internal': True}
         network['provider-relay'] = {'external': True, 'name': twin['provider_network']}
         services['hiring-provider'] = {

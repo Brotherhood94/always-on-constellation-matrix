@@ -7,7 +7,7 @@ Review the exact operation before voting. On approval, the control service execu
 ## Diagnose workspace services
 
 1. In **Office**, mention **TheArchitect**. Ask **Diagnose services** for a local health overview or name a target such as **Diagnose synapse**, **Diagnose Context Intelligence**, **Diagnose Dot**, **Diagnose Telegram**, or **Diagnose backup.timer**. You can also describe the issue in the thread.
-2. Review and vote **Accept** in **Control Room**. The broker inspects the deployment’s local Compose services and systemd units. A targeted check counts recognized signals in the last 30 minutes of logs, within the limits shown in the review. The private receipt records the findings. Office receives the operation ID and a link to the receipt.
+2. Review and vote **Accept** in **Control Room**. The broker inspects the deployment’s local Compose services and any supported legacy units. A targeted check counts recognized signals in the last 30 minutes of logs, within the limits shown in the review. The private receipt records the findings. Office receives the operation ID and a link to the receipt.
 3. If the receipt points to a fault, mention TheArchitect again in the same thread with `operation <id>` and ask for a repair. Review the repair and its verification in a new poll. For a blocked Telegram draft, use Task Manager to repeat the draft after the repair. An upstream service or an engine on a worker needs a check in its own environment.
 
 If Amplifier produces an incomplete proposal, TheArchitect asks it to correct the validation error once before reporting a failure. The service overview and direct diagnostic requests use the same typed check without a model-generated shell script.
@@ -49,7 +49,15 @@ The broker checks the same container twice, at least 30 seconds apart, for a Doc
 ./constellation_matrix maintenance resume-recovery
 ```
 
-The host broker uses standard Docker. The TheArchitect container receives a draft directory and a dedicated approval connection. The installer can show optional `docker` group instructions for your Linux login. Docker group membership gives that login root-equivalent access and is unnecessary for broker-managed recovery.
+The host broker uses standard Docker. TheArchitect’s connector receives a draft directory and a dedicated approval connection. The operator runs the installer from a Linux account with Docker access. Docker group membership grants that account root-equivalent access. TheArchitect requests scoped operations through the broker.
+
+### Adjust slow startup or memory limits
+
+Opt in with `./constellation_matrix maintenance enable --auto-config-policy <file>`. The private JSON file sets a deployment-wide memory increase budget and per-service ceilings. An existing memory limit can grow up to the approved ceiling after an OOM, while a slow successful start can increase the health check grace period. Each change is verified and journaled for recovery.
+
+```json
+{"memory_budget_mib": 128, "services": {"engine-task-manager": {"memory_mib": 768, "start_period_seconds": 45}}}
+```
 
 ## Verification
 
@@ -66,7 +74,7 @@ In **Control Room**, ask TheArchitect to **start a digital twin**. Follow the re
 ./constellation_matrix twin stop <id>
 ```
 
-The status command shows the loopback Matrix port. Use SSH forwarding and retrieve the private test login with `twin access`. Stop and expiration revoke the provider grants.
+The status command shows the loopback Matrix port. Use SSH forwarding and retrieve the private test login with `twin access`. The twin uses new Matrix identities, database state, and workspaces. Dot and Telegram remain disabled in the twin. Stop and expiration revoke the provider grants.
 
 ## Operation timings
 

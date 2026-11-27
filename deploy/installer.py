@@ -395,9 +395,9 @@ def docker_build(tag, directory, *, dockerfile=None, target=None):
 
 
 def prepare_images(settings, registry):
-    if registry['agents'] or settings['dot']:
+    if registry['agents'] or settings['dot'] or settings.get('control_runtime'):
         docker_build(CONNECTOR, SOURCE / 'agents/connector')
-    if any(entry['placement'] == 'local' for entry in registry['agents'].values()):
+    if settings.get('control_runtime') or any(entry['placement'] == 'local' for entry in registry['agents'].values()):
         docker_build(BASE, SOURCE, dockerfile=SOURCE / 'integrations/telegram/engine/Dockerfile', target='amplifier-base')
         docker_build(ENGINE, SOURCE, dockerfile=SOURCE / 'agents/engine/Dockerfile')
 
@@ -645,6 +645,7 @@ def prepare_storage(settings, data):
     if settings.get('control_runtime'):
         directory(data / 'runtime', 0o711)
         directory(data / 'runtime/timing')
+        directory(data / 'runtime/timing/provider', uid=RUNTIME_UID)
     for name in ('postgres', 'monitor', 'monitor/outbox', 'state', 'backups', 'staging'):
         directory(data / name, 0o750)
     os.chown(data / 'monitor/outbox', 0, RUNTIME_UID)
@@ -1288,7 +1289,7 @@ def telegram_layout_options(action, args):
     return parser.parse_args(args)
 
 
-def telegram(data, args, owner_password_file=None, *, operator_token=None):
+def telegram(data, args, owner_password_file=None, *, operator_token=None, owner_passphrase=None):
     settings, registry = open_existing(data)
     if not settings['telegram']:
         raise ValueError('Select Telegram in the installer first')
@@ -1305,7 +1306,8 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
         from telegram_setup import setup
         from operator_cli import publish_metadata
         try:
-            setup(data, [arg for arg in args[1:] if arg != '--enable-agent'], install_agent=telegram_agent_selected(settings))
+            setup(data, [arg for arg in args[1:] if arg != '--enable-agent'], install_agent=telegram_agent_selected(settings),
+                  owner_passphrase=owner_passphrase)
         finally:
             publish_metadata(data, settings, registry)
         return
@@ -1324,7 +1326,7 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None):
         with operator_lock(data):
             workspace = load(data / 'rooms.json')
             if operator_token is None:
-                token = login(settings['owner'], password(settings, options.owner_password_file or owner_password_file))['access_token']
+                token = login(settings['owner'], owner_passphrase or password(settings, options.owner_password_file or owner_password_file))['access_token']
             else:
                 verify_operator(workspace, operator_token)
                 token = operator_token
@@ -1475,7 +1477,7 @@ def main():
     setup.add_argument('--print', dest='print_only', action='store_true', help='Print Element sign-in and guide locations')
     removal = commands.add_parser('uninstall', help='Remove workspace services, with optional data deletion')
     removal.add_argument('--data-dir', type=Path, default=argparse.SUPPRESS,
-                         help='Deployment data directory, defaults to /srv/constellation-matrix.')
+                         help='Override the deployment data directory.')
     removal.add_argument('--purge', action='store_true',
                          help='Permanently delete the deployment data, backups, and project volumes.')
     twins = commands.add_parser('twin').add_subparsers(dest='action', required=True)
@@ -1704,6 +1706,13 @@ def main():
             except subprocess.CalledProcessError:
                 print('Could not refresh Telegram telemetry. The previous snapshot is retained.', file=sys.stderr)
         refresh_connections(data)
+        if settings.get('control_runtime'):
+            from datetime import datetime
+            from operation_timing import refresh
+            try:
+                refresh(data, datetime.now(ZoneInfo(settings.get('helper_hints_timezone', 'UTC'))))
+            except (OSError, ValueError, subprocess.SubprocessError):
+                print('Could not refresh operation timings. The previous snapshot is retained.', file=sys.stderr)
         compose(data, '--profile', 'agents', 'ps')
     if args.command in {'install', 'setup-guide', 'agent'} or args.command == 'remote' and args.action == 'confirm':
         publish_metadata(data)

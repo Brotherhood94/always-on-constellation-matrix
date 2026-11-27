@@ -43,7 +43,7 @@ If you closed the installer, resume the Telegram step on its own.
 
 When all selected agents are ready, Hiring Manager sends the encrypted welcome in its private chat if selected. Otherwise, a ready Office agent sends it in Office. The installer prints the message link after delivery. The welcome links to the **Workspace shortcuts** pin in **Control Room**.
 
-On a systemd VPS, Hiring Manager can propose hires and retirements as soon as setup finishes. Review each exact operation in its private chat. [Manage Office workers](team.md#first-interactions)
+Hiring Manager can propose hires and retirements as soon as setup finishes. Review each exact operation in its private chat. [Manage Office workers](team.md#first-interactions)
 
 When Task Manager is installed, start with Task Manager for coordinated Office tasks.
 

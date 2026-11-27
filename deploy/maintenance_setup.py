@@ -10,7 +10,7 @@ from setup_guide import interactive_terminal
 
 def initialize(data, settings, registry):
     if not (settings['systemd'] or settings.get('control_runtime')):
-        raise ValueError('TheArchitect maintenance requires the systemd approval broker.')
+        raise ValueError('TheArchitect maintenance requires the deployment approval broker.')
     candidates = settings.get('maintenance_restart_services', [])
     maintenance = Maintenance(data)
     maintenance.initialize(SOURCE, settings['project'], candidates, registry)
@@ -61,7 +61,7 @@ def configure(data, args):
         raise ValueError('Choose restart services or disable automatic restarts.')
     settings, registry = open_existing(data)
     if not (settings['systemd'] or settings.get('control_runtime')) or not registry['agents'].get('the-architect', {}).get('active'):
-        raise ValueError('Configure TheArchitect on a systemd host before enabling maintenance.')
+        raise ValueError('Configure TheArchitect before enabling maintenance.')
     services = args.restart_service
     if services is None:
         services = choose_services(registry, settings) if interactive_terminal() and not args.no_auto_restarts else []

@@ -45,7 +45,7 @@ def workspace_routes(settings, data, registry):
         Route(settings['neo4j_https_port'], f"http://127.0.0.1:{settings['neo4j_port']}"),
         Route(settings['bolt_https_port'], f"tcp://127.0.0.1:{settings['bolt_port']}", 'tls-terminated-tcp'),
     ])
-    if 'hiring-manager' in registry['agents']:
+    if settings.get('control_runtime') or 'hiring-manager' in registry['agents']:
         routes.append(Route(settings['dashboard_https_port'],
                             f"http://127.0.0.1:{settings.get('hiring_port', 18792)}/hiring", path='/hiring'))
     remote_pending = any(

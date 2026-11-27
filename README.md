@@ -49,7 +49,7 @@ Ask **@Task Manager** in Office to hire a specialist or send `hire release-edito
 
 ### Finish Telegram setup
 
-Enabling **Telegram** installs **Telegram Agent** automatically. The installer includes its Amplifier sign-in in the numbered agent setup, imports your Telegram API credentials, and guides you through QR sign-in and two-step verification in Element. If interrupted, resume setup from the same terminal.
+Enabling **Telegram** installs **Telegram Agent** automatically. Telegram Agent uses the shared provider during agent setup. After Element sign-in, the same installer guides you through importing your Telegram API credentials and linking your account by QR code and two-step verification. If interrupted, resume setup from the same terminal.
 
 ```sh
 ./constellation_matrix telegram setup
@@ -118,13 +118,13 @@ Context Intelligence records who handed off an assignment, whether the recipient
 
 *The same demo task in Neo4j Browser. The graph links Task Manager’s dispatch to Scouter’s acceptance and return, and records the verified outcome.*
 
-On a systemd deployment, these management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving TheArchitect in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
+These management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving TheArchitect in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
 
 ## Architecture
 
 Each agent has a Matrix identity, a private workspace, and a persistent Constellation Instance running Amplifier. The **Agents** Space groups **Office**, **Control Room**, and the operator’s private chats with **Hiring Manager**, **Coach**, **Scouter**, and **Helper**. The encrypted approvals room **Control Room** appears under **Agents → Rooms**. General Office workers also share a desktop for task files.
 
-The installer enables startup at boot. Docker restarts application containers, Tailscale Serve provides private dashboard access, and systemd runs host services, including the Dot tunnel once connected. [Architecture notes](docs/architecture.md) · [Boot and service placement](docs/runbook.md#boot-and-service-placement)
+Docker restart policies bring the workspace services back when the engine starts. The Docker control runtime runs scoped operations, monitors the deployment, and schedules checkpoints. Tailscale Serve provides private dashboard access. [Architecture notes](docs/architecture.md) · [Boot and service placement](docs/runbook.md#boot-and-service-placement)
 
 ![Architecture overview showing Element, Dot and Telegram connecting to Matrix and always-on Amplifier agents on a private VPS](assets/architecture.svg)
 
@@ -220,7 +220,7 @@ Helper shares one tip per day in **Agents → People → Helper**, starting afte
 
 ### Control Room and operation timings
 
-**TheArchitect** accepts requests directly in **Control Room** and can receive verified handoffs from Task Manager in Office. The encrypted room contains workspace links, maintenance polls, receipts, and operational alerts. Send **Diagnose services** for a health overview, or **Diagnose Telegram** for a targeted check.
+**TheArchitect** accepts requests directly in **Control Room** and can receive verified handoffs from Task Manager in Office. The encrypted room contains workspace links, maintenance polls, receipts, and operational alerts. Send **Diagnose services** for a health overview, or **Diagnose <service>** for a targeted check.
 
 **Operation timings** shows measured work, queue and approval durations for the last seven or thirty days. A weekly Control Room summary identifies groups that consumed the most time in measured phases. [Maintenance and timing guide](integrations/root/README.md)
 

@@ -101,7 +101,9 @@ def main(data):
                 name = 'twin-' + job['id']
                 if name in children and children[name].poll() is None:
                     continue
-                if job['status'] in {'stopping', 'failed', 'starting'} or (job['status'] == 'ready' and time.time() > job['expires_at']):
+                if not job.get('cleaned') and ((item.parent / 'stop-requested').is_file() or
+                                               job['status'] in {'stopping', 'failed', 'starting'} or
+                                               (job['status'] == 'ready' and time.time() > job['expires_at'])):
                     from twin import stop
                     try:
                         stop(data, job['id'])

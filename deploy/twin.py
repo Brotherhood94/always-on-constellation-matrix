@@ -38,7 +38,7 @@ def models(data, account):
     if not PROFILE.fullmatch(account):
         raise ValueError('Use a connected account ID.')
     result = control(data, {'action': 'catalog', 'account': account})
-    return {'models': [{'id': row['id'], 'efforts': row['efforts']} for row in result.get('models', [])[:32]]}
+    return {'models': [{'id': row['id'], 'efforts': row['efforts']} for row in result.get('models', [])[:16]]}
 
 
 def validate(plan):
@@ -78,7 +78,8 @@ def enqueue(data, identifier, plan):
         if any(not any(option['id'] == profile['model'] and profile['effort'] in option['efforts']
                        for option in catalog) for profile in profiles):
             raise ValueError('The model and effort were not verified on this account.')
-        if any(load(item).get('status') in {'queued', 'starting', 'ready', 'stopping', 'failed'} for item in (data / 'twins').glob('*/job.json')):
+        jobs = map(load, (data / 'twins').glob('*/job.json'))
+        if any(job['status'] != 'stopped' and not job.get('cleaned') for job in jobs):
             raise ValueError('Stop the current twin before starting another.')
         directory(path.parent)
         job = {'id': identifier, 'plan': plan, 'snapshot': snapshot, 'status': 'queued', 'created': int(time.time())}
@@ -120,6 +121,7 @@ def start(data, identifier):
     expiration = int(time.time()) + plan['minutes'] * 60
     set_status(path, 'starting', expires_at=expiration, project=project, grants=[])
     outcome = 'failed'
+    phase = 'provider authorization'
     try:
         settings = load(data / 'settings.json')
         rows = control(data, {'action': 'accounts'})['accounts']
@@ -140,13 +142,13 @@ def start(data, identifier):
             profile = plan.get('overrides', {}).get(agent, plan)
             grant = 'tw-' + sha256(f'{identifier}:{agent}'.encode()).hexdigest()[:30]
             token = secrets.token_hex(32)
-            result = control(data, {'action': 'grant', 'agent': grant, 'account': plan['account'], 'mode': mode,
-                'model': profile['model'], 'effort': profile['effort'], 'credential': token, 'expires_at': expiration})
-            if result.get('status') != 'granted':
-                raise ValueError('Twin model authorization failed.')
             current = load(path)
             current['grants'].append(grant)
             save(path, current)
+            result = control(data, {'action': 'grant', 'agent': grant, 'account': plan['account'], 'mode': mode,
+                'model': profile['model'], 'effort': profile['effort'], 'credential': token, 'expires_at': expiration, 'environment': identifier})
+            if result.get('status') != 'granted':
+                raise ValueError('Twin model authorization failed.')
             state = workspace / 'state' / agent / 'hiring-agent'
             directory(state, uid=991)
             save(state / 'token', token + '\n', uid=991)
@@ -161,17 +163,21 @@ def start(data, identifier):
             'tailscale': False, 'systemd': False, 'dot': False, 'telegram': False, 'control_runtime': False,
             'agents': plan['agents'], 'owner_password_file': str(password_file), 'matrix_port': port(),
             'context_port': port(), 'neo4j_port': port(), 'bolt_port': port(), 'twin': {'upstream': address,
-                'provider_network': settings['project'] + '_hiring-models', 'grants': load(path)['grants']}})
+                'provider_network': settings['project'] + '_hiring-models', 'grants': load(path)['grants'],
+                'service_config': {key: value for key, value in job['snapshot']['services'].items()
+                                   if key in plan['agents'] or key.removeprefix('engine-') in plan['agents']}}})
+        phase = 'workspace creation'
         install(workspace, SimpleNamespace(config=config_path))
         from installer import activate_twin_agent, up
         up(workspace, 'hiring-provider')
         for agent in plan['agents']:
+            phase = 'agent readiness for ' + agent
             activate_twin_agent(workspace, agent)
         set_status(path, 'ready', matrix_port=load(workspace / 'settings.json')['matrix_port'])
         outcome = 'completed'
         announce(data, identifier, 'ready')
     except (OSError, ValueError, KeyError, StopIteration, SubprocessError) as error:
-        set_status(path, 'failed', error=type(error).__name__)
+        set_status(path, 'failed', error=type(error).__name__, phase=phase)
         announce(data, identifier, 'failed')
     finally:
         record(data / 'runtime/timing', 'twin-start', started, outcome, actor='the-architect', environment=identifier)
@@ -188,7 +194,7 @@ def stop(data, identifier):
         try:
             if control(data, {'action': 'revoke', 'agent': grant}).get('status') != 'revoked':
                 unavailable.append(grant)
-        except (OSError, ValueError):
+        except (OSError, ValueError, SubprocessError):
             unavailable.append(grant)
     if (workspace / 'compose.yaml').is_file():
         run('docker', 'compose', '--project-directory', str(workspace), '--profile', 'agents', 'down', '--volumes', '--remove-orphans')
@@ -199,8 +205,9 @@ def stop(data, identifier):
         (path.parent / name).unlink(missing_ok=True)
     if unavailable and time.time() < job.get('expires_at', 0):
         raise ValueError('The provider has not confirmed twin access revocation.')
-    set_status(path, 'stopped', finished_at=int(time.time()))
-    announce(data, identifier, 'stopped')
+    terminal = 'failed' if job.get('error') else 'stopped'
+    set_status(path, terminal, finished_at=int(time.time()), cleaned=True)
+    announce(data, identifier, 'stopped' if terminal == 'stopped' else 'failed and cleaned up')
 
 
 def command(data, args):
@@ -210,7 +217,10 @@ def command(data, args):
             print(job['id'], job['status'])
     elif args.action == 'status':
         job = load(job_path(data, args.id))
-        print('Twin', args.id, job['status'])
+        stopping = not job.get('cleaned') and (job_path(data, args.id).parent / 'stop-requested').is_file()
+        print('Twin', args.id, 'stopping' if stopping else job['status'])
+        if job.get('error'):
+            print('Startup check failed', job.get('phase', 'setup'), job['error'])
         print('Revision', job['snapshot']['revision'])
         print('Agents', ', '.join(job['plan']['agents']))
         if job.get('expires_at'):
@@ -219,14 +229,19 @@ def command(data, args):
             print('Matrix URL', 'http://127.0.0.1:' + str(job['matrix_port']))
             print('Use an SSH port forward and retrieve the test login with twin access ' + args.id)
     elif args.action == 'access':
-        password = job_path(data, args.id).parent / 'operator-password'
+        from setup_guide import interactive_terminal
+        path = job_path(data, args.id)
+        if not interactive_terminal():
+            raise ValueError('Retrieve the test password from a private interactive terminal.')
+        if load(path)['status'] != 'ready' or (path.parent / 'stop-requested').exists():
+            raise ValueError('The twin is not ready for sign-in.')
         print('Matrix operator twin-operator')
-        print(password.read_text().strip())
+        print((path.parent / 'operator-password').read_text().strip())
     else:
         with operator_lock(data):
             path = job_path(data, args.id)
-            if load(path)['status'] not in {'stopped', 'stopping'}:
-                set_status(path, 'stopping')
+            if (job := load(path))['status'] not in {'stopped', 'stopping'} and not job.get('cleaned'):
+                save(path.parent / 'stop-requested', '')
 
 
 if __name__ == '__main__':

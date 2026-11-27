@@ -39,7 +39,7 @@ In Element Web or Desktop, disable **Show all rooms** in **Settings → Sidebar*
 Open **Context Intelligence** from the dashboard or Control Room to launch Neo4j Browser. Enter `neo4j` and your Context Intelligence password, then select **Connect**. You can retrieve the stored password privately on the VPS.
 
 ```sh
-sudo cat -- /srv/constellation-matrix/context/neo4j-password
+./constellation_matrix context password
 ```
 
 Find the deployment URLs and the password retrieval command for your data directory in **Agents → Control Room → Pinned messages → Workspace shortcuts**.
@@ -52,19 +52,11 @@ For Dot, open **Agents → Control Room → Pinned messages → Connect Dot**. S
 
 | Where | Services and startup |
 | --- | --- |
-| Docker Compose | Synapse, PostgreSQL, Neo4j, Context Intelligence, the private proxy, Persona Workshop, agent Instances and connectors, the Control Room bot, and optional Dot bridge, Telegram and desktop SFTP containers. Docker uses restart policies, and the workspace’s systemd unit starts the primary Compose project at boot. |
-| Tailscale | The optional host daemon serves the static dashboard directory and proxies private endpoints. The installer enables the daemon when Tailscale is selected. |
-| systemd | The resource collector reads host cgroups. The backup timer coordinates consistent Docker and filesystem snapshots. The Root broker uses a host socket for approved host commands. The optional Dot tunnel uses a host service with systemd credentials for its private socket connection. |
+| Docker Compose | Synapse, PostgreSQL, Neo4j, Context Intelligence, Persona Workshop, agent Instances and connectors, and optional integrations restart with the Docker engine. |
+| Docker control runtime | The monitor, approved-operation and roster brokers, periodic backups, and timing reports run inside the coordinator’s control container. |
+| Tailscale | The optional host daemon serves the dashboard and proxies private endpoints. Start Tailscale and connect it to the tailnet before selecting Serve in the installer. |
 
-The installer enables Docker, containerd, the stack unit, the collector, and the backup timer. Root’s socket is enabled when Root is activated. Dot’s tunnel service is enabled by `dot-connect`. Enable Telegram’s optional scheduled jobs separately with `./constellation_matrix telegram enable-operations`.
-
-```sh
-systemctl is-enabled docker.service containerd.service
-systemctl is-enabled constellation-matrix-stack.service constellation-matrix-monitor.service constellation-matrix-backup.timer
-./constellation_matrix status --refresh
-```
-
-Use your configured project name in the unit names. After a staging reboot, confirm the signed-in agents and integrations return to service, then run a small Office task. [Docker boot setup](https://docs.docker.com/engine/install/linux-postinstall/#configure-docker-to-start-on-boot-with-systemd) · [Deployment scenarios](acceptance.md#post-deployment-scenarios)
+`dot-connect` starts the Dot tunnel as a deployment container. After a staging reboot, run `./constellation_matrix doctor` and `./constellation_matrix status --refresh`, then check the signed-in agents, the selected integrations, and an Office task. [Docker boot setup](https://docs.docker.com/engine/install/linux-postinstall/#configure-docker-to-start-on-boot-with-systemd) · [Deployment scenarios](acceptance.md#post-deployment-scenarios)
 
 ## Add a worker
 
@@ -334,15 +326,15 @@ For a fresh live cutover, first test a separate installation with a different pr
 ## Uninstall
 
 ```sh
-sudo ./uninstall.sh
+./uninstall.sh
 ```
 
-This removes the workspace's Docker containers, systemd units, and matching Tailscale Serve routes. It keeps the deployment directory, Matrix state, agent workspaces, and encrypted backups for recovery. Use `--data-dir /path/to/deployment` if you installed into a custom directory.
+This removes the workspace’s Docker containers and matching Tailscale Serve routes. For an older deployment it also removes its managed systemd units. It keeps the deployment directory, Matrix state, agent workspaces, and encrypted backups for recovery. Use `--data-dir /path/to/deployment` if you installed into a custom directory.
 
 For a completely fresh setup, run:
 
 ```sh
-sudo ./uninstall.sh --purge
+./uninstall.sh --purge
 ```
 
 `--purge` permanently deletes the selected deployment directory and its Docker volumes. This includes Matrix rooms and accounts, provider credentials, agent workspaces, Context Intelligence, Telegram bindings, and backups stored in that directory. Run the installer again to create the new workspace.

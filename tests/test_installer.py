@@ -462,6 +462,24 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(order, ['roster', 'provider', 'element'])
             self.assertFalse(load(data / 'onboarding.json').get('select_agents'))
 
+    def test_telegram_uses_the_team_profile_before_element_and_links_afterward(self):
+        settings = {**self.settings, 'agents': [], 'telegram': True, 'control_runtime': True}
+        order = []
+        with (TemporaryDirectory() as work, redirect_stdout(StringIO()),
+              patch('onboarding.interactive_terminal', return_value=True),
+              patch('shared_provider.configure_team', side_effect=lambda *args: order.append('provider')) as configure,
+              patch('shared_provider.prepare_telegram', side_effect=lambda *args: order.append('probe')),
+              patch('onboarding.confirm_element', side_effect=lambda *args: order.append('element') or 'next'),
+              patch('onboarding.enable_management'), patch('onboarding.deliver_welcome'),
+              patch('onboarding.telegram', side_effect=lambda *args, **kwargs: order.append('link')) as telegram):
+            data = Path(work)
+            save(data / 'settings.json', settings)
+            save(data / 'agents.json', {'agents': {}})
+            guide(data, settings, './constellation_matrix', 'fixture-password')
+        configure.assert_called_once_with(data, ['telegram-agent'])
+        telegram.assert_called_once_with(data, ['setup'], owner_passphrase='fixture-password')
+        self.assertEqual(order, ['provider', 'probe', 'element', 'link'])
+
     def test_legacy_element_confirmation_and_welcome_receipt_survive(self):
         settings = {**self.settings, 'agents': []}
         with TemporaryDirectory() as work, redirect_stdout(StringIO()):

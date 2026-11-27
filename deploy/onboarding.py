@@ -10,7 +10,7 @@ from agent_picker import select_agents
 from installer import (CLIENT, CONNECTOR, RUNTIME_UID, SOURCE, agent_sign_in, directory,
                        encoded, load, onboarding_profiles, open_existing, operator_lock, pending_local_agents,
                        provision_selected_agents, read_password_file, request, save, run, telegram,
-                       telegram_agent_pending, telegram_agent_selected)
+                       telegram_agent_selected)
 from layout import room_route
 from provision import MatrixError
 from roster import enable_management
@@ -74,8 +74,12 @@ def guide(data, settings, command, passphrase):
         print(f'Resume setup with {command} setup-guide')
         return
     deliver_welcome(data, command)
-    if settings['telegram'] and not telegram_agent_selected(settings) and interactive_terminal():
-        telegram(data, ['setup'])
+    if settings['telegram'] and interactive_terminal():
+        try:
+            telegram(data, ['setup'], owner_passphrase=passphrase)
+        except (OSError, MatrixError, ValueError, SubprocessError) as error:
+            print(f'Telegram setup could not be completed. {error}')
+            print(f'Resume setup with {command} telegram setup')
 
 
 def confirm_sign_in(data):

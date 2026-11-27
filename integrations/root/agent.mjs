@@ -252,19 +252,19 @@ async function planNext(task) {
     let result = submittedProposal(task.body) ?? serviceDiagnosticProposal(task.body);
     const twin = !result && process.env.ARCHITECT_EXECUTOR_SOCKET && twinRequest(task.body);
     if (twin) {
+      if (task.sender !== owner || task.room !== audit) throw new ProposalError('Select the twin profile in Control Room.');
       const selected = await executor({ twin: twin.action === 'create' ? 'choices' : twin.action, account: twin.account });
       if (twin.action === 'create') {
-        if (task.sender !== owner || task.room !== audit) throw new ProposalError('Select the twin profile in Control Room.');
         result = twinProposal(twin, selected.revision);
       } else if (twin.action === 'models') {
-        result = { summary: [
+        result = { outcome: 'awaiting_selection', summary: [
           'Choose a model and reasoning effort for the twin.',
           ...(selected.models ?? []).map(item => `${item.id} · ${item.efforts.join(', ')}`),
           `Then send twin create ${twin.account} MODEL EFFORT AGENT,AGENT [MINUTES] in Control Room.`,
           'For exceptions, use AGENT:MODEL:EFFORT in the agent list.',
         ].join('\n') };
       } else {
-        result = { summary: [
+        result = { outcome: 'awaiting_selection', summary: [
           'Choose the provider connection and model for your digital twin.',
           ...(selected.accounts ?? []).map(item => `${item.label} · twin models ${item.id}`),
           'Available agents · ' + (selected.agents ?? []).join(', '),
@@ -316,7 +316,7 @@ async function planNext(task) {
     stage = 'gateway-storage';
     db.prepare('UPDATE tasks SET body=NULL, summary=?, review_details=?, command=?, hash=?, expires=?, outcome=?, operation=?, finished_at=? WHERE id=? AND outcome IS NULL')
       .run(result.summary, result.details ? JSON.stringify(result.details) : null, result.command ?? null, result.hash ?? null,
-        result.command ? Date.now() + reviewWindow : null, result.command ? null : 'not_proposed', result.operation ?? null,
+        result.command ? Date.now() + reviewWindow : null, result.command ? null : result.outcome ?? 'not_proposed', result.operation ?? null,
         result.command ? null : Date.now(), task.id);
   } catch (error) {
     const timedOut = stage === 'planner-turn' && error?.code === 'ACP_TURN_TIMEOUT';
@@ -466,6 +466,11 @@ async function closePoll(poll) {
 }
 
 async function deliverAudit(task) {
+  if (task.outcome === 'awaiting_selection') {
+    const event = await say('audit:' + task.id, task.summary, html(task.summary).replaceAll('\n', '<br>'), owner);
+    db.prepare('UPDATE tasks SET notified=1,audit_event=? WHERE id=?').run(event, task.id);
+    return;
+  }
   const decision = task.action === 'approve' ? '✅ Approved' : task.action === 'reject' ? '❌ Declined' : '❌ Not approved';
   const actor = task.approver ? ` by ${task.approver}` : '';
   const outcome = task.outcome === 'denied' ? 'Skipped' : task.outcome.replaceAll('_', ' ');

@@ -15,7 +15,7 @@ from setup_guide import heading, interactive_terminal
 PROBE_AUTHENTICATION_ERROR = 42
 
 
-def setup(data, arguments=(), *, install_agent=True):
+def setup(data, arguments=(), *, install_agent=True, owner_passphrase=None):
     parser = argparse.ArgumentParser(prog='constellation_matrix telegram setup', allow_abbrev=False)
     parser.add_argument('--api-file', type=Path, help='Private Telegram API credentials JSON')
     args = parser.parse_args(arguments)
@@ -71,8 +71,12 @@ def setup(data, arguments=(), *, install_agent=True):
                     raise ValueError('The private Telegram API credentials file does not exist')
                 telegram(data, ['prepare', str(path.absolute())])
             elif stage == 'bridge':
-                print('Activating Telegram Bridge. Use your existing Matrix operator password when prompted.', flush=True)
-                telegram(data, ['activate'])
+                print('Activating Telegram Bridge.', flush=True)
+                if owner_passphrase is None:
+                    print('Enter your existing Matrix operator password when prompted.', flush=True)
+                    telegram(data, ['activate'])
+                else:
+                    telegram(data, ['activate'], owner_passphrase=owner_passphrase)
             elif stage == 'login':
                 print('In Element, open Telegram → Rooms → Telegram Bridge and send:\n'
                       '  !tg login qr\n'
