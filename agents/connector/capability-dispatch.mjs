@@ -1,6 +1,7 @@
 import { catalogMembers, delegationGuidance, evaluateDelegation, gapKey } from './agent-catalog.mjs';
 import { mentionMessage } from './matrix-format.mjs';
 import { readEncryptedRoomMessage } from './matrix-session.mjs';
+import { staffingGuidance, staffingRequest } from './staffing-office.mjs';
 
 // Only trailing control lines are actionable. Other text is ordinary reply content.
 export function controlsFromReply(reply) {
@@ -27,7 +28,10 @@ export function dynamicTurn(catalog, event) {
 }
 
 export function guidanceFor(catalog, event, sender, managed) {
-  return [managed, dynamicTurn(catalog, event) && delegationGuidance(catalog, sender)].filter(Boolean).join('\n\n');
+  const staffing = event.id === event.request && event.managed?.version === 2 && event.managed.manager === sender &&
+    catalog.current()?.agents.some(agent => agent.key === 'hiring-manager');
+  return [managed, dynamicTurn(catalog, event) && delegationGuidance(catalog, sender), staffing && staffingGuidance]
+    .filter(Boolean).join('\n\n');
 }
 
 export function routingFor(catalog, legacy, owner, planner) {
@@ -52,7 +56,15 @@ export async function decideDispatch(catalog, event, reply, actor, client, room)
     if (turn?.handoff && !turn.returning && target && joined.has(target.id)) return {returnTo:target};
     return {};
   }
-  return actor.startsWith('@helper:') ? {} : evaluateDelegation(catalog, actor, joined, controls);
+  if (actor.startsWith('@helper:')) return {};
+  const decision = evaluateDelegation(catalog, actor, joined, controls);
+  if (!decision.target || !Object.hasOwn(controls.handoff ?? {}, 'staffing')) return decision;
+  const staffing = staffingRequest(controls.handoff.staffing);
+  if (!staffing || event.id !== event.request || event.managed?.version !== 2 || event.managed.manager !== actor ||
+      decision.target.key !== 'hiring-manager' || decision.requirement?.capability !== 'staffing') {
+    return { blocker: 'Use a valid hiring request addressed to Hiring Manager from the original Office assignment.' };
+  }
+  return { ...decision, staffing };
 }
 
 export function gapNotice(event, decision, relation) {

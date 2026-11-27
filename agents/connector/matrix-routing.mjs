@@ -254,7 +254,8 @@ export function threadReply(event, reply, peers = [], requesterName, outcomeReci
       ...mentionMessage(message.plain, result.outcome ? outcomeRecipients : result.target, message.rich),
       [turnKey]: { request: event.request, number, ...(result.managed && { managed: result.managed }),
         ...(result.target && (decision?.target?.id === result.target.id && decision.requirement
-          ? { handoff: decision.requirement } : result.target.id === event.managed.manager ? { returning: true } : {})) },
+          ? { handoff: decision.requirement, ...(decision.staffing && { staffing: decision.staffing }) }
+          : result.target.id === event.managed.manager ? { returning: true } : {})) },
       ...(result.outcome && { [taskOutcomeKey]: result.outcome }),
       ...(delivery.ids?.length && { [attachmentKey]: delivery.ids }),
       'm.relates_to': threadRelation(event),

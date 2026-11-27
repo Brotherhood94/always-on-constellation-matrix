@@ -55,6 +55,14 @@ A contact grants permission to initiate a handoff. The recipient must also own t
 
 The Scouter schedule is UTC. Set `"scout_weekly_utc": "Mon 09:00"` in the install configuration, choose another weekday and time, or use `"off"` to disable the scheduled search. Evidence-driven reviews still run.
 
+### Hire from Office
+
+In **Agents → Office**, pick **@Task Manager** from Element’s mention picker and ask it to hire a specialist. For example, “Ask Hiring Manager to hire research-specialist to compare public sources, cite each conclusion, and report uncertainties.” Dot can submit the same request to Office through **Constellation Office**, starting with Task Manager.
+
+Hiring Manager posts the proposal and approval poll in **Agents → People → Hiring Manager**. Office reports when the vote is open and when the approved specialist is registered. Complete the provider setup on the VPS with `./constellation_matrix agent configure research-specialist`. To start an independent hire from the private chat, use `hire research-specialist Compare public sources and cite each conclusion`.
+
+For work that requires public web access, ask Scouter to propose a separate read-only public web MCP grant. Office waits for the named specialist to become available and for the target to verify the grant. If you want a research sample, assign it through Task Manager after setup.
+
 ### How recurring staffing gaps are grouped
 
 Hiring Manager reads recent Office evidence from Context Intelligence. Its existing exact match catches the same capability and resource pair on two distinct assignments. For different pairs, its configured Amplifier provider reviews a bounded batch of explicitly reported, uncovered role gaps. For example, authoring release notes in one project and writing the customer-facing change summary for another can support one Release Editor proposal.

@@ -107,5 +107,14 @@ test('private approvals resume pending work and only invoke the exact accepted o
   assert.match(sent.at(-1).content.body, /Retired existing/);
   await bridge.tick();
   assert.equal(applied.length, 3);
+
+  await bridge.accept(message('hire fixture Check artifacts'), envelopes('expire'));
+  await bridge.tick();
+  const expiring = find('expire');
+  time += 15 * 60_000 + 1;
+  await bridge.accept(approval(expiring.poll, choiceId(expiring, 'approve')), envelopes('expired-vote'));
+  await bridge.tick();
+  assert.equal(find('expire').announced, 'expired');
+  assert.equal(applied.length, 3);
   db.close();
 });

@@ -6,7 +6,8 @@ import { acknowledgePrivateMessage, readOptional, sendEncrypted } from '../../..
 import { runTurn } from '../../../agents/connector/instance-acp.mjs';
 import { research } from '../../../agents/connector/team-tools.mjs';
 import { contextRequest } from './evidence.mjs';
-import { createRosterApproval, draftWorker, submit } from './roster-approval.mjs';
+import { allowedHireKey, createRosterApproval, draftWorker, submit } from './roster-approval.mjs';
+import { createOfficeHiring } from './office-hiring.mjs';
 import { createStaffingReview, staffingExamples, staffingRoster } from './staffing-clusters.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -55,7 +56,7 @@ export function improvementJobs(actor, rows, roster) {
   return jobs;
 }
 
-export async function openDesk({client, db, catalog, office, owner, actor}) {
+export async function openDesk({client, db, catalog, office, owner, planner, actor, reportHire}) {
   const room = (await readFile('/state/control-room-id','utf8')).trim();
   const token = (await readFile('/context-token','utf8')).trim();
   const self = await client.getUserId();
@@ -105,12 +106,17 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
       return ['Duties: ' + (target.persona?.duties ?? []).join(' '), 'Affected contacts: ' + (inbound.join(', ') || 'none'),
         'Open assignments: ' + (result.results.map(r => link(office,r.request)).join(' ') || 'none')].join('\n');
     }});
+  const hiring = staffing && createOfficeHiring({
+    db, client, office, owner, planner, catalog, enabled, approvals, say, draft: draftWorker, allowedKey: allowedHireKey,
+    publish: (request, status, content) => sendEncrypted(client, office, 'hire-office-' + digest([request, status]), content),
+    report: reportHire,
+  });
   client.on('room.encrypted_event', (id, raw) => {
     if (id === room && raw.sender === owner && !raw.unsigned?.redacted_because && eventId(raw.event_id))
       db.prepare('INSERT OR IGNORE INTO desk_inbox (id) VALUES (?)').run(raw.event_id);
   });
   async function inbox() {
-    const row = db.prepare('SELECT id FROM desk_inbox WHERE done=0 AND retry<=? ORDER BY rowid LIMIT 1').get(Date.now());
+    const row = db.prepare('SELECT id FROM desk_inbox WHERE done=0 AND retry<=? ORDER BY retry,rowid LIMIT 1').get(Date.now());
     if (!row) return;
     db.prepare('UPDATE desk_inbox SET retry=? WHERE id=?').run(Date.now()+15000,row.id);
     await audience();
@@ -226,6 +232,7 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
       'Otherwise return {message,agent,tool}. Tool fields: id, kind, source (public publisher URL), version, permissions, verification. ' +
       'Supported: github (source https://github.com/cli/cli, version "1", repository "owner/repo", read-only, only when the operator supplied that repository); ' +
       'skill (HTTPS raw file and exact verified sha256); mcp (HTTPS streamable endpoint, exact server version and list of permitted methods). ' +
+      'For public web research, use a read-only MCP grant with purpose "public-web". Include only verified web search or page reading methods that declare read-only access. ' +
       'Use public publisher tools to check details. Do not invent repository names, digests, versions or endpoints.',
     {job,agents:summary,found});
     if (!short(decision.message,1200)) throw new Error('Invalid research result');
@@ -273,11 +280,13 @@ export async function openDesk({client, db, catalog, office, owner, actor}) {
   }
   let active;
   return {
+    hire: hiring?.queue,
     assignment(event) { queue('assignment:'+event.id,{mode:'request',text:event.body.slice(0,1400),source:event.id}); },
     tick() {
       active ??= (async () => {
+        await hiring?.tick();
         await audience();
-        await inbox();
+        await inbox().catch(error => console.warn('Private desk inbox will retry:', error.code || error.name));
         if (enabled) await approvals.tick();
         await scan();
         if (!await processJob() && staffingBatch && catalog.fresh()) {

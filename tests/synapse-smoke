@@ -42,7 +42,7 @@ docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
   -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/deploy:/telegram \
   "$name" python -B /test.py
 office_connector_mounts=()
-for module in connector matrix-routing matrix-session telegram-intent telegram-office; do
+for module in connector matrix-routing matrix-session telegram-intent telegram-office staffing-office capability-dispatch store; do
   office_connector_mounts+=(-v "$src/agents/connector/$module.mjs:/app/$module.mjs:ro")
 done
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
@@ -73,7 +73,6 @@ if [[ ${MATRIX_HELPER_SMOKE:-0} == 1 ]]; then
     -v "$src/agents/connector/helper-support.mjs:/app/helper-support.mjs:ro" \
     "${office_connector_mounts[@]}" \
     -v "$src/agents/connector/agent-catalog.mjs:/app/agent-catalog.mjs:ro" \
-    -v "$src/agents/connector/capability-dispatch.mjs:/app/capability-dispatch.mjs:ro" \
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/helper-fixture.mjs
   rm -rf -- "$desk_tls"
   unset desk_tls
@@ -83,9 +82,10 @@ if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 || ${MATRIX_TEAM_DESKS_SMOKE:-0} == 1 ]
   openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost -addext subjectAltName=DNS:localhost \
     -keyout "$desk_tls/key.pem" -out "$desk_tls/ca.pem" >/dev/null 2>&1
   docker run --rm --network "$name" --network-alias context --user 0:0 --entrypoint node \
-    -v "$desk_tls:/desk-tls:ro" \
+    -v "$desk_tls:/desk-tls:ro" "${office_connector_mounts[@]}" \
+    -v "$src/agents/connector/dot-bridge.mjs:/app/dot-bridge.mjs:ro" \
+    -v "$src/agents/connector/team-tools.mjs:/app/team-tools.mjs:ro" \
     -v "$src/integrations/chief-of-staff:/app/chief-of-staff:ro" \
-    -v "$src/agents/connector/matrix-session.mjs:/app/matrix-session.mjs:ro" \
     -v "$src/tests/team-desks-fixture.mjs:/app/team-desks-fixture.mjs:ro" \
     "${MATRIX_CONNECTOR_TEST_IMAGE:-constellation-office-connector:0.22.17}" /app/team-desks-fixture.mjs
 fi

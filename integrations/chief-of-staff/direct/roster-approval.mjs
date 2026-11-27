@@ -14,7 +14,12 @@ const pollResponse = 'org.matrix.msc3381.poll.response';
 const gapId = /^cos-gap-[a-f0-9]{64}$/u;
 const validKey = /^[a-z0-9][a-z0-9_-]{0,35}$/u;
 const protectedKeys = new Set(['manager', 'root', 'vps-manager', 'chief-of-staff', 'remote-worker', 'dot', 'monitor',
-  'telegram-agent', 'telegrambot', 'roster-inviter']);
+  'telegram-agent', 'telegrambot', 'roster-inviter', 'postgres', 'synapse', 'context', 'neo4j',
+  'persona-workshop', 'vps-manager-ops', 'helper-dm']);
+
+const starterKeys = new Set(['task-manager','hiring-manager','coach','scouter','vps-manager','manager']);
+export const allowedHireKey = key => validKey.test(key) && !key.startsWith('engine-') && !key.startsWith('acp-') &&
+  !protectedKeys.has(key) && !starterKeys.has(key);
 
 const digest = text => createHash('sha256').update(text).digest('hex');
 export const choiceId = (row, action) =>
@@ -159,7 +164,7 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       const roster = currentAgents();
       if (!roster) return 'The worker roster is unavailable. Try the command again when it is current.';
       const target = roster.find(agent => agent.key === request.key);
-      const starter = ['task-manager','hiring-manager','coach','scouter','vps-manager','manager'].includes(request.key);
+      const starter = starterKeys.has(request.key);
       const starterRetirement = actor === 'hiring-manager' && request.kind === 'retire' && starter && request.key !== actor && target;
       if (!starterRetirement && (protectedKeys.has(request.key) || starter || (request.kind === 'retire' && (!target ||
           target.role !== 'worker' || target.placement !== 'local')))) return 'Choose an ordinary local Office worker.';

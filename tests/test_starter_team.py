@@ -87,6 +87,18 @@ class StarterTeamTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             tool_spec({**tool,'repository':'../other'})
 
+    def test_public_web_purpose_is_reserved_for_scoped_mcp_tools(self):
+        from team_management import tool_spec
+        tool = {'id':'web-research','kind':'mcp','version':'1','source':'https://publisher.example.org/web',
+                'endpoint':'https://publisher.example.org/mcp','methods':['search','read'],
+                'permissions':'Read public pages','verification':'Confirm search and read methods',
+                'purpose':'public-web'}
+        self.assertEqual(tool_spec(tool), tool)
+        with self.assertRaises(ValueError):
+            tool_spec({**tool,'purpose':'host-shell'})
+        with self.assertRaises(ValueError):
+            tool_spec({**tool,'kind':'github'})
+
     def test_protected_edges_and_stale_workshop_edits(self):
         from tempfile import TemporaryDirectory
         from types import SimpleNamespace

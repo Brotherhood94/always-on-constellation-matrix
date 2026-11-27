@@ -26,6 +26,10 @@ export class Store {
         PRIMARY KEY (assignment, path)
       );
       CREATE TABLE IF NOT EXISTS context_outbox (id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS staffing_receipts (
+        id TEXT PRIMARY KEY, checked INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS staffing_closed (request TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS office_telegram (
         id TEXT PRIMARY KEY, thread TEXT NOT NULL, status TEXT, checked INTEGER NOT NULL DEFAULT 0
       );
@@ -126,10 +130,16 @@ export class Store {
     }
   }
 
-  sent(event, id, outcomeKey, evidence) {
+  sent(event, id, outcomeKey, evidence, staffingReceipt) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      this.db.prepare('UPDATE inbox SET sent=?, reply=NULL, outgoing=NULL WHERE id=?').run(id, event);
+      if (staffingReceipt) {
+        // Preserve the original dispatch event as the hiring handoff anchor.
+        this.db.prepare('INSERT INTO staffing_closed VALUES (?)').run(event);
+        this.db.prepare('UPDATE staffing_receipts SET done=1 WHERE id=?').run(staffingReceipt);
+      } else {
+        this.db.prepare('UPDATE inbox SET sent=?, reply=NULL, outgoing=NULL WHERE id=?').run(id, event);
+      }
       this.db.prepare('DELETE FROM outgoing_attachments WHERE assignment=?').run(event);
       if (evidence) {
         this.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?, ?)').run(id, JSON.stringify(evidence));
@@ -147,6 +157,14 @@ export class Store {
   }
   nextEvidence() {
     return this.db.prepare('SELECT id, payload FROM context_outbox ORDER BY rowid LIMIT 1').get();
+  }
+
+  queueStaffingReceipt(id) {
+    this.db.prepare('INSERT OR IGNORE INTO staffing_receipts(id) VALUES (?)').run(id);
+  }
+
+  nextStaffingReceipt(now) {
+    return this.db.prepare('SELECT id FROM staffing_receipts WHERE done=0 AND checked<=? ORDER BY checked,rowid LIMIT 1').get(now);
   }
 
   trackTelegram(event) {

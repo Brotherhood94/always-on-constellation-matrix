@@ -19,10 +19,13 @@ import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from '.
 import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramReceipt,
   telegramHandoffKey, telegramReceiptKey, telegramTaskStatus, telegramTerminal } from './telegram-office.mjs';
 import { helperIdentity, supportEvidence } from './helper-support.mjs';
+import { staffingOutcome, staffingReceipt, staffingReceiptKey, verifyStaffingHandoff } from './staffing-office.mjs';
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, AGENT_USERNAME, AGENT_NAME,
   AGENT_STATE, AGENT_WORKSPACE, MATRIX_PLANNER, AGENT_INSTRUCTIONS } = process.env;
 const helper = AGENT_USERNAME === 'helper';
+const coordinator = ['task-manager', 'manager'].includes(AGENT_USERNAME);
+const hiring = `@hiring-manager:${MATRIX_SERVER_NAME}`;
 const userId = `@${AGENT_USERNAME}:${MATRIX_SERVER_NAME}`;
 const telegramHandoff = process.env.TELEGRAM_HANDOFF_SOCKET;
 const catalog = createCatalog(MATRIX_SERVER_NAME, process.env.MATRIX_CATALOG_PATH);
@@ -60,12 +63,26 @@ async function connect() {
   process.env.MATRIX_MEDIA_LIMIT = String(limit);
   if (process.env.TEAM_ROLE) {
     const { openDesk } = await import('./chief-of-staff/direct/team.mjs');
-    desk = await openDesk({client, db:store.db, catalog, office:roomId, owner:MATRIX_OWNER, actor:AGENT_USERNAME});
+    desk = await openDesk({ client, db: store.db, catalog, office: roomId, owner: MATRIX_OWNER,
+      planner: MATRIX_PLANNER, actor: AGENT_USERNAME,
+      reportHire: (row, sent, outcome) => {
+        if (!process.env.CONTEXT_INTELLIGENCE_URL || !outcome) return;
+        const event = { id: row.handoff, request: row.request, thread: row.thread, number: 2 };
+        const record = executionEvidence({ roomId, actor: userId, event, sent, target: row.manager, flow: 'return',
+          step: outcome.status === 'blocked' ? 'blocked' : 'returned' });
+        store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(sent, JSON.stringify(record));
+      },
+    });
   }
   client.on('room.message', (incomingRoom, event) => {
     const { names, policy } = routing();
     if (names[userId] !== AGENT_NAME) return;
     if (helper && event.sender !== policy.coordinator) return;
+    if (incomingRoom === roomId && coordinator && event.sender === hiring && event.content?.[staffingReceiptKey]) {
+      const receipt = staffingReceipt(event.content[staffingReceiptKey]);
+      if (receipt && staffingOutcome(receipt, event.event_id)) store.queueStaffingReceipt(event.event_id);
+      return;
+    }
     const accepted = acceptedMessage({ ...event, room_id: incomingRoom }, {
       roomId, owner: MATRIX_OWNER, userId, agents: Object.keys(names), displayNames: names, activatedAt, planner: MATRIX_PLANNER, routingPolicy: policy, acceptAttachments: !helper,
     });
@@ -225,6 +242,19 @@ async function deliver(client, event) {
     if (!context || !validChain || !permitted) {
       store.ignoreAssignment(event.id);
       console.warn('Ignored a Matrix handoff with an unverifiable Manager route.');
+      return;
+    }
+    if (desk?.hire && raw?.content?.[turnKey]?.staffing !== undefined) {
+      const verified = await verifyStaffingHandoff({ read, request: event.request, handoff: event.id, thread: event.thread,
+        manager: routing().policy.coordinator, hiring: userId, owner: MATRIX_OWNER, planner: MATRIX_PLANNER });
+      if (!verified) {
+        store.ignoreAssignment(event.id);
+        return;
+      }
+      store.acceptEvidence(event.id, process.env.CONTEXT_INTELLIGENCE_URL && assignmentEvidence({ roomId, actor: userId, event }));
+      await publishActivity(client, event.id);
+      desk.hire(event, verified);
+      store.sent(event.id, '', null);
       return;
     }
     const senders = new Set([MATRIX_OWNER, MATRIX_PLANNER, ...Object.keys(members)]);
@@ -395,7 +425,39 @@ async function pollTelegram(client) {
   } else store.telegramProgress(row.id, result.status, Date.now());
 }
 
-async function deliverBetweenBackups(client, event) {
+async function closeStaffing(client, row) {
+  const read = id => readEncryptedRoomMessage(client, roomId, id);
+  store.db.prepare('UPDATE staffing_receipts SET checked=? WHERE id=?').run(Date.now() + 15_000, row.id);
+  const received = await read(row.id);
+  if (!received) return;
+  const receipt = staffingReceipt(received.content[staffingReceiptKey]);
+  const relation = received.content['m.relates_to'];
+  const outcome = receipt && staffingOutcome(receipt, row.id);
+  const local = receipt && store.db.prepare('SELECT sent,thread FROM inbox WHERE id=? AND id=request').get(receipt.request);
+  const closed = receipt && store.db.prepare('SELECT 1 FROM staffing_closed WHERE request=?').get(receipt.request);
+  const verified = received.sender === hiring && outcome && local?.sent === receipt.handoff && !closed &&
+    relation?.rel_type === 'm.thread' && relation.event_id === local.thread &&
+    relation['m.in_reply_to']?.event_id === receipt.handoff &&
+    await verifyStaffingHandoff({ read, request: receipt.request, handoff: receipt.handoff, thread: local.thread,
+      manager: userId, hiring, owner: MATRIX_OWNER, planner: MATRIX_PLANNER });
+  if (!verified || receipt.agent !== verified.operation.key) {
+    store.db.prepare('UPDATE staffing_receipts SET done=1 WHERE id=?').run(row.id);
+    return;
+  }
+  const event = { id: row.id, request: receipt.request, thread: local.thread, number: 2 };
+  const message = outcomeReplyText('', outcome);
+  const recipient = outcomeRecipients.find(person => person.id === verified.requester);
+  const sent = await sendEncrypted(client, roomId, reactionTransaction('staffing-outcome', receipt.request), {
+    ...mentionMessage(message.plain, recipient, message.rich),
+    [turnKey]: { request: receipt.request, number: event.number },
+    [taskOutcomeKey]: outcome,
+    'm.relates_to': threadRelation(event),
+  });
+  store.sent(receipt.request, sent, outcomeReaction[outcome.status], process.env.CONTEXT_INTELLIGENCE_URL &&
+    executionEvidence({ roomId, actor: userId, event, sent, status: outcome.status, evidence: [row.id] }), row.id);
+}
+
+async function deliverBetweenBackups(client, event, staffing) {
   try {
     backupLock.exec('BEGIN IMMEDIATE');
   } catch (error) {
@@ -405,6 +467,7 @@ async function deliverBetweenBackups(client, event) {
   try {
     if (event) await deliver(client, event);
     if (telegramHandoff) await pollTelegram(client);
+    if (staffing) await closeStaffing(client, staffing);
     await settleReactions(client);
   } finally {
     backupLock.exec('ROLLBACK');
@@ -430,7 +493,10 @@ while (true) {
     if (!helper) toolCheck ??= checkTargetTools(catalog.current()?.agents.find(agent => agent.id === userId), store.db, writeExecutionEvidence)
       .catch(() => console.warn('Target tool verification will retry.')).finally(() => { toolCheck = undefined; });
     const event = store.next();
-    if (event || store.nextReactionCleanup() || telegramHandoff && store.nextTelegram()) await deliverBetweenBackups(client, event);
+    const staffing = coordinator && store.nextStaffingReceipt(Date.now());
+    if (event || staffing || store.nextReactionCleanup() || telegramHandoff && store.nextTelegram()) {
+      await deliverBetweenBackups(client, event, staffing);
+    }
     const pendingEvidence = store.nextEvidence();
     if (pendingEvidence) {
       try {

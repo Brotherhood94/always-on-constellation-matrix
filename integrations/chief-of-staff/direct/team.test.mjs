@@ -89,18 +89,23 @@ test('publisher research handles partial outages and adapters enforce the approv
 test('MCP grants verify server version, discovery and the exact tool name', async () => {
   const manifest = {kind:'mcp',endpoint:'https://tools.example.org/mcp',version:'2.0',methods:['lookup']};
   const called = [];
+  let readOnlyHint = false;
   const fetch = async (_url, init) => {
     const req = JSON.parse(init.body);
     called.push(req.method);
     if (req.method.startsWith('notifications/')) return new Response(null,{status:202});
     const values={initialize:{protocolVersion:req.params?.protocolVersion,capabilities:{tools:{}},serverInfo:{name:'fixture',version:'2.0'}},
-      'tools/list':{tools:[{name:'lookup',inputSchema:{type:'object'}}]}, 'tools/call':{content:[{type:'text',text:'found'}]}};
+      'tools/list':{tools:[{name:'lookup',inputSchema:{type:'object'},annotations:{readOnlyHint}}]}, 'tools/call':{content:[{type:'text',text:'found'}]}};
     return Response.json({jsonrpc:'2.0',id:req.id,result:values[req.method]});
   };
   assert.deepEqual(await useTool(manifest,'verify',{},{fetch}),['lookup']);
   assert.equal((await useTool(manifest,'lookup',{q:'test'},{fetch})).content[0].text,'found');
   await assert.rejects(useTool({...manifest,version:'3.0'},'verify',{},{fetch}),/version/);
   await assert.rejects(useTool(manifest,'change',{}, {fetch}),/outside/);
+  const web = {...manifest,purpose:'public-web'};
+  await assert.rejects(useTool(web,'verify',{},{fetch}),/access changed/);
+  readOnlyHint = true;
+  assert.deepEqual(await useTool(web,'verify',{},{fetch}),['lookup']);
   assert.equal(called.filter(x=>x==='tools/call').length,1);
 });
 

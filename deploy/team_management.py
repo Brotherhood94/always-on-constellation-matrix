@@ -18,7 +18,8 @@ def tool_spec(value):
     common = {'kind', 'id', 'source', 'version', 'permissions', 'verification'}
     kinds = {'github': {'repository'}, 'skill': {'sha256'}, 'mcp': {'endpoint', 'methods'}}
     kind = value.get('kind')
-    if not isinstance(kind, str) or kind not in kinds or set(value) != common | kinds[kind]:
+    purpose = {'purpose'} if kind == 'mcp' and value.get('purpose') == 'public-web' else set()
+    if not isinstance(kind, str) or kind not in kinds or set(value) != common | kinds[kind] | purpose:
         raise ValueError('Invalid tool manifest')
     for name, limit in [('version', 100), ('permissions', 260), ('verification', 360), ('source', 1024)]:
         if not clean(value[name], limit):

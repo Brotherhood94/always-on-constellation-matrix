@@ -101,9 +101,10 @@ export async function useTool(tool, action = 'verify', args = {}, overrides = {}
       }});
       await client.connect(transport);
       if (client.getServerVersion()?.version !== tool.version) throw new Error('MCP server version changed.');
-      const available = (await client.listTools()).tools.map(item => item.name);
-      if (!tool.methods.every(name => available.includes(name))) throw new Error('MCP methods changed.');
-      return action === 'verify' ? available : await client.callTool({name:action,arguments:args});
+      const available = (await client.listTools()).tools;
+      const allowed = available.filter(item => tool.purpose !== 'public-web' || item.annotations?.readOnlyHint === true);
+      if (!tool.methods.every(name => allowed.some(item => item.name === name))) throw new Error('MCP methods or access changed.');
+      return action === 'verify' ? available.map(item => item.name) : await client.callTool({name:action,arguments:args});
     } finally { await client.close(); }
   }
   throw new Error('The requested operation is outside this tool grant.');
