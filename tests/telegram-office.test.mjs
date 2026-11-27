@@ -276,7 +276,7 @@ test('Telegram Control publishes an encrypted, bounded reply to an operator sear
 
   await telegramControlSearch(control, event, { ...options, bridgeFetch: async () =>
     Response.json({ errcode: 'FI.MAU.NOT_LOGGED_IN', error: 'do not echo this' }, { status: 400 }) });
-  assert.match(bodies.at(-1), /!tg login qr/u);
+  assert.match(bodies.at(-1), /telegram setup/u);
   assert.doesNotMatch(bodies.at(-1), /do not echo/u);
 
   await telegramControlSearch(control, { ...event, content: { msgtype: 'm.text', body: '!tg search' } }, options);
@@ -303,7 +303,7 @@ test('Office reports bridge sign-in, unresolved usernames, and provisioning fail
     key: 'fixture', owner, guide: agent, domain: 'sample.test', space: '!telegram:sample.test',
   };
   for (const [status, code, error, expected] of [
-    [400, 'FI.MAU.NOT_LOGGED_IN', 'Not logged in', /!tg login qr/u],
+    [400, 'FI.MAU.NOT_LOGGED_IN', 'Not logged in', /telegram setup/u],
     [403, 'M_FORBIDDEN', 'Login is not logged in', /Telegram session is disconnected/u],
     [404, 'M_NOT_FOUND', 'Identifier not found', /could not resolve that exact username/u],
     [401, 'M_UNKNOWN_TOKEN', 'Invalid auth token', /telegram layout/u],

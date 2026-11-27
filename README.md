@@ -49,7 +49,7 @@ Ask **@Task Manager** in Office to hire a specialist or send `hire release-edito
 
 ### Finish Telegram setup
 
-Enabling **Telegram** installs **Telegram Agent** automatically. Telegram Agent uses the shared provider during agent setup. After Element sign-in, the same installer guides you through importing your Telegram API credentials and linking your account by QR code and two-step verification. If interrupted, resume setup from the same terminal.
+Enabling **Telegram** installs **Telegram Agent** automatically. Telegram Agent uses the shared provider during agent setup. After Element sign-in, the same installer guides you through importing your Telegram API credentials and linking your account with a terminal QR code and a hidden two-step verification prompt. If interrupted, resume setup from the same terminal.
 
 ```sh
 ./constellation_matrix telegram setup

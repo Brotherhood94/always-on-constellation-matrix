@@ -186,10 +186,11 @@ test('Element guides include copyable commands and manage optional pins independ
   telegramState.entries['telegram-setup'] = { body: 'Set up Telegram', event: '$old-telegram-guide', revision: 'old' };
   await reconcileTelegramPin(matrix, telegramState, command);
   const guide = messages.get(telegramState.entries['telegram-setup'].event);
-  assert.match(guide.formatted_body, /<pre><code>!tg login qr<\/code><\/pre>/u);
+  assert.match(guide.formatted_body, /telegram setup<\/code><\/pre>/u);
   assert.match(guide.body, /Settings → Devices → Link Desktop Device/u);
   assert.match(guide.body, /two-step verification/u);
-  assert.ok(guide.body.includes(`${command.slice('sudo '.length)} setup-guide`));
+  assert.ok(guide.body.includes(`${command.slice('sudo '.length)} telegram setup`));
+  assert.doesNotMatch(guide.body, /!tg login|prefix your Telegram password/u);
   assert.match(guide.body, /@Task Manager/u);
   for (const sample of ['open the chat with @sample_contact', 'create a group called Project Room',
     'add @sample_contact to the group', 'send a message to Project Room', 'summarize what I missed']) {

@@ -108,14 +108,13 @@ def setup(data, arguments=(), *, install_agent=True, owner_passphrase=None):
                 else:
                     telegram(data, ['activate'], owner_passphrase=owner_passphrase)
             elif stage == 'login':
-                print('In Element, open Telegram → Rooms → Telegram Bridge and send:\n'
-                      '  !tg login qr\n'
-                      'On your phone, open Telegram → Settings → Devices → Link Desktop Device and scan the code.\n'
-                      'If the bot asks for your two-step verification password, send a new message in Telegram Bridge:\n'
-                      '  !tg <your Telegram two-step verification password>\n'
-                      'Replace the placeholder, including the brackets. Use your Telegram password.\n'
-                      'If the login has expired, send !tg cancel and then !tg login qr for a fresh code.', flush=True)
-                input('After the bot confirms that you are logged in, press Enter. ')
+                print('Link your Telegram account here in the VPS terminal. Scan the QR code with Telegram mobile.', flush=True)
+                try:
+                    run_telegram(data, 'link-account')
+                except CalledProcessError as error:
+                    if error.returncode == 130:
+                        raise KeyboardInterrupt from None
+                    raise
             elif stage == 'engine':
                 print('Registering Telegram Agent and preparing its dedicated Amplifier Instance.', flush=True)
                 telegram(data, ['prepare-agent'])

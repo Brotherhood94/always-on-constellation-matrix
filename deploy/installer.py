@@ -939,7 +939,7 @@ def install(data, args, *, entered=None):
             if args.config and telegram_agent_selected(settings) and not (data / 'telegram/connector/engine-token').is_file():
                 run_telegram(data, 'prepare-agent')
             if args.config and (data / 'telegram/bridge/registration.yaml').is_file():
-                print('Complete Telegram login in Element → Telegram → Rooms → Telegram Bridge.')
+                print('Complete Telegram login in the VPS terminal with ' + workspace_command(data, elevated=False) + ' telegram setup')
         sync_workshop(settings, data, registry)
         if settings.get('maintenance') and registry['agents'].get('the-architect', {}).get('active'):
             from maintenance_setup import initialize

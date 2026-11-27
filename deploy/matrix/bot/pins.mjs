@@ -78,11 +78,10 @@ function telegramGuide(command, legacy) {
   const operatorCommand = command.replace(/^sudo /u, '');
   return message('Set up Telegram', [
     ['Connect or reconnect your Telegram account', [
-      'In this room, send the command below. On your phone, open Telegram → Settings → Devices → Link Desktop Device and scan the QR code.',
-      { code: '!tg login qr' },
-      'If the bridge asks for two-step verification, prefix your Telegram password with !tg in this room. Send !tg cancel and request a fresh QR code if it expires.',
-      'If the setup wizard is open, return to the terminal after login. To resume an interrupted setup, run:',
-      { code: `${operatorCommand} setup-guide` },
+      'From the Constellation checkout in the VPS terminal, run the command below or continue in the open installer.',
+      { code: `${operatorCommand} telegram setup` },
+      'In Telegram mobile, open Settings → Devices → Link Desktop Device and scan the QR code shown in the terminal.',
+      'For two-step verification, enter your Telegram password only at the hidden terminal prompt. Keep passwords and verification codes out of Element.',
     ]],
     ['Work with Telegram from Office', [
       'In Agents → Office, choose @Task Manager from the mention picker and add one request. Telegram Agent replies in that thread. You can also mention Telegram Agent here.',

@@ -6,13 +6,14 @@ WORKDIR /bridge
 RUN git init -q \
     && git fetch -q --depth=1 https://github.com/mautrix/telegram.git 8d85e547208fcdeae47b08f57bca0a7c8cf910af \
     && git checkout -q --detach FETCH_HEAD
-COPY chat-link.patch chat-link_test.go office-portal.patch telegram-groups.go constellation-actions.go group-results.patch element-rooms.patch contact-search.patch contact-search_test.go /tmp/
+COPY chat-link.patch chat-link_test.go office-portal.patch telegram-groups.go constellation-actions.go group-results.patch element-rooms.patch contact-search.patch contact-search_test.go private-login.patch /tmp/
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go mod download maunium.net/go/mautrix \
     && cp -r "$(go env GOMODCACHE)/maunium.net/go/mautrix@v0.33.0" /mautrix \
     && chmod -R u+w /mautrix \
     && patch -d /mautrix -p1 < /tmp/chat-link.patch \
     && patch -d /mautrix -p1 < /tmp/office-portal.patch \
+    && patch -d /mautrix -p1 < /tmp/private-login.patch \
     && patch -d /mautrix -p1 < /tmp/element-rooms.patch \
     && patch -p1 < /tmp/contact-search.patch \
     && patch -p1 < /tmp/group-results.patch \
@@ -25,6 +26,6 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     && GOFLAGS='-p=2 -gcflags=go.mau.fi/mautrix-telegram/pkg/gotd/tg=-l' ./build.sh
 
 FROM ${MAUTRIX_IMAGE}
-RUN apk add --no-cache olm
+RUN apk add --no-cache curl libqrencode-tools olm
 COPY --from=build /bridge/mautrix-telegram /usr/bin/mautrix-telegram
 RUN /usr/bin/mautrix-telegram --version

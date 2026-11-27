@@ -8,7 +8,7 @@ postgres=$base-postgres
 state=$base-state
 network=$base-net
 fixture=$(mktemp -d)
-images=constellation-telegram-bridge:26.11-chat-link
+images=${TELEGRAM_BRIDGE_TEST_IMAGE:-constellation-telegram-bridge:26.11-chat-link}
 syn=ghcr.io/element-hq/synapse:v1.165.0
 py=python:3.13-slim@sha256:e48f59cdba69a3cbd9ed2cf0f348d90d45a8d350d98134cf1070bc106ee9ed90
 connector_image=${TELEGRAM_CONNECTOR_TEST_IMAGE:-matrix-telegram-connector:0.2.1}
@@ -143,6 +143,8 @@ print('Pinned mautrix joined the installer-created encrypted Telegram Bridge DM.
 key = Path('/state/guide/office-bridge-key').read_text().strip()
 for method, route, secret, body, code in [
     ('GET', 'logins', key, None, 'M_FORBIDDEN'),
+    ('POST', 'login/start/qr', key, None, 'M_FORBIDDEN'),
+    ('POST', 'login/step/fixture/password/user_input', key, b'{}', 'M_FORBIDDEN'),
     ('GET', 'search_users', key, None, 'M_FORBIDDEN'),
     ('POST', 'search_users', key, b'{"query":"Sample Name"}', 'FI.MAU.NOT_LOGGED_IN'),
     ('GET', 'resolve_identifier/%40sample', key, None, 'FI.MAU.NOT_LOGGED_IN'),
@@ -167,6 +169,13 @@ for method, route, secret, body, code in [
         raise AssertionError('Provisioning unexpectedly succeeded without an operator Telegram login')
 print('Bridge provisioning is scoped to opening chats and searching users and requires the operator Telegram login.')
 PY
+docker exec "$bridge" sh -ec '
+  key=$(yq -r .provisioning.shared_secret /state/bridge/config.yaml)
+  printf "header = \"Authorization: Bearer %s\"\n" "$key" |
+    curl -q --config - --silent --request POST --data "{}" \
+      "http://127.0.0.1:29317/_matrix/provision/v3/login/step/fixture/password/user_input?user_id=%40operator%3Atelegram.test" |
+    yq -e -p=json ".errcode == \"M_NOT_FOUND\"" >/dev/null
+'
 # Leave the AppService identity available, but isolate the following synthetic room from bridge automation.
 docker stop --timeout 3 "$bridge" >/dev/null
 docker run --rm --network "$network" --user 0:0 -v "$state:/fixture:ro" \

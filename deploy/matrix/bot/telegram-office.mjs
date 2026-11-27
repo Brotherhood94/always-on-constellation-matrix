@@ -45,7 +45,7 @@ function bestLinkedMatches(rooms, query) {
 async function bridgeOpenFailure(response, direct, userId) {
   const { errcode, error } = (await response.json().catch(() => null)) ?? {};
   if (errcode === 'FI.MAU.NOT_LOGGED_IN') {
-    return fail('Your Matrix account has no Telegram login. Open Telegram → Telegram Bridge and use !tg login qr to connect.');
+    return fail('Your Matrix account has no Telegram login. Run telegram setup from the Constellation checkout on the VPS to connect.');
   }
   if (errcode === 'M_FORBIDDEN' && error === 'Login is not logged in') {
     return fail('Your Telegram session is disconnected. Open Telegram → Telegram Bridge and use !tg list-logins to check it.');
@@ -95,7 +95,7 @@ async function searchTelegramUsers(query, owner, key, bridgeFetch) {
   const data = await response.json().catch(() => null);
   if (data?.errcode === 'FI.MAU.NOT_LOGGED_IN' ||
       (data?.errcode === 'M_FORBIDDEN' && data.error === 'Login is not logged in')) {
-    return 'Link your Telegram account in Telegram Bridge with !tg login qr, then retry the search.';
+    return 'Run telegram setup from the Constellation checkout on the VPS to link your Telegram account, then retry the search.';
   }
   if (response.status === 429) return 'Telegram Bridge is rate-limited. Wait before trying the search again.';
   if ([401, 403, 404].includes(response.status)) {

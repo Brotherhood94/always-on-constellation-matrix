@@ -59,14 +59,14 @@ For unattended setup, use `telegram_api_file` in the install config. The install
 
 Select **Telegram** in `./constellation_matrix install`. This also installs Telegram Agent and includes it in the provider setup sequence. After the installer activates the bridge:
 
-1. In Element, open **Telegram → Rooms → Telegram Bridge** and send `!tg login qr`.
-2. On your phone, use **Telegram → Settings → Devices → Link Desktop Device** to scan the QR code. If the bridge asks for your two-step verification password, send a new message to Telegram Bridge with `!tg ` followed by your Telegram password.
-3. Return to the terminal after the bot confirms sign-in. The wizard verifies the login and starts Telegram Agent.
+1. Keep the installer open on the VPS. It displays a QR code in the terminal.
+2. On your phone, open **Telegram → Settings → Devices → Link Desktop Device** and scan the code.
+3. If Telegram requires two-step verification, enter the password at the terminal’s hidden prompt. The wizard verifies the login and starts Telegram Agent.
 
-If a QR code expires, send `!tg cancel` and then `!tg login qr`. To resume any unfinished step, run:
+The QR code refreshes automatically. To resume or link an account after an unattended install, run this on the VPS.
 
 ```sh
-./constellation_matrix setup-guide
+./constellation_matrix telegram setup
 ```
 
 ## Bind verified chats to the Telegram Space

@@ -30,14 +30,15 @@ class TelegramSetupTest(unittest.TestCase):
             path = data / 'telegram-api.json'
             path.touch(mode=0o600)
             output, actions, shell, prompts = self.run_setup(
-                data, ['engine', 'provider', 'credentials', 'bridge', 'login', 'start', 'ready', ''],
-                inputs=[''], args=['--api-file', str(path)])
+                data, ['engine', 'provider', 'credentials', 'bridge', 'login', '', 'start', 'ready', ''],
+                args=['--api-file', str(path)])
         self.assertEqual(actions, [call(data, ['prepare-agent']), call(data, ['sign-in']), call(data, ['probe']),
                                   call(data, ['prepare', str(path)]), call(data, ['activate']),
                                   call(data, ['start-agent'])])
         self.assertEqual(shell[-1], call(data, 'metrics'))
-        self.assertEqual(prompts, 1)
-        self.assertIn('!tg <your Telegram two-step verification password>', output)
+        self.assertEqual(prompts, 0)
+        self.assertIn(call(data, 'link-account'), shell)
+        self.assertNotIn('!tg', output)
         self.assertIn('Telegram Agent is running', output)
 
     def test_missing_api_file_opens_a_private_prompt_and_removes_the_temporary_file(self):
@@ -115,13 +116,14 @@ class TelegramSetupTest(unittest.TestCase):
             self.assertIn('Unreadable file', output.getvalue())
             self.assertNotIn(secret, output.getvalue())
 
-    def test_qr_can_pause_and_requires_confirmed_login_to_continue(self):
+    def test_qr_can_pause_and_resume_before_confirmed_login(self):
         data = Path('/srv/isolated-fixture')
-        for stages, answers in ((['login'], [KeyboardInterrupt()]), (['login', 'login'], [''])):
-            with self.subTest(stages=stages):
-                output, actions, _, _ = self.run_setup(data, stages, inputs=answers)
-                self.assertEqual(actions, [])
-                self.assertIn('telegram setup', output)
+        stages = [SimpleNamespace(stdout='login'), CalledProcessError(130, ['link-account'])]
+        with redirect_stdout(StringIO()) as output, patch('telegram_setup.interactive_terminal', return_value=True), \
+                patch('telegram_setup.run_telegram', side_effect=stages) as shell:
+            setup(data)
+        self.assertEqual(shell.call_args_list[-1], call(data, 'link-account'))
+        self.assertIn('Resume Telegram setup', output.getvalue())
 
     def test_resume_after_sign_in_failure_reuses_prepared_engine(self):
         data = Path('/srv/isolated-fixture')
@@ -144,10 +146,11 @@ class TelegramSetupTest(unittest.TestCase):
     def test_bridge_only_setup_completes_without_configuring_amplifier(self):
         data = Path('/srv/isolated-fixture')
         output, actions, shell, prompts = self.run_setup(
-            data, ['bridge', 'login', 'ready', ''], inputs=[''], install_agent=False)
+            data, ['bridge', 'login', '', 'ready', ''], install_agent=False)
         self.assertEqual(actions, [call(data, ['activate'])])
-        self.assertTrue(all(item.args[2] == 'bridge' for item in shell[:-1]))
-        self.assertEqual(prompts, 1)
+        self.assertTrue(all(item.args[2] == 'bridge' for item in shell if item.args[1] == 'setup-state'))
+        self.assertIn(call(data, 'link-account'), shell)
+        self.assertEqual(prompts, 0)
         self.assertIn('Your Telegram account is linked', output)
 
     def test_ready_and_relocated_agents_require_no_setup(self):
@@ -176,3 +179,49 @@ class TelegramProviderLoginTest(unittest.IsolatedAsyncioTestCase):
             await module.sign_in(reauthenticate=True)
             provider.login.assert_awaited_once()
             self.assertEqual(provider.close.await_count, 2)
+
+
+class TelegramAccountLinkTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = Path(__file__).resolve().parents[1] / 'integrations/telegram/link_account.py'
+        spec = spec_from_file_location('telegram_account_link', source)
+        cls.link = module_from_spec(spec)
+        spec.loader.exec_module(cls.link)
+
+    def test_qr_and_masked_password_follow_the_same_private_process(self):
+        qr = {'login_id': 'fixture-process', 'type': 'display_and_wait', 'step_id': 'telegram.qr',
+              'txn_id': 'qr-1', 'display_and_wait': {'type': 'qr', 'data': 'tg://login?token=fixture'}}
+        password = {'type': 'user_input', 'step_id': 'telegram.password', 'txn_id': 'password-1',
+                    'user_input': {'fields': [{'type': 'password', 'id': 'password'}]}}
+        wrong = {**password, 'step_id': 'fi.mau.telegram.login.password.incorrect', 'txn_id': 'password-2'}
+        request = Mock(side_effect=[qr, password, wrong, {'type': 'complete'}])
+        show_qr = Mock()
+        with redirect_stdout(StringIO()) as output, patch.object(self.link.getpass, 'getpass',
+                                                                  side_effect=['fixture-wrong', 'fixture-secret']) as prompt:
+            self.link.link_account(request, show_qr)
+        show_qr.assert_called_once_with(qr['display_and_wait']['data'])
+        self.assertEqual(prompt.call_count, 2)
+        self.assertEqual(request.call_args_list, [
+            call('start/qr'), call('step/fixture-process/telegram.qr/display_and_wait', payload=None, transaction='qr-1'),
+            call('step/fixture-process/telegram.password/user_input', payload={'password': 'fixture-wrong'}, transaction='password-1'),
+            call('step/fixture-process/fi.mau.telegram.login.password.incorrect/user_input',
+                 payload={'password': 'fixture-secret'}, transaction='password-2'),
+        ])
+        self.assertIn('Your Telegram account is linked', output.getvalue())
+        self.assertIn('Telegram rejected that password', output.getvalue())
+        self.assertNotIn('fixture-secret', output.getvalue())
+
+    def test_password_is_kept_out_of_process_arguments_and_echo_fallback_is_rejected(self):
+        password = 'fixture "quoted" \u00e8'
+        with patch.object(self.link.subprocess, 'run', return_value=SimpleNamespace(returncode=0, stdout='{}')) as run:
+            self.link.bridge_request(('compose', 'exec', '-T', 'telegram-bridge'), '@operator:matrix.test',
+                                     'fixture-key', 'step/process/password/user_input', payload={'password': password})
+        command, = run.call_args.args
+        self.assertNotIn(password, ' '.join(command))
+        self.assertNotIn('fixture-key', ' '.join(command))
+        body = run.call_args.kwargs['input'].split('data-binary = ', 1)[1]
+        self.assertEqual(json.loads(json.loads(body)), {'password': password})
+        with patch.object(self.link.getpass, 'getpass', side_effect=self.link.getpass.GetPassWarning):
+            with self.assertRaisesRegex(ValueError, 'hidden password entry'):
+                self.link.masked_password()

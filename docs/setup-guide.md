@@ -39,7 +39,7 @@ If you selected Dot, the terminal prints the links, tunnel and key permissions, 
 
 ## 📨 Configure Telegram Agent
 
-When Telegram is enabled, the installer registers **Telegram Agent** in Office and includes it in the numbered provider setup. Complete bridge credentials and QR sign-in after the Element page. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.
+When Telegram is enabled, the installer registers **Telegram Agent** in Office and includes it in the numbered provider setup. Complete bridge credentials and QR sign-in after the Element page. Scan the QR code displayed in the VPS terminal. Enter your Telegram two-step verification password at the hidden terminal prompt if Telegram asks for it.
 
 The terminal can reuse a private `~/telegram-api.json` on the VPS with mode `0600`. At the Telegram API JSON prompt, paste the path to your private file on the VPS. Press Enter to use the displayed default. If no default is available, pressing Enter opens the App api_id and masked App api_hash prompts.
 

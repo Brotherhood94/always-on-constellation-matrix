@@ -176,6 +176,12 @@ SQL
     fi
     echo 'Telegram Bridge is ready for the operator login.'
     ;;
+  link-account)
+    [[ $# == 1 && -t 0 && -t 1 && -s "$TELEGRAM_DATA/guide/office-bridge-key" ]]
+    resolve_matrix_owner
+    "${compose[@]}" up -d --no-deps --build --wait --wait-timeout 120 telegram-bridge
+    python3 -B "$dir/link_account.py" "$TELEGRAM_DATA/guide/office-bridge-key" "${compose[@]}"
+    ;;
   allow|disallow)
     [[ $# == 3 ]] || { echo 'Use telegram allow|disallow PEER LOGIN_ID' >&2; exit 2; }
     docker run --rm -i --network none --entrypoint yq "$image" -o=json '.' - \
