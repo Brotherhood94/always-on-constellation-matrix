@@ -1,4 +1,7 @@
 export const runTurn = async (_engine, _previous, prompt) => {
+  if (prompt.startsWith('Review these bounded service diagnostics.')) {
+    return JSON.stringify({status:'needs_evidence', conclusion:'Only service health was checked.', next:'Identify the failing request.'});
+  }
   if (prompt.includes('ROOT_REVIEW:')) throw new Error('Submitted scripts must skip Amplifier.');
   if (prompt.includes('maintenance dashboard fixture')) {
     if (_engine.allowTools) {

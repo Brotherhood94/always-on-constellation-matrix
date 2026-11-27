@@ -186,6 +186,40 @@ function serviceInspection(target) {
   };
 }
 
+export function diagnosticThreadRelation(root, replyTo = root) {
+  if (typeof root !== 'string' || typeof replyTo !== 'string' ||
+      !eventId.test(root) || !eventId.test(replyTo)) return {};
+  return { 'm.relates_to': { rel_type: 'm.thread', event_id: root, is_falling_back: true,
+    'm.in_reply_to': { event_id: replyTo } } };
+}
+
+export function validateDiagnosticReview(text) {
+  const review = JSON.parse(text.trim());
+  if (!review || typeof review !== 'object' || Array.isArray(review) ||
+      Object.keys(review).length !== 3 ||
+      !['needs_evidence', 'candidate_fix'].includes(review.status) ||
+      ![review.conclusion, review.next].every(v => typeof v === 'string' &&
+        v.trim() === v && v.length > 0 && v.length <= 300 && !/\p{Cc}/u.test(v))) {
+    throw new Error('Invalid diagnostic review.');
+  }
+  return { status: review.status, conclusion: review.conclusion, next: review.next };
+}
+
+// Broker findings are private, bounded service observations, not proof of a root cause.
+export function diagnosticReceipt(result, maintenance) {
+  if (typeof result?.findings !== 'string') return null;
+  const findings = result.findings.trim();
+  return {
+    scope: 'Local service state and recognized signals from recent logs. This does not test a specific request end to end.',
+    findings: findings || 'No service observations were returned.',
+    conclusion: 'The inspection finished; no root cause or repair was verified by this check.',
+    next: maintenance
+      ? 'Use the operation ID to investigate the affected request. If the evidence identifies a repository fix, prepare a tested diff for a new approval.'
+      : 'Use the operation ID to investigate the affected request. A host or repository change requires a separate approved operation.',
+    office: 'Host inspection finished. Root cause and repair are not verified; the diagnostic findings are in the private Control Room receipt.',
+  };
+}
+
 export function serviceDiagnosticProposal(text) {
   const request = text.trim().toLowerCase();
   const match = /^(?:diagnostica|diagnosi|diagnose|troubleshoot|diagnostics)\s+(?:(?:il servizio|service)\s+)?([a-z0-9][a-z0-9._@-]{0,79}|context intelligence)[.!?]?$/u.exec(request);

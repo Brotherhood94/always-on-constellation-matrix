@@ -67,3 +67,24 @@ assert.equal(protocol.digest(twin.command), twin.hash);
 assert.match(protocol.reviewBody(twin), /coach · fixture-other · high/u);
 assert.deepEqual(protocol.twinRequest('start a digital twin'), { action: 'choices' });
 assert.throws(() => protocol.twinRequest('twin create ' + 'a'.repeat(24) + ' fixture-model low helper 500'));
+
+const pilotFindings = 'telegram-guide: reported errors (1)';
+const privateDiagnostic = protocol.diagnosticReceipt({findings: pilotFindings}, true);
+assert.equal(privateDiagnostic.findings, pilotFindings);
+assert.match(privateDiagnostic.conclusion, /no root cause or repair was verified/u);
+assert.match(privateDiagnostic.next, /tested diff for a new approval/u);
+assert.doesNotMatch(privateDiagnostic.office, /telegram-guide|reported errors/u);
+assert.match(protocol.diagnosticReceipt({findings: ''}, false).findings, /No service observations/u);
+assert.equal(protocol.diagnosticReceipt({revision: 'normal operation'}, true), null);
+
+assert.deepEqual(protocol.diagnosticThreadRelation('$receipt', '$proposal'), {
+  'm.relates_to': {rel_type: 'm.thread', event_id: '$receipt', is_falling_back: true,
+    'm.in_reply_to': {event_id: '$proposal'}},
+});
+assert.deepEqual(protocol.diagnosticThreadRelation('$receipt')['m.relates_to']['m.in_reply_to'], {event_id: '$receipt'});
+assert.deepEqual(protocol.diagnosticThreadRelation('invalid'), {});
+
+const proposed = {status:'candidate_fix', conclusion:'Potential routing issue.', next:'Review the bridge binding.'};
+assert.deepEqual(protocol.validateDiagnosticReview(JSON.stringify(proposed)), proposed);
+assert.throws(() => protocol.validateDiagnosticReview(JSON.stringify({...proposed,status:'repaired'})));
+assert.throws(() => protocol.validateDiagnosticReview(JSON.stringify({...proposed,script:'anything'})));

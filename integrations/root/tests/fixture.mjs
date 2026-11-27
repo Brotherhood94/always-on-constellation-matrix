@@ -296,6 +296,20 @@ try {
   const officeReceipt = await reader.getEvent(agents, checked.source_reply);
   assert.ok(officeReceipt.content.body.includes(encodeURIComponent(checked.audit_event)));
   assert.doesNotMatch(officeReceipt.content.body, /Fixture diagnostic signals/u);
+  assert.match(findings.content.body, /Diagnostic scope/u);
+  assert.match(findings.content.body, /no root cause or repair was verified/u);
+  assert.match(findings.content.body, /Next step/u);
+  assert.match(officeReceipt.content.body, /Root cause and repair are not verified/u);
+  const followup = await waitFor(() => {
+    const row = database.prepare('SELECT diagnostic_review FROM tasks WHERE id=?').get(checked.id);
+    return row?.diagnostic_review?.startsWith('$') ? row.diagnostic_review : null;
+  });
+  await timeline();
+  const followupEvent = await reader.getEvent(audit, followup);
+  assert.equal(followupEvent.content['m.relates_to'].event_id, checked.audit_event);
+  assert.match(followupEvent.content.body, /Only service health was checked/u);
+  assert.equal(accepted.length, 5); // Analysis did not run a second operation.
+
   const directCheck = await sendEncrypted(reader, agents, 'fixture-synapse-diagnostics',
     mentionMessage('Diagnostica synapse', {id: root.user_id, name: 'TheArchitect'}));
   const direct = await waitFor(() => {
