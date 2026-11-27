@@ -33,6 +33,10 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 Control Room publishes its pins after you join and Element registers your first device’s encryption keys. Later sign-ins reuse the same pins. On a new device, restore your Matrix encryption keys if Element cannot show the original messages.
 
+## 🔌 Connect Dot
+
+If you selected Dot, the terminal prints the links, tunnel and key permissions, the VPS command, and the **Constellation Office** connection check. Use `./constellation_matrix setup-guide --print` to see the instructions again. [Dot setup](dot.md)
+
 ## 📨 Configure Telegram Agent
 
 When Telegram is enabled, the installer registers **Telegram Agent** in Office and includes it in the numbered provider setup. Complete bridge credentials and QR sign-in after the Element page. If the bot asks for a Telegram two-step verification password, send it as a new message in Telegram Bridge with the `!tg ` prefix.

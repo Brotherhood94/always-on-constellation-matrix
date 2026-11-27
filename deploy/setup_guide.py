@@ -8,8 +8,20 @@ import tty
 
 TITLE = '✨ Finalize your Constellation setup'
 WELCOME_TITLE = '👋 Welcome to Constellation'
-WELCOME_INSTRUCTIONS = ('  Your selected agents were configured before Element sign-in.\n'
+WELCOME_INSTRUCTIONS = ('  The installer configures your selected agents before Element sign-in.\n'
                         '  When they are ready, an agent sends a welcome in Element and the wizard prints its link.')
+TELEGRAM_CREDENTIALS = ('1. In your browser, open https://my.telegram.org/apps. Sign in with your Telegram phone number\n'
+                        '   and enter the confirmation code Telegram sends to your account.\n\n'
+                        '2. Open API development tools. Create an app or open your existing app. Copy App api_id and App api_hash.\n\n'
+                        '3. In a second VPS terminal, create and edit a private JSON file outside the checkout.\n'
+                        '   If you already have a private Telegram API JSON file, skip to step 4.\n'
+                        '     (umask 077; touch ~/telegram-api.json)\n'
+                        '     chmod 600 ~/telegram-api.json\n'
+                        '     nano ~/telegram-api.json\n'
+                        '   Save the following, replacing both sample values. Leave the ID unquoted.\n'
+                        '     {"api_id": 123456, "api_hash": "REPLACE_WITH_YOUR_APP_API_HASH"}\n\n'
+                        '4. At the Telegram API JSON path prompt, paste the file’s VPS path. Press Enter to use\n'
+                        '   the default, or to type the ID and masked hash when there is no default.\n')
 
 
 def interactive_terminal():
@@ -49,14 +61,48 @@ def element_page(settings):
 {element_locations(settings)}"""
 
 
+def show_dot_setup(command):
+    print(f'''
+{heading('🔌 Dot · Secure MCP Tunnel')}
+
+1. In OpenAI Platform, create a Secure MCP Tunnel. Associate it with the ChatGPT workspace that will
+   use Dot, then copy the tunnel_… ID. Creating it requires Tunnels Read + Manage.
+   https://platform.openai.com/settings/organization/tunnels
+
+2. Create a Restricted runtime API key with Tunnels Read + Use. Use a key owner who has those
+   permissions for this tunnel.
+   https://platform.openai.com/settings/organization/api-keys
+
+3. On the VPS, run the command below from the Constellation checkout. Replace the placeholder
+   with your tunnel ID. Enter the runtime key at the hidden prompt when asked.
+   {command} dot-connect tunnel_REPLACE_WITH_YOUR_ID
+
+   Continue when the terminal says “Dot tunnel is ready.”
+
+4. In the associated ChatGPT workspace, open Plugins. Select + → Add custom MCP server and name it
+   Constellation Office. Choose Tunnel, select the same tunnel ID, and choose No authentication.
+   Review and select Create as a plugin.
+   https://chatgpt.com/plugins
+
+5. Open a conversation that uses Constellation Office and ask Dot to run list_agents.
+   Compare the returned agents with your Office roster.
+
+   The same guide is pinned in Agents → Control Room → Pinned messages → Connect Dot.
+''', flush=True)
+
+
 def show_printable(settings, command):
     print(f'\n{heading(TITLE)}')
     title, body = element_page(settings)
     print(f'\n{heading(title)}\n{body}')
+    if settings['dot']:
+        show_dot_setup(command)
+    if settings['telegram']:
+        print(f'\n{heading("📨 Telegram · API credentials")}\n\n{TELEGRAM_CREDENTIALS}')
+        print(f'  On the VPS, start or resume Telegram setup.\n    {command} telegram setup')
+        print('  Scan the QR code in Element → Telegram → Rooms → Telegram Bridge.')
     print(f'\n{heading(WELCOME_TITLE)}\n{WELCOME_INSTRUCTIONS}')
     print(f'\n  • Resume the guided setup from an interactive terminal.\n    {command} setup-guide\n')
-    if settings['telegram']:
-        print(f'  • Start or resume Telegram setup on its own.\n    {command} telegram setup\n')
 
 
 def read_page_key(fd):

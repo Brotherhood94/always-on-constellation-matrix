@@ -14,7 +14,7 @@ from installer import (CLIENT, CONNECTOR, RUNTIME_UID, SOURCE, agent_sign_in, di
 from layout import room_route
 from provision import MatrixError
 from roster import enable_management
-from setup_guide import confirm_element, element_page, interactive_terminal
+from setup_guide import confirm_element, element_page, interactive_terminal, show_dot_setup
 
 
 CHOOSE_AGENTS = object()
@@ -80,6 +80,8 @@ def guide(data, settings, command, passphrase):
         except (OSError, MatrixError, ValueError, SubprocessError) as error:
             print(f'Telegram setup could not be completed. {error}')
             print(f'Resume setup with {command} telegram setup')
+    if settings['dot']:
+        show_dot_setup(command)
 
 
 def confirm_sign_in(data):

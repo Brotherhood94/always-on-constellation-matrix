@@ -9,25 +9,14 @@ from pwd import getpwnam
 from subprocess import CalledProcessError, PIPE
 
 from installer import run_telegram, telegram, workspace_command
-from setup_guide import heading, interactive_terminal
+from setup_guide import TELEGRAM_CREDENTIALS, heading, interactive_terminal
 
 
 PROBE_AUTHENTICATION_ERROR = 42
 
 
 def prompt_credentials(data, home, compose_runtime, default):
-    print('1. In your browser, open https://my.telegram.org/apps. Sign in with your Telegram phone number\n'
-          '   and enter the confirmation code Telegram sends to your account.\n\n'
-          '2. Open API development tools. Create an app or open your existing app. Copy App api_id and App api_hash.\n\n'
-          '3. In a second VPS terminal, create and edit a private JSON file outside the checkout.\n'
-          '   If you already have a private Telegram API JSON file, skip to step 4.\n'
-          '     (umask 077; touch ~/telegram-api.json)\n'
-          '     chmod 600 ~/telegram-api.json\n'
-          '     nano ~/telegram-api.json\n'
-          '   Save the following, replacing both sample values. Leave the ID unquoted.\n'
-          '     {"api_id": 123456, "api_hash": "REPLACE_WITH_YOUR_APP_API_HASH"}\n\n'
-          '4. Paste the VPS path below. Press Enter to use the displayed default. With no default,\n'
-          '   Enter opens the ID prompt and the masked hash prompt.\n', flush=True)
+    print(TELEGRAM_CREDENTIALS, flush=True)
     prompt = ('Telegram API JSON path [~/telegram-api.json]: ' if default else
               'Telegram API JSON path (Enter to type the ID and hash): ')
     while True:

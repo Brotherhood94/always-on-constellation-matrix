@@ -398,7 +398,8 @@ class InstallerTest(unittest.TestCase):
             for secret in secrets.values():
                 self.assertNotIn(secret, rendered)
             invocation = f"./constellation_matrix --data-dir '{data}'"
-            self.assertNotIn('dot-connect', rendered)
+            self.assertIn(f'{invocation} dot-connect tunnel_REPLACE_WITH_YOUR_ID', lines)
+            self.assertIn(f'{invocation} telegram setup', lines)
             self.assertNotIn('telegram prepare', rendered)
             self.assertNotIn('neo4j-password', rendered)
             self.assertIn(f'{invocation} setup-guide', lines)
@@ -413,8 +414,17 @@ class InstallerTest(unittest.TestCase):
                 self.assertEqual('Pinned messages → Connect Dot' in rendered, dot)
                 self.assertEqual('Telegram → Rooms → Telegram Bridge → Pinned messages' in rendered, telegram)
                 self.assertEqual(rendered.count('💬 Element Desktop'), 1)
-                self.assertNotIn('🔌 Dot · Secure MCP Tunnel', rendered)
-                self.assertNotIn('✈️ Telegram · Bridge and drafting agent', rendered)
+                for text in ('🔌 Dot · Secure MCP Tunnel', 'Tunnels Read + Manage', 'Tunnels Read + Use',
+                             'https://platform.openai.com/settings/organization/tunnels',
+                             'https://platform.openai.com/settings/organization/api-keys',
+                             'https://chatgpt.com/plugins', 'Constellation Office', 'No authentication',
+                             'list_agents', 'dot-connect tunnel_REPLACE_WITH_YOUR_ID'):
+                    self.assertEqual(text in rendered, dot)
+                for text in ('📨 Telegram · API credentials', 'https://my.telegram.org/apps',
+                             'chmod 600 ~/telegram-api.json', 'telegram setup'):
+                    self.assertEqual(text in rendered, telegram)
+                if dot:
+                    self.assertLess(rendered.index('💬 Element Desktop'), rendered.index('🔌 Dot · Secure MCP Tunnel'))
 
     def test_setup_guide_uses_color_only_when_enabled(self):
         for environment, colored in [({'TERM': 'xterm'}, True), ({'TERM': 'dumb'}, False),
@@ -500,6 +510,25 @@ class InstallerTest(unittest.TestCase):
         telegram.assert_called_once_with(data, ['setup'], owner_passphrase='fixture-password')
         self.assertEqual(order, ['provider', 'probe', 'element', 'link'])
 
+    def test_interactive_setup_prints_dot_and_opens_telegram_only_when_selected(self):
+        for dot in (True, False):
+            for telegram in (True, False):
+                settings = {**self.settings, 'agents': [], 'dot': dot, 'telegram': telegram}
+                with (self.subTest(dot=dot, telegram=telegram), TemporaryDirectory() as work,
+                      redirect_stdout(StringIO()) as output, patch('onboarding.interactive_terminal', return_value=True),
+                      patch('onboarding.enable_management'), patch('onboarding.deliver_welcome'),
+                      patch('onboarding.telegram') as telegram_setup):
+                    data = Path(work)
+                    save(data / 'settings.json', settings)
+                    save(data / 'agents.json', {'agents': {}})
+                    save(data / 'onboarding.json', {'confirmed': ['element']})
+                    (data / 'telegram/connector').mkdir(parents=True)
+                    save(data / 'telegram/connector/backend-verified', 'fixture')
+                    guide(data, settings, './constellation_matrix', None)
+                self.assertEqual(telegram_setup.called, telegram)
+                self.assertEqual('🔌 Dot · Secure MCP Tunnel' in output.getvalue(), dot)
+                self.assertEqual('dot-connect tunnel_REPLACE_WITH_YOUR_ID' in output.getvalue(), dot)
+
     def test_legacy_element_confirmation_and_welcome_receipt_survive(self):
         settings = {**self.settings, 'agents': []}
         with TemporaryDirectory() as work, redirect_stdout(StringIO()):
@@ -520,6 +549,7 @@ class InstallerTest(unittest.TestCase):
         with TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
             data = Path(work).resolve()
             save(data / 'settings.json', self.settings)
+            save(data / 'onboarding.json', {'select_agents': True, 'confirmed': []})
             argv = ['constellation_matrix', '--data-dir', str(data), 'setup-guide', '--print']
             with patch('installer.os.geteuid', return_value=0), patch('sys.argv', argv), \
                  patch('setup_guide.interactive_terminal', return_value=True), patch('onboarding.guide') as wizard:
@@ -527,7 +557,8 @@ class InstallerTest(unittest.TestCase):
             wizard.assert_not_called()
             self.assertIn('💬 Element Desktop', output.getvalue())
             self.assertIn('👋 Welcome to Constellation', output.getvalue())
-            self.assertFalse((data / 'onboarding.json').exists())
+            self.assertIn('🔌 Dot · Secure MCP Tunnel', output.getvalue())
+            self.assertEqual(load(data / 'onboarding.json'), {'select_agents': True, 'confirmed': []})
 
     def test_graph_password_is_confirmed_and_kept_across_reruns(self):
         graph_password = """Graph test #'$" \\!"""

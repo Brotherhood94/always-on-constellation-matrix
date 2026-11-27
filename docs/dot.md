@@ -1,6 +1,6 @@
 # Connect Dot
 
-Select Dot during the [workspace install](runbook.md#initial-setup) and keep the workspace running. The tunnel runs as a systemd service on the VPS.
+Select Dot during the [workspace install](runbook.md#initial-setup). The terminal prints this guide after Element sign-in and includes it in `./constellation_matrix setup-guide --print`. The Docker control runtime starts the tunnel on the VPS.
 
 ## Create a tunnel and runtime key
 
@@ -12,15 +12,15 @@ Select Dot during the [workspace install](runbook.md#initial-setup) and keep the
 **VPS terminal.** From the workspace checkout, substitute the copied tunnel ID. If you used a custom data directory during installation, pass the same `--data-dir` before `dot-connect`.
 
 ```sh
-sudo ./constellation_matrix dot-connect tunnel_REPLACE_WITH_YOUR_ID
+./constellation_matrix dot-connect tunnel_REPLACE_WITH_YOUR_ID
 ```
 
-**Operator handoff.** Enter the restricted runtime key at the hidden prompt. If the deployment already has a runtime key, the command reuses it. It verifies and installs the tunnel client, enables the service at boot, and checks readiness. Continue when it prints `Dot tunnel is ready.`
+**Operator handoff.** Enter the restricted runtime key at the hidden prompt. If the deployment already has a runtime key, the command reuses it. It verifies and installs the tunnel client, starts the managed service, and checks readiness. Continue when it prints `Dot tunnel is ready.`
 
 ## Connect and verify the private app
 
 1. **Browser.** In the associated ChatGPT workspace, open Plugins, select **+ → Add custom MCP server**, and name it `Constellation Office`. Under **Connection**, choose **Tunnel** and select the same tunnel or paste its ID. Choose **No authentication** for the app. The running VPS tunnel authenticates to OpenAI with the runtime key and supplies its own credentials to the local bridge. Review the app settings and select **Create as a plugin**. [ChatGPT Plugins](https://chatgpt.com/plugins) · [Custom MCP server setup](https://developers.openai.com/api/docs/guides/custom-mcp-server)
-2. **ChatGPT.** Ask Dot to list the Office agents through the plugin. An empty list confirms the connection during initial setup before agent selection.
+2. **ChatGPT.** Ask Dot to run `list_agents` through the plugin and compare the result with your Office roster.
 3. **ChatGPT and Element.** Once Task Manager is available, ask “Dot, send this task to Office starting with Task Manager: coordinate a three-step checklist for getting started and post the result in the Office thread.” Check the task and Manager’s result in **Agents → Office**. A retry with the same task ID should return the same thread link.
 
 If you enable Telegram Agent access for Dot later, refresh the app’s tool list to use the draft and update tools. Drafts provide a preview. Explicit sends through Task Manager go to the verified Telegram chat. [Telegram Agent](telegram.md#dot-and-chat-updates)

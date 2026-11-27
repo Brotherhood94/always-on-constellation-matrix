@@ -52,7 +52,7 @@ export function officeSetupNotice(command) {
   ]), msgtype: 'm.notice' };
 }
 
-function dotGuide({ command, systemd }) {
+function dotGuide({ command, systemd, dotTunnelSupported = systemd }) {
   return message('Connect Dot', [
     ['1. Browser · Create the tunnel', [
       'Create a Secure MCP Tunnel with Tunnels Read + Manage. Associate it with the intended ChatGPT workspace and copy its tunnel ID.',
@@ -62,14 +62,14 @@ function dotGuide({ command, systemd }) {
       'Create a Restricted API key with Tunnels Read + Use.',
       { label: 'Open OpenAI API Keys', url: 'https://platform.openai.com/settings/organization/api-keys' },
     ]],
-    ['3. VPS terminal · Connect Dot', systemd ? [
+    ['3. VPS terminal · Connect Dot', dotTunnelSupported ? [
       'Replace the placeholder with your tunnel ID and enter the runtime key at the hidden prompt.',
       { code: `${command} dot-connect tunnel_REPLACE_WITH_YOUR_ID` },
-    ] : ['Enable systemd for this deployment before connecting the tunnel.']],
+    ] : ['Use a deployment with the Docker control runtime or systemd to start the tunnel.']],
     ['4. Browser · Add Constellation Office', [
       'Add a private custom MCP server named Constellation Office. Choose Tunnel, select the same tunnel ID, and choose No authentication.',
       { label: 'Open ChatGPT Plugins', url: 'https://chatgpt.com/plugins' },
-      'Ask Dot to run list_agents. An empty list is expected until you have activated an Office agent.',
+      'Ask Dot to run list_agents and compare the returned agents with your Office roster.',
     ]],
   ]);
 }

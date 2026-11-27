@@ -815,7 +815,10 @@ def show_element_setup(settings, data=DATA, *, elevated=True):
 def finalize_setup(data, *, print_only=False, passphrase=None):
     from setup_guide import interactive_terminal
     settings = load(data / 'settings.json')
-    if print_only or not interactive_terminal():
+    if print_only:
+        show_element_setup(settings, data)
+        return
+    if not interactive_terminal():
         registry = load(data / 'agents.json')
         pending = pending_local_agents(registry)
         if pending or (data / 'onboarding.json').is_file() and load(data / 'onboarding.json').get('select_agents'):

@@ -176,6 +176,11 @@ test('Element guides include copyable commands and manage optional pins independ
   await reconcilePins(matrix, links, state, { command, graphPassword, dot: false });
   assert.deepEqual(pinned, ['$operator', state.entries.dashboard.event]);
   assert.equal(messages.size, 2);
+  const dockerCommand = command.slice('sudo '.length);
+  await reconcilePins(matrix, links, state, { command: dockerCommand, graphPassword, dot: true, dotTunnelSupported: true });
+  const dockerDot = messages.get(state.entries['dot-setup'].event);
+  assert.ok(dockerDot.body.includes(`${dockerCommand} dot-connect tunnel_REPLACE_WITH_YOUR_ID`));
+  assert.doesNotMatch(dockerDot.body, /systemd/);
 
   pinned = ['$telegram-operator', '$old-telegram-guide'];
   telegramState.entries['telegram-setup'] = { body: 'Set up Telegram', event: '$old-telegram-guide', revision: 'old' };
@@ -193,6 +198,6 @@ test('Element guides include copyable commands and manage optional pins independ
   assert.doesNotMatch(guide.body, /api_hash|telegram bind|approve a draft/u);
   assert.equal(guide['m.mentions'], undefined);
   await reconcileTelegramPin(matrix, telegramState, command);
-  assert.equal(messages.size, 3);
+  assert.equal(messages.size, 4);
   assert.deepEqual(pinned, ['$telegram-operator', telegramState.entries['telegram-setup'].event]);
 });

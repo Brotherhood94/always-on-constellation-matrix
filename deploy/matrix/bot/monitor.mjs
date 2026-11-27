@@ -13,7 +13,7 @@ const {
 } = matrix;
 
 const { MATRIX_URL, MATRIX_SERVER_NAME, MATRIX_OWNER, STATE_DIR, DATA_DIR, WORKSPACE_LINKS,
-  TELEGRAM_GUIDE, GUIDE_COMMAND, GRAPH_PASSWORD_COMMAND, DOT_ENABLED, SYSTEMD_ENABLED } = process.env;
+  TELEGRAM_GUIDE, GUIDE_COMMAND, GRAPH_PASSWORD_COMMAND, DOT_ENABLED, DOT_TUNNEL_SUPPORTED, SYSTEMD_ENABLED } = process.env;
 const telegram = TELEGRAM_GUIDE === 'true';
 const deviceId = telegram ? 'TELEGRAM_SETUP' : 'VPSMONITOR';
 const userId = `@${telegram ? 'telegram-agent' : 'the-architect'}:${MATRIX_SERVER_NAME}`;
@@ -154,7 +154,7 @@ async function shortcuts({ client, roomId }) {
   } else {
     const links = JSON.parse(await readFile(WORKSPACE_LINKS, 'utf8'));
     await reconcilePins(pinRoom, links, state, { command: GUIDE_COMMAND, graphPassword: GRAPH_PASSWORD_COMMAND,
-      dot: DOT_ENABLED === 'true', systemd: SYSTEMD_ENABLED === 'true' });
+      dot: DOT_ENABLED === 'true', dotTunnelSupported: (DOT_TUNNEL_SUPPORTED ?? SYSTEMD_ENABLED) === 'true' });
   }
 }
 

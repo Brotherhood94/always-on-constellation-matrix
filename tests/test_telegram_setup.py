@@ -70,7 +70,7 @@ class TelegramSetupTest(unittest.TestCase):
             for text in ('1. In your browser, open https://my.telegram.org/apps',
                          '\n\n2. Open API development tools', '\n\n3. In a second VPS terminal',
                          'chmod 600 ~/telegram-api.json', '"api_id": 123456',
-                         '\n\n4. Paste the VPS path below'):
+                         '\n\n4. At the Telegram API JSON path prompt'):
                 self.assertIn(text, instructions)
 
     def test_setup_accepts_the_mounted_operator_file_as_the_default(self):

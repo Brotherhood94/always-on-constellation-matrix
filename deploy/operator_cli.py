@@ -15,7 +15,7 @@ from installer import (CLIENT, SOURCE, TELEGRAM_AGENT, agent_activate, agent_add
                        telegram_agent_selected, telegram_layout_options, workspace_command, workspace_layout)
 from onboarding import confirm_sign_in, deliver_welcome, progress, select_roster
 from roster import enable_management
-from setup_guide import confirm_element, element_page, interactive_terminal
+from setup_guide import confirm_element, element_page, interactive_terminal, show_dot_setup
 
 
 HOST_ACTIONS = ('metadata', 'install', 'enroll', 'configure', 'finish', 'telegram-layout', 'layout', 'add-helper', 'docker-access')
@@ -193,6 +193,8 @@ def setup_as_operator(data, *, passphrase=None):
         if (settings['telegram'] and not telegram_agent_selected(current['settings'])
                 and interactive_terminal()):
             telegram_setup_as_operator(data)
+        if settings['dot']:
+            show_dot_setup(workspace_command(data))
     except KeyboardInterrupt:
         print(f'\nResume setup with {command} setup-guide')
     except SubprocessError:
