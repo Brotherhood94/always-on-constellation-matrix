@@ -11,13 +11,13 @@ import time
 import uuid
 
 
-def record(path, kind, start, outcome, *, actor=None, queue_ms=None, environment=None):
+def record(path, kind, start, outcome, *, actor=None, queue_ms=None, environment=None, include_work=True):
     if not path.is_dir() or not re.fullmatch('[a-z][a-z0-9-]{0,31}', kind):
         return
     identifier = uuid.uuid4().hex
     duration = round((time.monotonic_ns() - start) / 1_000_000)
     details = {'id': identifier, 'kind': kind, 'outcome': outcome, 'total_ms': duration,
-               'work_ms': max(0, duration - (queue_ms or 0)),
+               **({'work_ms': max(0, duration - (queue_ms or 0))} if include_work else {}),
                **({'queue_ms': queue_ms} if queue_ms is not None else {}),
                **({'actor': actor} if actor else {}), **({'environment': environment} if environment else {})}
     payload = {'event': 'timing:finished', 'workspace': 'agents-team', 'idempotency_key': 'timing-' + identifier,
@@ -57,7 +57,9 @@ def publish(data, now, outbox):
     week = now.strftime('%G-W%V')
     identifier = sha256(('timings-week-' + week).encode()).hexdigest()[:32]
     pending = data / 'monitor/outbox' / (identifier + '.json')
-    rows = sorted((row for row in timing['ranges']['7'] if row['scope'] == 'workspace'), key=lambda row: -max(row['work'], row['queue'], row['approval']))
+    rows = sorted((row for row in timing['ranges']['7'] if row['scope'] == 'workspace'
+                   and max(row['work'], row['queue'], row['approval']) > 0),
+                  key=lambda row: -max(row['work'], row['queue'], row['approval']))
     if not rows or pending.is_file() or (data / 'monitor/acks' / identifier).is_file():
         return
     lines = [f'Operation timings · {week}', 'Slowest groups by cumulative time in their longest measured phase']

@@ -1731,8 +1731,10 @@ if __name__ == '__main__':
         if COMPOSE_RUNTIME:
             from operator_runtime import selected_data
             from operation_timing import record
+            from setup_guide import interactive_terminal
             args = sys.argv[1:]
             command = next((part for part in args if part in {'install', 'setup-guide', 'agent', 'host', 'telegram',
                 'hiring', 'maintenance', 'backup', 'restore-check', 'dot-connect', 'twin', 'layout'}), None)
             if command:
-                record(selected_data(args) / 'runtime/timing', 'cli-' + command, watch, outcome, actor='operator')
+                record(selected_data(args) / 'runtime/timing', 'cli-' + command, watch, outcome, actor='operator',
+                       include_work=not interactive_terminal())
