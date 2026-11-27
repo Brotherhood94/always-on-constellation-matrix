@@ -21,7 +21,8 @@ function report(error) {
 }
 
 const server = new McpServer({ name: 'matrix-workspace-files', version: '1.0.0' });
-registerTeamTools(server);
+const repository = process.env.MATRIX_REPOSITORY_DRAFTS === 'true';
+if (!repository) registerTeamTools(server);
 const path = z.string().min(1).max(1024);
 server.registerTool('list_files', {
   description: 'List files and directories under a relative workspace directory. Defaults to the workspace root. Returns paths and modification times, newest first.',
@@ -118,7 +119,7 @@ if (process.env.AGENT_USERNAME === 'coder') {
       return report(error);
     }
   });
-  if (!process.env.MATRIX_CATALOG_PATH) await registerGitHubTools(server);
+  if (!repository && !process.env.MATRIX_CATALOG_PATH) await registerGitHubTools(server);
 }
 
 await server.connect(new StdioServerTransport());

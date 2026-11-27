@@ -24,6 +24,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/matrix-topology"
           MATRIX_OPERATIONS_SMOKE=1 MATRIX_HELPER_SMOKE=1 MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" tests/synapse-smoke
       - run: bash integrations/root/tests/run
+      - run: python3 -B integrations/root/tests/maintenance-docker
       - run: MATRIX_TOPOLOGY_DIR="$RUNNER_TEMP/matrix-topology" bash integrations/context-execution/tests/isolated
       - run: docker build -t matrix-telegram-connector:0.2.1 -f integrations/telegram/Dockerfile .
       - run: bash integrations/telegram/tests/bridge-smoke

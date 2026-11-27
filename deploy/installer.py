@@ -167,6 +167,11 @@ def normalized(raw, presets):
     telegram_api_file = settings.get('telegram_api_file')
     if telegram_api_file is not None and (not settings['telegram'] or not isinstance(telegram_api_file, str) or not telegram_api_file):
         raise ValueError('Provide a private telegram_api_file only when Telegram is enabled')
+    restart_services = settings.get('maintenance_restart_services', [])
+    if (type(settings.get('maintenance', False)) is not bool or not isinstance(restart_services, list)
+            or any(not isinstance(key, str) or not KEY.fullmatch(key) for key in restart_services)
+            or len(restart_services) != len(set(restart_services))):
+        raise ValueError('Use a boolean maintenance setting and a list of distinct local connector IDs')
     if type(settings.get('telegram_agent', True)) is not bool:
         raise ValueError('telegram_agent must be true or false')
     for key in PORTS:
@@ -498,6 +503,7 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
         save(layout / 'config.json', {'url': 'http://synapse:8008', 'owner': rooms['owner'], 'root': peer,
                                       'agents': rooms['office'], 'audit': room, 'gateway_uid': ROOT_UID,
                                       'legacy_cutover': (data / 'vps-manager-migration.json').is_file(),
+                                      'maintenance': settings.get('maintenance', False),
                                       'dot': f'@dot:{server}' if settings['dot'] else None},
              mode=0o444)
         operations = load(SOURCE / 'integrations/root/operations.json')
@@ -582,20 +588,36 @@ def compose_config(settings, data, registry):
     manifest = data / 'compose.yaml'
     networks = load(manifest).get('networks', {}) if manifest.exists() else {}
     workshop_internal = networks.get('workshop-targets', {}).get('internal', True)
-    save(manifest, definition(settings, data, registry, environment, workshop_internal=workshop_internal))
+    desired = definition(settings, data, registry, environment, workshop_internal=workshop_internal)
+    published = data / 'maintenance/active.json'
+    if settings.get('maintenance') and published.is_file():
+        from repository_maintenance import ordinary
+        for service, image in load(published)['images'].items():
+            if service in desired['services'] and ordinary(service, registry):
+                desired['services'][service]['image'] = image
+    save(manifest, desired)
     return environment
 
 
 def publish_dashboard(settings, data):
     directory(data / 'dashboard', 0o755)
-    for name in ('dashboard.css', 'connections.mjs', 'dashboard.mjs', 'index.html'):
-        save(data / 'dashboard' / name, (SOURCE / 'dashboard' / name).read_text(), mode=0o644)
+    active = data / 'maintenance/active.json'
+    if settings.get('maintenance') and active.is_file():
+        from repository_maintenance import Maintenance
+        maintenance = Maintenance(data)
+        maintenance.dashboard(maintenance.active())
+    else:
+        for name in ('dashboard.css', 'connections.mjs', 'dashboard.mjs', 'index.html'):
+            save(data / 'dashboard' / name, (SOURCE / 'dashboard' / name).read_text(), mode=0o644)
     save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url'],
                                          'telegramAgent': telegram_agent_selected(settings)}, mode=0o644)
 
 
 def prepare_storage(settings, data):
     directory(data, 0o711)
+    if settings.get('maintenance'):
+        directory(data / 'maintenance', 0o711)
+        directory(data / 'maintenance/drafts', 0o711)
     for name in ('postgres', 'monitor', 'monitor/outbox', 'state', 'backups', 'staging'):
         directory(data / name, 0o750)
     os.chown(data / 'monitor/outbox', 0, RUNTIME_UID)
@@ -827,6 +849,9 @@ def install(data, args, *, entered=None):
             'team_version': 1 if set(settings['agents']).intersection({'chief-of-staff', 'manager'}) else 2}
         if any(entry.get('retirement') for entry in registry['agents'].values()):
             raise ValueError('Resume the pending agent removal before reinstalling')
+        if current and current.get('maintenance'):
+            settings['maintenance'] = True
+            settings.setdefault('maintenance_restart_services', current.get('maintenance_restart_services', []))
         if current and current.get('roster_management'):
             settings['roster_management'] = True
         else:
@@ -880,6 +905,9 @@ def install(data, args, *, entered=None):
             if args.config and (data / 'telegram/bridge/registration.yaml').is_file():
                 print('Complete Telegram login in Element → Telegram → Rooms → Telegram Bridge.')
         sync_workshop(settings, data, registry)
+        if settings.get('maintenance') and registry['agents'].get('vps-manager', {}).get('active'):
+            from maintenance_setup import initialize
+            initialize(data, settings, registry)
         active = [key for key in local_agents if registry['agents'][key]['active']]
         up(data, *active, *(['helper-dm'] if 'helper' in active else []))
         publish_inventory(settings, data, registry)
@@ -1081,6 +1109,9 @@ def agent_activate(data, key, *, pending_only=False):
             return
         if entry['placement'] != 'local':
             raise ValueError('Complete provider sign-in on the authorized worker host')
+        if key == 'vps-manager' and settings.get('maintenance'):
+            from maintenance_setup import initialize
+            initialize(data, settings, registry)
         engine = 'engine-' + key
         connectors = (key, 'helper-dm') if key == 'helper' else (key,)
         up(data, engine)
@@ -1328,6 +1359,15 @@ def main():
     install_parser = commands.add_parser('install')
     install_parser.add_argument('--config', type=Path)
     commands.add_parser('validate').add_argument('--config', type=Path, required=True)
+    maintenance = commands.add_parser('maintenance', help='Configure scoped VPS Manager maintenance').add_subparsers(
+        dest='action', required=True)
+    maintenance_enable = maintenance.add_parser('enable')
+    maintenance_enable.add_argument('--restart-service', action='append', metavar='CONNECTOR')
+    maintenance_enable.add_argument('--no-auto-restarts', action='store_true')
+    maintenance.add_parser('pause-recovery')
+    maintenance.add_parser('resume-recovery')
+    maintenance.add_parser('rollback', help='Retry verification and rollback after an interrupted release').add_argument('operation_id')
+    maintenance.add_parser('export', help='Print the exact sealed diff of a Root Operations proposal').add_argument('operation_id')
     agent = commands.add_parser('agent').add_subparsers(dest='action', required=True)
     add = agent.add_parser('add')
     add_source = add.add_mutually_exclusive_group(required=True)
@@ -1497,6 +1537,9 @@ def main():
             backup(data, args.command)
     elif args.command == 'layout':
         workspace_layout(data, args)
+    elif args.command == 'maintenance':
+        from maintenance_setup import configure as configure_maintenance
+        configure_maintenance(data, args)
     elif args.command == 'telegram':
         telegram(data, args.arguments)
     elif args.command in {'persona-sync', 'persona-connect', 'chief-review'}:

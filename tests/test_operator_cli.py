@@ -48,6 +48,17 @@ class OperatorCLITest(unittest.TestCase):
             self.assertIn('Draft delivery paused', report)
             sudo.assert_not_called()
 
+    def test_docker_access_is_optional_and_prints_a_command_for_the_operator(self):
+        from operator_cli import operator_docker_access
+        for choice in ('keep', 'show'):
+            report = StringIO()
+            with redirect_stdout(report), patch('operator_cli.choose_option', return_value=choice) as menu, \
+                    patch('operator_cli.run') as privileged, patch('operator_cli.getpwuid', return_value=SimpleNamespace(pw_name='fixture')):
+                operator_docker_access()
+            self.assertEqual(menu.call_args.args[-1], 'keep')
+            self.assertEqual('sudo usermod -aG docker fixture' in report.getvalue(), choice == 'show')
+            privileged.assert_not_called()
+
     def test_install_prompts_before_sudo_and_sends_passwords_only_on_stdin(self):
         output = StringIO()
         with TemporaryDirectory() as work, redirect_stdout(output), patch('operator_cli.run') as run, \
@@ -55,7 +66,7 @@ class OperatorCLITest(unittest.TestCase):
                 patch.dict('setup_guide.os.environ', {'TERM': 'dumb'}), \
                 patch('operator_cli.interactive', return_value=(self.settings, 'matrix-fixture-password')) as prompt, \
                 patch('operator_cli.prompt_graph_password', return_value='graph-fixture-password') as graph, \
-                patch('operator_cli.setup_as_operator') as guide:
+                patch('operator_cli.setup_as_operator') as guide, patch('operator_cli.operator_docker_access'):
             data = Path(work)
             order = Mock()
             for name, mock in (('prompt', prompt), ('graph', graph), ('sudo', run), ('guide', guide)):

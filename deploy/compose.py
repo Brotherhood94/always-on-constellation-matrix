@@ -119,6 +119,11 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
                         volume(directory / 'exchange', '/exchange')],
             'healthcheck': health('curl', '-fsS', '--cacert', '/exchange/ca.pem', f'https://{instance}:19443/'),
         }
+        if key == 'vps-manager' and settings.get('maintenance'):
+            services[instance]['environment']['MATRIX_REPOSITORY_DRAFTS'] = 'true'
+            drafts = volume(data / 'maintenance/drafts', '/workspace/constellation-matrix')
+            drafts['bind'] = {'create_host_path': False}
+            services[instance]['volumes'].append(drafts)
         worker = {
             **restricted, 'image': CONNECTOR, 'profiles': ['agents'], 'networks': ['clients', 'memory', private],
             'environment': {**matrix, **metadata, **context, **catalog, 'AGENT_STATE': '/state',
@@ -159,6 +164,8 @@ def definition(settings, data, registry, secrets, *, workshop_internal=True):
             worker.update(user='992:992', command=['node', '/app/root/agent.mjs'],
                           healthcheck=health('test', '-s', '/state/synced'))
             worker['environment']['ROOT_HOST'] = server
+            if settings.get('maintenance'):
+                worker['environment']['VPS_MAINTENANCE'] = 'true'
             worker['volumes'] = [item for item in worker['volumes'] if item['target'] != '/context-token']
             socket = volume(f"/run/{settings['project']}-root.sock", '/run/executor.sock', True)
             socket['bind'] = {'create_host_path': False}

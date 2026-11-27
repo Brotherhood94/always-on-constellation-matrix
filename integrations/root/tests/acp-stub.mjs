@@ -1,5 +1,12 @@
 export const runTurn = async (_engine, _previous, prompt) => {
   if (prompt.includes('ROOT_REVIEW:')) throw new Error('Submitted scripts must skip Amplifier.');
+  if (prompt.includes('maintenance dashboard fixture')) {
+    if (_engine.allowTools) {
+      if (!_engine.workspace.includes('/workspace/constellation-matrix/')) throw new Error('Missing draft workspace.');
+      return 'Update the dashboard fixture.';
+    }
+    return JSON.stringify({operation:'prepare-repository-change'});
+  }
   if (prompt.includes('fixed status fixture')) {
     return JSON.stringify({operation:'matrix-stack-status', summary:'Check the local test stack.'});
   }

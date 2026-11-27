@@ -22,6 +22,7 @@ MAX_MESSAGE = 40_000
 WINDOW = 900_000
 REVIEWED_SCRIPT = 'reviewed-script'
 REVIEWED_PLAN = 'reviewed-plan'
+MAINTENANCE_RELEASE = 'maintenance-release'
 EVENT_ID = re.compile(r'\$[^\s\x00-\x1f]{1,254}')
 
 
@@ -35,7 +36,7 @@ def validate(payload, approvers, operations, now):
             not isinstance(payload.get('decided'), int)):
         raise ValueError('Invalid authority.')
     operation = payload.get('operation')
-    dynamic = operation in (REVIEWED_SCRIPT, REVIEWED_PLAN)
+    dynamic = operation in (REVIEWED_SCRIPT, REVIEWED_PLAN, MAINTENANCE_RELEASE)
     review = dynamic or 'proposal' in payload
     keys = ('request', 'decision', 'proposal', 'poll') if review else ('request', 'decision')
     for key in keys:
@@ -46,6 +47,10 @@ def validate(payload, approvers, operations, now):
     if operation == REVIEWED_PLAN:
         reviewed = payload.get('plan')
         read_plan(reviewed)
+    elif operation == MAINTENANCE_RELEASE:
+        reviewed = payload.get('plan')
+        if not isinstance(reviewed, str) or len(reviewed.encode()) > 4000 or not isinstance(json.loads(reviewed), dict):
+            raise ValueError('Invalid tested release.')
     elif dynamic:
         script = payload.get('script')
         if not isinstance(script, str) or not script.strip() or not re.fullmatch(r'[\t\n\x20-\x7e]{1,4000}', script):
@@ -274,7 +279,7 @@ def database(path):
 
 
 def handle(db, payload, approvers, operations, now=None, runner=execute, script_runner=execute_script,
-           verify_review=None, plan_runner=None, require_review=False):
+           verify_review=None, plan_runner=None, require_review=False, maintenance=None):
     realtime = now is None
     now = int(time.time() * 1000) if now is None else now
     validate(payload, approvers, operations, now)
@@ -289,6 +294,13 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
     if existing:
         if existing[:5] != (digest, receipt, payload['request'], payload['approver'], payload['action']):
             raise ValueError('An existing receipt belongs to this operation.')
+        if operation == MAINTENANCE_RELEASE and maintenance and existing[5] in ('unknown', 'running'):
+            with maintenance.locked():
+                status = maintenance.recover_release(identifier)
+                if status:
+                    with db:
+                        db.execute('UPDATE audit SET outcome=? WHERE id=?', (status, identifier))
+                    return {'outcome': status}
         return {'outcome': existing[5], 'exit_code': existing[6],
                 **({'result': json.loads(existing[7])} if existing[7] else {})}
     if db.execute('SELECT 1 FROM audit WHERE decision=?', (receipt,)).fetchone():
@@ -314,16 +326,49 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
                 if plan_runner is None:
                     raise ValueError('Reviewed maintenance plans are disabled.')
                 outcome, code, result = plan_runner(payload['plan'], identifier)
+            elif operation == MAINTENANCE_RELEASE:
+                if maintenance is None:
+                    raise ValueError('VPS Manager maintenance is disabled.')
+                try:
+                    with maintenance.locked():
+                        release = json.loads(payload['plan'])
+                        outcome = maintenance.activate(identifier, release)
+                        if outcome == 'completed':
+                            result = {'revision': release['revision']}
+                except BlockingIOError:
+                    outcome = 'precondition_failed'
             elif operation == REVIEWED_SCRIPT:
                 outcome, code = script_runner(payload['script'])
             else:
                 outcome, code = runner(operations[payload['operation']]['argv'])
-        except OSError:
+        except (OSError, subprocess.SubprocessError):
             outcome = 'launch_failed'
+        except ValueError:
+            if operation != MAINTENANCE_RELEASE:
+                raise
+            outcome = 'precondition_failed'
         with db:
             db.execute('UPDATE audit SET outcome=?, exit_code=?, result=? WHERE id=?',
                        (outcome, code, json.dumps(result) if result else None, identifier))
     return {'outcome': outcome, 'exit_code': code, **({'result': result} if result else {})}
+
+
+def maintenance_request(maintenance, config, payload, fetch_event):
+    action = payload.get('maintenance')
+    if maintenance is None or action not in {'prepare', 'seal', 'scan'}:
+        raise ValueError('VPS Manager maintenance is disabled.')
+    with maintenance.locked():
+        if action == 'scan':
+            return {'receipts': maintenance.scan()[-10:]}
+        event = payload.get('request')
+        identifier = payload.get('id')
+        source = config['agents']
+        if not isinstance(event, str) or not EVENT_ID.fullmatch(event) or identifier != sha(source + ':' + event)[:32]:
+            raise ValueError('A maintenance workspace must belong to an Office request.')
+        raw = fetch_event(source, event)
+        if raw['sender'] == config['root'] or raw['origin_server_ts'] + 2 * WINDOW < int(time.time() * 1000):
+            raise ValueError('The maintenance request is stale or is from the executor.')
+        return maintenance.prepare(identifier) if action == 'prepare' else maintenance.seal(identifier)
 
 
 def serve(config, state, operations_path):
@@ -333,6 +378,11 @@ def serve(config, state, operations_path):
     allow = frozenset((config['owner'],))
     db = database(state / 'execution.sqlite3')
     verifier = None
+    fetch_event = None
+    maintenance = None
+    if config.get('maintenance'):
+        from maintenance import Maintenance
+        maintenance = Maintenance(state.parents[2])
     reviewed = operations_path.with_name('approved-scripts.json')
     if reviewed.exists():
         require_root_file(reviewed)
@@ -345,8 +395,11 @@ def serve(config, state, operations_path):
         if not token or not token.isascii() or not token.isprintable():
             raise SystemExit('Invalid Root Matrix authentication file.')
 
+        def fetch_event(room, event):
+            return matrix_event(port, token, room, event)
+
         def verifier(payload):
-            verify_matrix_receipt(config, payload, lambda room, event: matrix_event(port, token, room, event))
+            verify_matrix_receipt(config, payload, fetch_event)
 
     listener = socket.socket(fileno=3)
     while True:
@@ -356,14 +409,23 @@ def serve(config, state, operations_path):
             _, uid, _ = struct.unpack('3i', peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize('3i')))
             if uid != config['gateway_uid']:
                 continue
+            payload = None
             try:
                 with peer.makefile('rb') as stream:
                     body = stream.readline(MAX_MESSAGE + 1)
                 if len(body) > MAX_MESSAGE or not body.endswith(b'\n'):
                     raise ValueError('Invalid request size.')
-                result = handle(db, json.loads(body), allow, read_operations(operations_path), verify_review=verifier,
-                                require_review=True, plan_runner=lambda raw, key: execute_plan(raw, state, key))
-            except (ValueError, TypeError, KeyError, AttributeError, OSError, sqlite3.Error):
+                payload = json.loads(body)
+                if isinstance(payload, dict) and 'maintenance' in payload:
+                    result = maintenance_request(maintenance, config, payload, fetch_event)
+                else:
+                    result = handle(db, payload, allow, read_operations(operations_path), verify_review=verifier,
+                                    require_review=True, plan_runner=lambda raw, key: execute_plan(raw, state, key),
+                                    maintenance=maintenance)
+            except ValueError as error:
+                details = str(error) if isinstance(payload, dict) and payload.get('maintenance') == 'seal' else ''
+                result = {'error': details if details and len(details) < 200 else 'Execution request rejected.'}
+            except (TypeError, KeyError, AttributeError, OSError, sqlite3.Error, subprocess.SubprocessError):
                 result = {'error': 'Execution request rejected.'}
             try:
                 peer.sendall(json.dumps(result, ensure_ascii=False).encode() + b'\n')
@@ -382,7 +444,7 @@ def read_operations(path):
         require_root_file(entry)
     operations = json.loads(path.read_text())
     for operation, definition in operations.items():
-        if operation in (REVIEWED_SCRIPT, REVIEWED_PLAN) or not re.fullmatch('[a-z][a-z0-9-]{0,80}', operation):
+        if operation in (REVIEWED_SCRIPT, REVIEWED_PLAN, MAINTENANCE_RELEASE) or not re.fullmatch('[a-z][a-z0-9-]{0,80}', operation):
             raise ValueError('Invalid operation name.')
         argv = definition['argv']
         if (not isinstance(argv, list) or not argv or not argv[0].startswith('/') or

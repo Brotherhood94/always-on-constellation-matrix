@@ -31,6 +31,8 @@ def enable_host_dependencies(settings):
 def enable_services(settings):
     project = settings['project']
     run('systemctl', 'try-restart', project + '-monitor.service')
+    if settings.get('maintenance'):
+        run('systemctl', 'try-restart', project + '-root.service')
     run('systemctl', 'enable', '--now', project + '-stack.service',
         project + '-monitor.service', project + '-backup.timer')
 
@@ -259,7 +261,8 @@ Persistent=true
 WantedBy=timers.target
 ''')
     if broker:
-        shutil.copyfile(SOURCE / 'integrations/root/broker.py', host / 'root-broker.py')
+        for source, name in [('broker.py', 'root-broker.py'), ('maintenance.py', 'maintenance.py')]:
+            save(host / name, (SOURCE / 'integrations/root' / source).read_text())
         name = project + '-root'
         root = deployment + '/state/vps-manager'
         unit(name + '.socket', f'''[Unit]

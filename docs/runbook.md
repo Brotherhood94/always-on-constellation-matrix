@@ -141,6 +141,8 @@ sudo ./constellation_matrix agent migrate-root
 
 Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. VPS Manager joins the existing encrypted **Root Operations** chat with a new Matrix identity. Update saved install configurations to use `vps-manager` where they previously listed `root`. [VPS Manager guide](../integrations/root/README.md)
 
+For approved workspace changes or opted-in connector recovery, follow [VPS Manager maintenance](../integrations/root/README.md#repository-maintenance-and-automatic-recovery). Pause automatic recovery before planned service work.
+
 ## Move agents between hosts
 
 Use the same repository revision on the coordinator VPS and each worker. Workers can be Linux servers, PCs, or Linux VMs on Mac or Windows. Install standard Docker Engine with Compose V2, Python 3.9 or newer, SSHFS, and Tailscale on each worker. Join the same tailnet. [Docker Engine](https://docs.docker.com/engine/install/) · [Tailscale installation](https://tailscale.com/docs/install)

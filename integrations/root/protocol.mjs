@@ -12,6 +12,21 @@ export const pollText = 'org.matrix.msc1767.text';
 export const agentTurnKey = 'net.matrix_agents.turn';
 export const reviewedScriptOperation = 'reviewed-script';
 export const reviewedPlanOperation = 'reviewed-plan';
+export const maintenanceReleaseOperation = 'maintenance-release';
+
+export function maintenanceProposal(result) {
+  const { release, diff, tests } = result;
+  if (!release || !/^[a-f0-9]{40,64}$/u.test(release.base ?? '') || !fingerprint.test(release.revision ?? '') ||
+      typeof diff !== 'string' || Buffer.byteLength(diff) > 5000 || digest(diff) !== release.diff_sha256 ||
+      typeof tests !== 'string' || tests.length > 200 || !Array.isArray(release.services) ||
+      release.services.some(key => !/^[a-z0-9][a-z0-9_-]{0,35}$/u.test(key)) || typeof release.dashboard !== 'boolean') {
+    throw new ProposalError('The host did not return a tested maintenance release.');
+  }
+  const command = JSON.stringify(release);
+  return { operation: maintenanceReleaseOperation, summary: 'Apply the tested Constellation repository change.',
+    command, hash: digest(command),
+    details: { verification: tests, recovery: 'Restore the previous release if a health check fails.', diff } };
+}
 export const maximumScriptBytes = 4000;
 const reviewPrefix = 'ROOT_REVIEW:';
 const maximumReviewRequestBytes = 12000;
@@ -90,6 +105,16 @@ function readProposal(text, allowFormatting) {
   return value;
 }
 
+export function repositoryIntent(text) {
+  try {
+    const value = readProposal(text, true);
+    return Object.keys(value).length === 1 && value.operation === 'prepare-repository-change';
+  } catch (error) {
+    if (!(error instanceof ProposalError)) throw error;
+    return false;
+  }
+}
+
 function reviewLine(text) {
   const lastLine = text.slice(text.lastIndexOf('\n') + 1);
   if (lastLine.startsWith('VPS_REVIEW:')) return lastLine.slice('VPS_REVIEW:'.length);
@@ -135,6 +160,15 @@ function reviewedPlan(answer) {
 }
 
 export function reviewBody(task) {
+  if (task.operation === maintenanceReleaseOperation) {
+    const release = JSON.parse(task.command);
+    const { diff } = JSON.parse(task.review_details);
+    return [
+      'Base ' + release.base, 'Candidate ' + release.revision,
+      'Changes: ' + [...release.services, ...(release.dashboard ? ['dashboard'] : [])].join(', '),
+      'Diff SHA-256 ' + release.diff_sha256, '', diff,
+    ].join('\n');
+  }
   if (task.operation !== reviewedPlanOperation) return task.command;
   const plan = JSON.parse(task.command);
   if (plan.kind === 'shell') return 'Apply\n' + plan.script + '\n\nVerify\n' + plan.verify;
@@ -211,6 +245,15 @@ const executionCauses = new Map(Object.entries({
 
 export function executionCause(task) {
   if (task.outcome === 'proposal_failed') return task.summary;
+  if (task.operation === maintenanceReleaseOperation) {
+    const cause = {
+      rolled_back: 'The broker restored and verified the previous release.',
+      file_changed: 'The active revision changed after review.',
+      precondition_failed: 'The broker could not confirm the workspace or connector preconditions.',
+      recovery_required: 'Check the affected services and use maintenance rollback with the operation ID.',
+    }[task.outcome];
+    if (cause) return cause;
+  }
   if (task.outcome !== 'failed') return executionCauses.get(task.outcome);
   if (Number.isInteger(task.exit_code) && task.exit_code < 0) {
     return `The script was terminated by signal ${-task.exit_code}.`;

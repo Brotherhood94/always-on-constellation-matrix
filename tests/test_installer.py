@@ -40,6 +40,23 @@ class InstallerTest(unittest.TestCase):
         for key in self.settings['agents']:
             register_entry(self.settings, self.registry, key, self.presets[key])
 
+    def test_maintenance_mount_only_exposes_repository_drafts_to_the_vps_manager_engine(self):
+        data = Path('/srv/fixture')
+        secrets = {'POSTGRES_PASSWORD': 'fixture'}
+        default = definition(self.settings, data, self.registry, secrets)['services']
+        enabled = definition({**self.settings, 'maintenance': True}, data, self.registry, secrets)['services']
+        source = str(data / 'maintenance/drafts')
+        self.assertFalse(any(mount['source'] == source for mount in default['engine-vps-manager']['volumes']))
+        recipients = [name for name, service in enabled.items() if any(
+            isinstance(mount, dict) and mount.get('source') == source for mount in service.get('volumes', [])
+        )]
+        self.assertEqual(recipients, ['engine-vps-manager'])
+        self.assertIn('/workspace/constellation-matrix', [mount['target'] for mount in
+                      enabled['engine-vps-manager']['volumes'] if mount['source'] == source])
+        self.assertEqual(enabled['vps-manager']['environment']['VPS_MAINTENANCE'], 'true')
+        for name in ('vps-manager', 'engine-vps-manager'):
+            self.assertFalse(any(mount['source'].endswith('docker.sock') for mount in enabled[name]['volumes']))
+
     def test_agent_checklist_shows_profiles_and_toggles_agents(self):
         screen = Mock()
         screen.getmaxyx.return_value = (24, 80)

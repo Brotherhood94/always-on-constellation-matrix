@@ -53,14 +53,18 @@ def configure():
     initialize_settings(settings)
     tools = []
     workspace_tools = os.environ.get('AGENT_WORKSPACE_TOOLS') == 'true'
-    if workspace_tools or os.environ.get('MATRIX_CATALOG_PATH'):
-        name, script = ('workspace_files', 'workspace-mcp') if workspace_tools else ('approved_tools', 'scoped-mcp')
+    repo = os.environ.get('MATRIX_REPOSITORY_DRAFTS') == 'true'
+    if workspace_tools or repo or os.environ.get('MATRIX_CATALOG_PATH'):
+        name, script = ('workspace_files', 'workspace-mcp') if workspace_tools or repo else ('approved_tools', 'scoped-mcp')
         tools.append({
             'module': 'tool-mcp', 'source': MODULES + '/amplifier_module_tool_mcp',
             'config': {'servers': {name: {
                 'command': 'node', 'args': [f'/opt/workspace-tools/{script}.mjs'],
-                'env': {'MATRIX_WORKSPACE': '/workspace', 'AGENT_USERNAME': os.environ['AGENT_USERNAME'],
-                        **{key: os.environ[key] for key in ('MATRIX_CATALOG_PATH', 'MATRIX_SERVER_NAME', 'TEAM_ROLE') if key in os.environ}},
+                'env': {'MATRIX_WORKSPACE': '/workspace/constellation-matrix' if repo else '/workspace',
+                        'AGENT_USERNAME': os.environ['AGENT_USERNAME'],
+                        **({'MATRIX_REPOSITORY_DRAFTS': 'true'} if repo else
+                           {key: os.environ[key] for key in ('MATRIX_CATALOG_PATH', 'MATRIX_SERVER_NAME', 'TEAM_ROLE')
+                            if key in os.environ})},
             }}},
         })
     bundle = BACKEND / 'office.yaml'

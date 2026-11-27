@@ -300,9 +300,16 @@ async function fetchJson(path) {
 if (typeof document !== 'undefined') {
   let state = [];
   async function refresh() {
-    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections', 'telegram'].map(path => fetchJson(path + '.json')));
+    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections', 'telegram', 'maintenance'].map(path => fetchJson(path + '.json')));
     state = reports.map(({ status, value }, index) => status === 'fulfilled' ? value : state[index]);
     render(...state);
+    const release = document.getElementById('maintenance-revision');
+    const revision = state[6]?.revision;
+    if (release && /^[a-f0-9]{40,64}$/u.test(revision ?? '')) {
+      release.hidden = false;
+      release.textContent = 'Active revision ' + revision.slice(0, 12);
+      release.title = revision;
+    }
   }
 
   document.getElementById('range').addEventListener('change', () => render(...state));

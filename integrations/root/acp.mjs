@@ -70,7 +70,7 @@ export async function runTurn(engine, previous, prompt, onSession) {
         const result = await connection.request(methods.session.prompt, { sessionId: active, prompt: [
           { type: 'text', text: prompt },
         ] });
-        if (observedTool || answerTooLong || result.stopReason !== 'end_turn') {
+        if (observedTool && !engine.allowTools || answerTooLong || result.stopReason !== 'end_turn') {
           throw new Error('ACP did not finish a bounded, tool-free turn.');
         }
         return answer.trim();

@@ -1,11 +1,13 @@
 """Run setup prompts as the operator and elevate fixed deployment operations."""
 from contextlib import contextmanager, nullcontext
 import json
+import os
+from pwd import getpwuid
 from subprocess import SubprocessError
 from types import SimpleNamespace
 import sys
 
-from agent_picker import select_agents
+from agent_picker import choose_option, select_agents
 from installer import (CLIENT, SOURCE, TELEGRAM_AGENT, agent_activate, agent_add, available_profiles, install,
                        interactive, load, onboarding_profiles, password, pending_local_agents, prompt_graph_password,
                        request, run, save, show_element_setup, telegram, telegram_agent_pending,
@@ -79,8 +81,22 @@ def install_as_operator(data, args):
     elevate(data, '_host', 'install', payload={'settings': settings, 'password': passphrase, 'graph_password': graph})
     if interactive_terminal():
         setup_as_operator(data, passphrase=passphrase)
+        operator_docker_access()
     else:
         print(f'Continue setup with {workspace_command(data, elevated=False)} setup-guide')
+
+
+def operator_docker_access():
+    choice = choose_option('🐳 Docker access for your Linux login', {
+        'keep': 'Keep using sudo for manual Docker commands',
+        'show': 'Show the optional docker group setup (root-equivalent access)',
+    }, 'keep')
+    if choice == 'show':
+        from shlex import quote
+        account = quote(getpwuid(os.getuid()).pw_name)
+        print('The docker group gives this Linux account root-equivalent access. This is optional for VPS Manager.')
+        print(f'  sudo usermod -aG docker {account}')
+        print('Open a new SSH session and verify the group change with docker info.')
 
 
 def print_guide(data, *, root=False):

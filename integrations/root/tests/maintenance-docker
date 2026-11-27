@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""Apply and recover a synthetic Office stack using the real local Docker daemon."""
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+from tempfile import TemporaryDirectory
+import time
+
+SOURCE = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(SOURCE / 'integrations/root'))
+from maintenance import Maintenance, atomic, read
+
+DOCKER = shutil.which('docker')
+FIXTURE = os.environ.get('MAINTENANCE_TEST_IMAGE', 'constellation-office-connector:0.22.17')
+PROJECT = 'constellation-maintenance-test-' + str(os.getpid())
+JOB = 'a' * 32
+
+
+def docker(*argv, **kwargs):
+    if argv[0] == '/usr/bin/systemctl':
+        assert argv[-1] == PROJECT + '-stack.service'
+        return b''
+    path, *options = argv
+    if path == '/usr/bin/docker':
+        path = DOCKER
+        if options[:2] == ['image', 'inspect'] and options[-1] == 'constellation-office-connector:0.22.17':
+            options[-1] = FIXTURE
+    result = subprocess.run((path, *options), cwd=kwargs.get('cwd'), timeout=kwargs.get('timeout', 60),
+                            capture_output=True, check=False)
+    if result.returncode:
+        raise RuntimeError(result.stderr.decode(errors='replace')[-4000:])
+    return result.stdout
+
+
+with TemporaryDirectory(prefix='constellation-maintenance-fixture-') as folder:
+    data = Path(folder)
+    worker = {'active': True, 'placement': 'local', 'profile': {'role': 'worker'}}
+    registry = {'agents': {'coder': worker}}
+    atomic(data / 'agents.json', registry)
+    atomic(data / 'compose.yaml', {'name': PROJECT, 'services': {'coder': {
+        'image': FIXTURE, 'network_mode': 'none', 'read_only': True, 'tmpfs': ['/tmp'],
+        'user': '991:991', 'cap_drop': ['ALL'], 'security_opt': ['no-new-privileges:true'],
+        'command': ['node', '-e', 'require("node:fs").writeFileSync("/tmp/ready","yes");setInterval(()=>{},1000)'],
+        'healthcheck': {'test': ['CMD', 'test', '-f', '/tmp/ready'], 'interval': '1s', 'timeout': '1s', 'retries': 2},
+    }}})
+    clock = [1000]
+    service = Maintenance(data, runner=docker, clock=lambda: clock[0], sleep=lambda seconds: time.sleep(min(seconds, 1)))
+    try:
+        service.compose('up', '-d', '--pull', 'never', '--wait', 'coder')
+        service.initialize(SOURCE, PROJECT, ['coder'], registry)
+        service.prepare(JOB)
+        title = service.drafts / JOB / 'dashboard/index.html'
+        title.write_text(title.read_text().replace('<title>Constellation Dashboard</title>', '<title>Maintenance fixture</title>'))
+        result = service.seal(JOB)
+        assert result['release']['dashboard']
+        assert service.activate(JOB, result['release']) == 'completed'
+        assert read(data / 'dashboard/maintenance.json')['revision'] == result['release']['revision']
+        assert 'Maintenance fixture' in (data / 'dashboard/index.html').read_text()
+        print('The real Docker sandbox tested and promoted a sealed dashboard change.', flush=True)
+        connector_job = 'b' * 32
+        service.prepare(connector_job)
+        draft = service.drafts / connector_job / 'agents/connector/capability-dispatch.mjs'
+        draft.write_text(draft.read_text() + '\n// Maintenance fixture.\n')
+        connector = service.seal(connector_job)['release']
+        original_image = service.inspected('coder')['Image']
+        assert connector['services'] == ['coder']
+        assert service.activate(connector_job, connector) == 'completed'
+        current = service.inspected('coder')
+        assert current['Image'] != original_image
+        assert current['Image'] == service.image_id(service.active()['images']['coder'])
+        assert current['State']['Health']['Status'] == 'healthy'
+        assert 'Maintenance fixture' in (data / 'dashboard/index.html').read_text()
+        print('The revised connector image passed Docker health with the dashboard release intact.', flush=True)
+        target = current['Id']
+        docker('/usr/bin/docker', 'exec', target, 'rm', '/tmp/ready')
+        for _ in range(10):
+            if service.inspected('coder')['State']['Health']['Status'] == 'unhealthy':
+                break
+            time.sleep(1)
+        assert service.inspected('coder')['State']['Health']['Status'] == 'unhealthy'
+        assert service.scan() == []
+        clock[0] += 30
+        receipt = service.scan()[0]
+        assert receipt['status'] == 'healthy'
+        assert service.inspected('coder')['State']['Health']['Status'] == 'healthy'
+        print('The broker restarted only the opted-in unhealthy connector and confirmed Docker health.', flush=True)
+    finally:
+        service.compose('down', '--volumes')

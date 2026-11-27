@@ -70,6 +70,9 @@ const context = httpServer(async (request, response) => {
 });
 await new Promise(resolve => context.listen(8000, '0.0.0.0', resolve));
 const accepted = [];
+const maintenanceCalls = [];
+const fixtureDiff = '--- a/dashboard/index.html\n+++ b/dashboard/index.html\n-Old dashboard\n+New dashboard\n';
+const release = {base:'a'.repeat(40),revision:'b'.repeat(64),diff_sha256:digest(fixtureDiff),services:[],dashboard:true};
 const reviewed = 'printf "%s\\n" "<candidate>"\nexit 41\n';
 const sockets = createServer(socket => {
   let line = '';
@@ -77,13 +80,24 @@ const sockets = createServer(socket => {
     line += String(data);
     if (line.endsWith('\n')) {
       const value = JSON.parse(line);
-      accepted.push(value);
-      socket.end(JSON.stringify({outcome:value.action === 'approve' ? 'failed' : 'denied', exit_code:value.action === 'approve' ? 41 : null}) + '\n');
+      let result;
+      if (value.maintenance) {
+        if (value.maintenance !== 'scan') maintenanceCalls.push(value);
+        if (value.maintenance === 'prepare') result = {workspace:value.id,base:release.base};
+        else if (value.maintenance === 'seal') result = {release,diff:fixtureDiff,tests:'Isolated dashboard tests passed.'};
+        else result = {receipts: accepted.some(item => item.operation === 'maintenance-release') ?
+          [{id:'fixture-recovery',service:'coder',time:1780000000,reason:'unhealthy',status:'healthy'}] : []};
+      } else {
+        accepted.push(value);
+        result = value.operation === 'maintenance-release' ? {outcome:'completed',result:{revision:release.revision}} :
+          {outcome:value.action === 'approve' ? 'failed' : 'denied', exit_code:value.action === 'approve' ? 41 : null};
+      }
+      socket.end(JSON.stringify(result) + '\n');
     }
   });
 });
 await new Promise(resolve => sockets.listen('/run/executor.sock', resolve));
-const worker = spawn('node', ['/app/root/agent.mjs'], {stdio: 'inherit', env: { ...process.env, MATRIX_CATALOG_PATH: '/state/agents.json', CONTEXT_INTELLIGENCE_URL: 'http://context:8000' }});
+const worker = spawn('node', ['/app/root/agent.mjs'], {stdio: 'inherit', env: { ...process.env, MATRIX_CATALOG_PATH: '/state/agents.json', CONTEXT_INTELLIGENCE_URL: 'http://context:8000', VPS_MAINTENANCE:'true' }});
 let database;
 
 async function waitFor(lookup) {
@@ -230,6 +244,28 @@ try {
   assert.equal(accepted.length, 3);
   console.log('VPS Manager handoffs and reviewed plans reached the encrypted poll, the owner vote and the source receipt.');
   console.log('Invalid input produced a specific reason, without publishing a poll or running a command.');
+  const maintenance = await sendEncrypted(reader, agents, 'fixture-maintenance',
+    mentionMessage('maintenance dashboard fixture', {id: root.user_id, name: 'VPS Manager'}));
+  const approval = await waitFor(() => {
+    const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(maintenance);
+    assert.equal(task?.outcome ?? null, null, task?.summary);
+    return task?.poll_event && task;
+  });
+  assert.deepEqual(maintenanceCalls.map(value => value.maintenance), ['prepare','seal']);
+  assert.equal(accepted.length, 3);
+  await timeline();
+  const notice = await reader.getEvent(audit, approval.proposal_event);
+  const poll = await reader.getEvent(audit, approval.poll_event);
+  assert.ok(notice.content.body.includes(fixtureDiff));
+  assert.ok(notice.content.body.includes(release.diff_sha256));
+  const vote = await castVote('fixture-maintenance-accept', approval.poll_event, poll.content[pollStart].answers[0].id);
+  const finished = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE id=? AND source_notified=1').get(approval.id));
+  assert.equal(finished.outcome, 'completed');
+  assert.equal(finished.decision, vote);
+  assert.equal(accepted[3].operation, 'maintenance-release');
+  assert.deepEqual(JSON.parse(accepted[3].plan), release);
+  await waitFor(() => database.prepare('SELECT id FROM maintenance_notices WHERE id=?').get('fixture-recovery'));
+  console.log('The tested release diff reached the encrypted poll and its exact approval. Autonomous recovery added a separate audit notice.');
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
