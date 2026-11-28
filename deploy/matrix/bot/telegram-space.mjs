@@ -1,3 +1,5 @@
+export const telegramAccessRevoked = 'org.matrixconstellation.telegram.access_revoked';
+
 export async function telegramSpaceState(client, { space, owner, guide }) {
   const state = await client.getRoomState(space);
   const roomState = type => state.find(event => event.type === type && event.state_key === '')?.content;
@@ -20,6 +22,8 @@ export async function reconcileTelegramRooms(client, database, { space, domain, 
   // An empty child event means someone intentionally removed the room from the Space.
   const children = new Map(state.filter(event => event.type === 'm.space.child')
     .map(event => [event.state_key, Boolean(event.content?.via?.length)]));
+  const revoked = new Set(state.filter(event => event.type === 'm.space.child' &&
+    event.content?.[telegramAccessRevoked] === true).map(event => event.state_key));
   const route = '/_matrix/client/v3/rooms/' + encodeURIComponent(space) + '/state/m.space.child/';
   const joined = new Set(await client.getJoinedRooms());
   let attempts = 0;
@@ -29,11 +33,11 @@ export async function reconcileTelegramRooms(client, database, { space, domain, 
       await client.doRequest('PUT', route + encodeURIComponent(room), null, { via: [domain], suggested: false }, 15000);
       children.set(room, true);
     }
-    if (joined.has(room) && !children.get(room)) {
+    if (joined.has(room) && (!children.get(room) || revoked.has(room))) {
       await leaveTelegramPortal(client, room);
       continue;
     }
-    if (!joined.has(room) && children.get(room) && key && attempts < 8) {
+    if (!joined.has(room) && children.get(room) && !revoked.has(room) && key && attempts < 8) {
       if (!/^(user|chat|channel):[1-9][0-9]{0,18}$/u.test(peer)) continue;
       if ((lastInvitation.get(room) ?? 0) + 60000 > Date.now()) continue;
       attempts++;

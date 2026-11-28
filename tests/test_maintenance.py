@@ -1,6 +1,7 @@
 from hashlib import sha256
 from pathlib import Path
 import json
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -9,7 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/root'))
 from maintenance import Maintenance, atomic, read
-from broker import MAINTENANCE_RELEASE, database, handle
+from broker import MAINTENANCE_RELEASE, REVIEWED_PLAN, database, execute_plan, handle, verify_matrix_receipt
 
 BASE = 'a' * 40
 JOB = 'a' * 32
@@ -190,6 +191,44 @@ class Fixtures(unittest.TestCase):
         atomic(service.root / 'paused', 'pause')
         service.scan()
         self.assertEqual(len([a for a in self.calls if a[1] == 'restart']), 1)
+
+    def test_telegram_restart_requires_operator_vote_for_the_bridge_and_defers_uncertain_delivery(self):
+        audit, office = '!audit:fixture.test', '!office:fixture.test'
+        agent, owner, architect = ('@telegram-agent:fixture.test', '@operator:fixture.test', '@the-architect:fixture.test')
+        config = {'audit': audit, 'agents': office, 'owner': owner, 'root': architect, 'control_audience': [owner, architect, agent]}
+        exact = {'kind': 'restart-service', 'target': 'telegram-bridge'}
+        reference = {'origin_server_ts': 4, 'sender': owner,
+                     'content': {'m.relates_to': {'rel_type': 'm.reference', 'event_id': '$poll'}}}
+        events = {'$request': {'sender': agent, 'origin_server_ts': 1}, '$proposal': {'sender': architect, 'origin_server_ts': 2},
+                  '$poll': {'sender': architect, 'origin_server_ts': 3}, '$vote': reference}
+        receipt = {'id': sha256(f'{audit}:$request'.encode()).hexdigest()[:32], 'operation': REVIEWED_PLAN, 'plan': json.dumps(exact),
+                   'source_room': audit, 'review_room': audit, 'request': '$request', 'proposal': '$proposal',
+                   'poll': '$poll', 'decision': '$vote', 'decided': 4, 'expires': 100}
+        verify_matrix_receipt(config, receipt, lambda _, event: events[event])
+        with self.assertRaises(ValueError):
+            verify_matrix_receipt(config, {**receipt, 'plan': json.dumps({**exact, 'target': 'synapse'})}, lambda _, event: events[event])
+        events['$vote']['sender'] = agent
+        with self.assertRaises(ValueError):
+            verify_matrix_receipt(config, receipt, lambda _, event: events[event])
+
+        connector = self.data / 'telegram/connector'
+        connector.mkdir(parents=True)
+        connection = sqlite3.connect(connector / 'telegram.sqlite3')
+        self.addCleanup(connection.close)
+        with connection:
+            connection.execute("CREATE TABLE draft (state TEXT)")
+            connection.execute("INSERT INTO draft VALUES ('unknown')")
+        state = self.data / 'state/the-architect/execution'
+        with patch('service_diagnostics.restart_service', return_value=('completed', 0, {})) as restart:
+            denied = execute_plan(json.dumps(exact), state, JOB)
+            self.assertEqual(denied[0], 'precondition_failed')
+            restart.assert_not_called()
+            self.assertFalse((connector / 'bridge-restarting').exists())
+            with connection:
+                connection.execute("UPDATE draft SET state='bridge_confirmed'")
+            self.assertEqual(execute_plan(json.dumps(exact), state, JOB)[0], 'completed')
+            restart.assert_called_once()
+            self.assertFalse((connector / 'bridge-restarting').exists())
 
     def test_broker_applies_only_a_verified_approval(self):
         service = self.maintenance

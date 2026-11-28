@@ -1,3 +1,4 @@
+import { telegramIntent, telegramMention, telegramRestartHandoffKey, telegramTaskPayload } from '../../agents/connector/telegram-intent.mjs';
 import { replyLimit } from '../../agents/connector/office-policy.mjs';
 import { createHash } from 'node:crypto';
 
@@ -34,6 +35,31 @@ const maximumReviewRequestBytes = 12000;
 
 const pollResponse = 'org.matrix.msc3381.poll.response';
 export const pollChoice = (task, action) => digest(JSON.stringify([task.id, task.hash, task.proposal_event, action]));
+
+export function telegramRestartRequest(event, config) {
+  const content = event?.content;
+  const relation = content?.['m.relates_to'];
+  const source = content?.[telegramRestartHandoffKey];
+  if (event?.type !== 'm.room.message' || !eventId.test(source ?? '') ||
+      relation?.rel_type !== 'm.thread' || relation['m.in_reply_to']?.event_id !== source ||
+      !eventId.test(relation.event_id ?? '') ||
+      telegramMention(content, config.root, 'The Architect') === null) return null;
+  return source;
+}
+
+export function telegramRestartSource(event, config) {
+  const agent = '@telegram-agent' + config.root.slice(config.root.indexOf(':'));
+  const text = telegramMention(event?.content, agent, 'Telegram Agent');
+  if (text === null) return false;
+  if (event.sender === config.owner) return telegramIntent(text)?.action === 'restart';
+  const plan = event.content['net.matrix_agents.control_request'];
+  return event.sender === config.dot && /^[a-z0-9_-]{8,80}$/iu.test(plan?.request_id ?? '') &&
+    telegramTaskPayload(plan?.telegram)?.action === 'restart';
+}
+
+export function telegramRestartProposal() {
+  return reviewedPlan({ plan: { kind: 'restart-service', target: 'telegram-bridge' } });
+}
 
 export function requestText(event, root, maximumBytes = 1800, direct = false) {
   const { type, content } = event;

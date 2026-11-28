@@ -74,7 +74,7 @@ export function registerControlTools(server, { db, room, audience, serverName, t
   });
 
   server.registerTool('request_control_operation', {
-    description: 'When the operator requests it, post a request as Dot to one Control Room agent. The operator votes in Element on any approval. Read the thread via read_control_room.',
+    description: 'When the operator requests it, post a request as Dot to one Control Room agent. For Telegram administration supply telegram.action as status, resync, restart, disconnect, or revoke with a target. The operator votes in Element. Read the thread via read_control_room.',
     inputSchema: { request_id: taskId, agent: z.enum(['the-architect', 'telegram-agent']),
       text: z.string().trim().min(1).max(1500), telegram: z.unknown().optional() },
     annotations: { idempotentHint: true, openWorldHint: false },

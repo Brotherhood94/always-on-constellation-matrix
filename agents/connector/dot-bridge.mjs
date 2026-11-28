@@ -14,7 +14,7 @@ import { registerControlTools } from './dot-control.mjs';
 import { createTelegramTools } from './dot-telegram.mjs';
 import { agentKeyPattern, canDispatch, createCatalog } from './agent-catalog.mjs';
 import { telegramReceipt, telegramReceiptKey, telegramTaskStatus } from './telegram-office.mjs';
-import { telegramTaskPayload } from './telegram-intent.mjs';
+import { isTelegramAdmin, telegramTaskPayload } from './telegram-intent.mjs';
 import { staffingReceipt, staffingReceiptKey } from './staffing-office.mjs';
 
 const { MATRIX_URL: url, MATRIX_SERVER_NAME: serverName, DOT_STATE: state } = process.env;
@@ -282,6 +282,7 @@ function mcpServer() {
   }, async ({ task_id, direct, ...input }) => {
     const telegram = telegramTaskPayload(input);
     if (!telegram) return failure('Provide the inputs required for the selected Telegram operation.');
+    if (isTelegramAdmin(telegram.action)) return failure('Request Telegram administration through Control Room.');
     await catalog.refresh(true);
     const shortcut = catalog.fresh() && catalog.current().routingShortcuts?.['dot-telegram-send'];
     const existing = readJob.get(task_id);

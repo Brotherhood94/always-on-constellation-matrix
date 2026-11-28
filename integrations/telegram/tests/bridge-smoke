@@ -143,6 +143,8 @@ print('Pinned mautrix joined the installer-created encrypted Telegram Bridge DM.
 key = Path('/state/guide/office-bridge-key').read_text().strip()
 for method, route, secret, body, code in [
     ('GET', 'logins', key, None, 'M_FORBIDDEN'),
+    ('POST', 'logout/all', key, b'{}', 'M_FORBIDDEN'),
+    ('POST', 'logout/123', key, b'{}', 'M_NOT_FOUND'),
     ('POST', 'login/start/qr', key, None, 'M_FORBIDDEN'),
     ('POST', 'login/step/fixture/password/user_input', key, b'{}', 'M_FORBIDDEN'),
     ('GET', 'search_users', key, None, 'M_FORBIDDEN'),
@@ -204,7 +206,8 @@ import pg from 'pg';
 import { WebSocketServer } from 'ws';
 import matrix from '@vector-im/matrix-bot-sdk';
 import { matrixConnection } from './matrix.mjs';
-import { TelegramStore, pollStart, reviewAnswer } from './policy.mjs';
+import { createTelegramAdmin } from './admin.mjs';
+import { controlCommand, TelegramStore, pollStart, reviewAnswer } from './policy.mjs';
 import { telegramOfficeAction } from './telegram-office.mjs';
 import { listenTelegramSocket } from './delegation.mjs';
 import { requestTelegramService } from '../agents/connector/telegram-office.mjs';
@@ -247,8 +250,48 @@ await reader.applySync(batch, async (source, entry, encrypted, failed) => {
   if (entry.event_id === event && encrypted && !failed && source === room) text=entry.content.body;
 });
 assert.equal(text,'Isolated encrypted smoke test');
-sender.close();
 console.log('Telegram connector Matrix crypto round trip and exact-transaction retry passed.');
+
+const adminState = new TelegramStore(':memory:');
+try {
+  const calls = [];
+  const adminSettings = { owner: b.user_id, agent: a.user_id, domain: 'telegram.test',
+    controlRoom: room, controlAudience: [a.user_id, b.user_id] };
+  const administration = createTelegramAdmin({ store: adminState, settings: adminSettings, matrix: sender,
+    guide: async input => {
+      calls.push(input.action);
+      return input.action === 'admin-account' ? { ok: true, login: '12345', revision: '5' } :
+        { ok: true, message: 'Verified an isolated resync.' };
+    } });
+  for (const [index, decision] of [[0, 'approved'], [1, 'declined']]) {
+    const request = await reader.put(room, 'admin-request-' + index, await reader.encryptEvent(room, 'm.room.message', {
+      msgtype: 'm.text', body: 'Telegram: resync groups', 'm.mentions': { user_ids: [a.user_id] },
+    }));
+    assert.equal((await administration.request({ id: request, thread: request }, { action: 'resync' })).ok, true);
+    await administration.tick();
+    const review = adminState.get('SELECT * FROM telegram_admin_review WHERE id=?', request);
+    const last = await reader.sync(null, 0);
+    await reader.applySync(last, async () => {});
+    const poll = await reader.officeEvent(room, review.poll);
+    assert.deepEqual(poll.content[pollStart].answers.map(item => item['org.matrix.msc1767.text']), ['✅ Accept', '❌ Decline']);
+    const type = 'org.matrix.msc3381.poll.response';
+    const voteId = await reader.put(room, 'admin-ballot-' + index, await reader.encryptEvent(room, type, {
+      [type]: { answers: [poll.content[pollStart].answers[index].id] },
+      'm.relates_to': { rel_type: 'm.reference', event_id: review.poll },
+    }));
+    await sender.applySync(await sender.sync(null, 0), async () => {});
+    const vote = await sender.officeEvent(room, voteId);
+    await administration.accept(controlCommand({ ...vote, room, encrypted: true }, adminSettings), vote);
+    assert.equal(adminState.get('SELECT state FROM telegram_admin_review WHERE id=?', request).state, decision);
+    await administration.tick();
+    await administration.tick();
+  }
+  assert.deepEqual(calls, ['admin-account', 'admin-resync', 'admin-account']);
+  console.log('An encrypted operator vote approved one isolated administration operation and declined another.');
+} finally {
+  adminState.db.close();
+  sender.close();
+}
 
 const device = 'TESTTELEGRAMAGENT';
 const agent = { ...await api('/login', {type:'m.login.password', identifier:{type:'m.id.user',user:'telegram-agent'},

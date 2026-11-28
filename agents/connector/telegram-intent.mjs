@@ -57,6 +57,9 @@ export function telegramSendPayload(input) {
   return { target, ...(input.type && { type: input.type }), text: input.text };
 }
 
+export const isTelegramAdmin = action => ['resync', 'revoke', 'disconnect', 'restart'].includes(action);
+export const telegramRestartHandoffKey = 'org.matrixconstellation.telegram.bridge_restart';
+
 export function telegramTaskPayload(input) {
   if (!input || typeof input !== 'object') return null;
   const action = input.action ?? 'send';
@@ -64,7 +67,11 @@ export function telegramTaskPayload(input) {
     const message = telegramSendPayload(input);
     return message && { ...(input.action && { action }), ...message };
   }
-  if (['list', 'status'].includes(action)) return { action };
+  if (['list', 'status', 'resync', 'disconnect', 'restart'].includes(action)) return { action };
+  if (action === 'revoke') {
+    const target = typeof input.target === 'string' && destination(input.target);
+    return target && { action, ...target };
+  }
   if (!['open', 'unlink', 'lookup', 'read', 'create_group', 'add_members'].includes(action) ||
       typeof input.target !== 'string' ||
       (input.type !== undefined && !['direct', 'group'].includes(input.type))) return null;
@@ -93,6 +100,12 @@ export function telegramIntent(body, { office = false } = {}) {
   if (/^(?:telegram[ :]+(?:bridge )?status|(?:check|show|verifica|mostra)\s+(?:the |lo )?(?:telegram bridge status|stato (?:del bridge )?telegram))[.!?]?$/iu.test(input)) {
     return { action: 'status' };
   }
+  const clean = input.replace(/^telegram[ :]+/iu, '').replace(/[.!?]$/u, '');
+  if (/^(?:resync telegram(?: bridge)?|resync(?: groups)?|risincronizza telegram(?: bridge)?|risincronizza)$/iu.test(clean)) return { action: 'resync' };
+  if (/^(?:restart telegram bridge|restart bridge|riavvia (?:il )?(?:telegram bridge|bridge telegram|bridge))$/iu.test(clean)) return { action: 'restart' };
+  if (/^(?:disconnect telegram(?: account)?|disconnect(?: account)?|scollega (?:l['’]account )?telegram|disconnetti(?: telegram)?)$/iu.test(clean)) return { action: 'disconnect' };
+  const revoke = /^(?:revoke (?:telegram )?(?:agent )?access (?:to|for)|revoca (?:l['’]accesso )?(?:a|per)) (.+)$/iu.exec(clean);
+  if (revoke) return telegramTaskPayload({ action: 'revoke', target: revoke[1] });
   const legacyDraft = /^telegram\s+draft\s+(direct|group)\s+"([^"\r\n]+)"\s*:\s*([\s\S]+)$/iu.exec(input);
   if (legacyDraft) return telegramTaskPayload({ action: 'draft', type: legacyDraft[1].toLowerCase(),
     target: legacyDraft[2], text: legacyDraft[3] });

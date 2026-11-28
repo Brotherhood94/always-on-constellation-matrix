@@ -60,12 +60,14 @@
  func (prov *ProvisioningAPI) AuthMiddleware(h http.Handler) http.Handler {
  	secret := prov.br.Config.Provisioning.SharedSecret
  	if len(secret) < 16 {
-@@ -276,7 +291,7 @@
+@@ -276,7 +291,9 @@
  		}
  		if strings.HasPrefix(secret, "constellation-office-") && exstrings.ConstantTimeEqual(auth, secret) {
  			path := strings.TrimPrefix(r.URL.Path, "/_matrix/provision")
 -			if !(r.Method == http.MethodGet && strings.HasPrefix(path, "/v3/resolve_identifier/")) && (r.Method != http.MethodPost || (path != "/v3/search_users" && !strings.HasPrefix(path, "/v3/create_dm/") && !strings.HasPrefix(path, "/v3/constellation_group/") && !strings.HasPrefix(path, "/v3/constellation_membership/") && !strings.HasPrefix(path, "/v3/constellation_group_action/"))) {
-+			if !constellationLocalLogin(r, path) && !(r.Method == http.MethodGet && strings.HasPrefix(path, "/v3/resolve_identifier/")) && (r.Method != http.MethodPost || (path != "/v3/search_users" && !strings.HasPrefix(path, "/v3/create_dm/") && !strings.HasPrefix(path, "/v3/constellation_group/") && !strings.HasPrefix(path, "/v3/constellation_membership/") && !strings.HasPrefix(path, "/v3/constellation_group_action/"))) {
++			logoutID, logout := strings.CutPrefix(path, "/v3/logout/")
++			scopedLogout := r.Method == http.MethodPost && logout && provisionutil.IsTelegramUserID("user:"+logoutID)
++			if !constellationLocalLogin(r, path) && !scopedLogout && !(r.Method == http.MethodGet && strings.HasPrefix(path, "/v3/resolve_identifier/")) && (r.Method != http.MethodPost || (path != "/v3/search_users" && !strings.HasPrefix(path, "/v3/create_dm/") && !strings.HasPrefix(path, "/v3/constellation_group/") && !strings.HasPrefix(path, "/v3/constellation_membership/") && !strings.HasPrefix(path, "/v3/constellation_group_action/"))) {
  				mautrix.MForbidden.WithMessage("Constellation credentials only search, open chats and prepare Telegram Agent access to verified chats").Write(w)
  				return
  			}

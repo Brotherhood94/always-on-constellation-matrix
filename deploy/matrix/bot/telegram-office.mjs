@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmod, unlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { leaveTelegramPortal, telegramSpaceState } from './telegram-space.mjs';
+import { leaveTelegramPortal, reconcileTelegramRooms, telegramAccessRevoked, telegramSpaceState } from './telegram-space.mjs';
 
 const matrixRoom = /^![^\s/\x00-\x1f]{1,254}$/u;
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
@@ -144,11 +144,62 @@ export async function telegramControlSearch(room, event, options) {
   await client.doRequest('PUT', roomRoute(control) + '/send/m.room.encrypted/' + transaction, null, payload, 15_000);
 }
 
+const adminActions = new Set(['admin-account', 'admin-chat', 'admin-resync', 'admin-revoke', 'admin-disconnect']);
+
+async function telegramAdminAction(input, options, state) {
+  const { client, database, space, owner, key, bridgeFetch = fetch } = options;
+  if (!options.controlAudience || !await privateTelegramControl(client, options)) return fail('Use the encrypted Control Room for Telegram administration.');
+  if (['admin-chat', 'admin-revoke'].includes(input.action)) {
+    if (!bounded(input.target, 120)) return fail('Specify one exact linked Telegram chat.');
+    const linked = new Map(state.filter(event => event.type === 'm.space.child' && event.content?.via?.length)
+      .map(event => [event.state_key, event.content]));
+    const { rows } = await database.query('SELECT DISTINCT room, peer, name FROM telegram_space_sent_portal WHERE owner = $1', [owner]);
+    const selector = input.target.trim();
+    const matches = rows.filter(row => linked.has(row.room) && matrixRoom.test(row.room) &&
+      (input.action === 'admin-revoke' ? row.room === selector && row.peer === input.peer :
+        row.room === selector || row.peer === selector || normalizeName(row.name) === normalizeName(selector)));
+    if (matches.length !== 1) return fail('Specify a unique, verified Telegram chat name, Matrix room ID, or Telegram peer ID.');
+    const { room, peer, name } = matches[0];
+    const child = linked.get(room);
+    if (input.action === 'admin-chat') return child[telegramAccessRevoked] === true ?
+      fail('Telegram Agent access to this chat is already revoked.') : { ok: true, room, peer, name: String(name ?? '').slice(0, 120) };
+    await client.doRequest('PUT', roomRoute(space) + '/state/m.space.child/' + encodeURIComponent(room),
+      null, { ...child, [telegramAccessRevoked]: true }, 15_000);
+    await leaveTelegramPortal(client, room);
+    return { ok: true, message: 'Telegram Agent access revoked. The chat and its history remain in Telegram → People.' };
+  }
+
+  const { rows } = await database.query('SELECT login, revision FROM telegram_space_admin_login WHERE owner = $1 LIMIT 2', [owner]);
+  if (rows.length !== 1 || !/^[1-9][0-9]{0,18}$/u.test(rows[0].login) || !/^[0-9]{1,10}$/u.test(rows[0].revision)) {
+    return fail('This operation requires exactly one verified linked Telegram account.');
+  }
+  const { login, revision } = rows[0];
+  if (input.action === 'admin-account') return { ok: true, login, revision };
+  if (input.login !== login || input.revision !== revision) return fail('The Telegram login changed after review. Request a new review.');
+  if (!key) return fail('Telegram Bridge is unavailable.');
+  const disconnect = input.action === 'admin-disconnect';
+  const path = disconnect ? 'logout/' + login : 'constellation_group_action/sync-groups';
+  const params = new URLSearchParams({ user_id: owner, ...(disconnect ? {} : { login_id: login }) });
+  const response = await bridgeFetch(bridgeProvisioning + path + '?' + params, {
+    method: 'POST', redirect: 'error', signal: AbortSignal.timeout(20_000),
+    headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' }, body: '{}',
+  }).catch(() => null);
+  if (!response?.ok) return { ...fail('Telegram Bridge did not confirm the operation. Check its state before retrying.'), unknown: !response || response.status >= 500 };
+  if (disconnect) {
+    const remaining = await database.query('SELECT 1 FROM telegram_space_admin_login WHERE owner = $1 AND login = $2', [owner, login]);
+    return remaining.rows.length ? { ...fail('Telegram still reports the login. Verify its state before retrying.'), unknown: true } :
+      { ok: true, message: 'Telegram account disconnected. Use telegram setup on the VPS to link it again.' };
+  }
+  await reconcileTelegramRooms(client, database, options);
+  return { ok: true, message: 'Telegram group discovery and linked-room reconciliation completed.' };
+}
+
 export async function telegramOfficeAction(input, options) {
   const { client, database, space, control, domain, owner, key, bridgeFetch = fetch } = options;
-  if (!input || typeof input.id !== 'string' || !eventId.test(input.id) ||
-      !['add', 'remove', 'draft', 'resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history', 'status'].includes(input.action) ||
-      (!['list', 'status'].includes(input.action) && (!bounded(input.target, 120) || /[\x00-\x1f]/u.test(input.target)))) {
+  if (!input || typeof input.id !== 'string' || !eventId.test(input.id)) return fail('Use a verified request ID.');
+  const admin = adminActions.has(input.action);
+  if (!admin && (!['add', 'remove', 'draft', 'resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history', 'status'].includes(input.action) ||
+      (!['list', 'status'].includes(input.action) && (!bounded(input.target, 120) || /[\x00-\x1f]/u.test(input.target))))) {
     return fail('Use a Telegram username, group ID, room ID, or exact chat name.');
   }
   const target = input.target?.trim();
@@ -172,6 +223,7 @@ export async function telegramOfficeAction(input, options) {
   if (!database || !matrixRoom.test(space ?? '')) return fail('Activate Telegram Bridge before managing Telegram rooms.');
   const state = await telegramSpaceState(client, options);
   if (!state) return fail('The private Telegram Space is not ready.');
+  if (admin) return telegramAdminAction(input, options, state);
   if (input.action === 'status') {
     if (!await privateTelegramControl(client, options)) return fail('The encrypted Control Room audience could not be verified.');
     const { rows } = await database.query(
@@ -192,6 +244,10 @@ export async function telegramOfficeAction(input, options) {
     method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15_000),
     headers: { authorization: 'Bearer ' + key, 'content-type': 'application/json' }, body: '{}',
   }).catch(() => null))?.ok);
+  if (input.action === 'prepare-binding' && state.some(event =>
+    event.type === 'm.space.child' && event.state_key === target && event.content?.[telegramAccessRevoked] === true)) {
+    return fail('Telegram Agent access to this chat was revoked.');
+  }
   const privateOperation = ['prepare-binding', 'create-group', 'add-members', 'history'].includes(input.action);
   if (privateOperation && !await privateTelegramControl(client, options)) return fail('The private Telegram Bridge is unavailable.');
   if (['create-group', 'add-members', 'history'].includes(input.action)) {
@@ -372,7 +428,8 @@ export async function listenTelegramOffice(path, options, { privateLookups = fal
         }
         const input = JSON.parse(Buffer.concat(chunks).toString());
         const task = pending.then(async () => {
-          if (!privateLookups && ['resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history', 'status'].includes(input?.action)) {
+          if (!privateLookups && (adminActions.has(input?.action) ||
+              ['resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history', 'status'].includes(input?.action))) {
             return fail('Chat lookup is available in the private Telegram Agent room.');
           }
           return telegramOfficeAction(input, await options());

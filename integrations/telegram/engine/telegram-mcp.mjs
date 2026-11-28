@@ -7,6 +7,11 @@ const grant = process.env.CONSTELLATION_TELEGRAM_GRANT;
 if (!/^[a-f0-9]{64}$/u.test(grant ?? '')) throw new Error('Missing Telegram task grant');
 const server = new McpServer({ name: 'telegram-agent', version: '1.0.0' });
 const operations = {
+  resync_bridge: 'Request approval to refresh Telegram group discovery and linked rooms.',
+  revoke_chat_access: 'Request approval to revoke Telegram Agent access to the verified chat.',
+  disconnect_account: 'Request approval to disconnect the verified Telegram account.',
+  restart_bridge: 'Ask The Architect to obtain approval to restart Telegram Bridge.',
+
   bridge_status: 'Read the bridge account-link status without exposing identities, session data or credentials.',
   list_rooms: 'List the operator’s linked Telegram rooms and post the result in their private request.',
   resolve_chat: 'Resolve the contact or group named in the operator’s request.',

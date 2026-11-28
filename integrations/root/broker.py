@@ -204,7 +204,29 @@ def execute_plan(raw, state, identifier, *, run_script=execute_script):
         return 'completed', 0, {'findings': 'Digital twin queued. Use twin status ' + identifier + '.'}
     if kind == 'restart-service':
         from service_diagnostics import restart_service
-        return restart_service(state.parents[2], plan['target'], read_diagnostic_config)
+        data = state.parents[2]
+        if plan['target'] != 'telegram-bridge':
+            return restart_service(data, plan['target'], read_diagnostic_config)
+        connector = data / 'telegram/connector'
+        if not connector.is_dir():
+            return 'precondition_failed', None, None
+        guard = connector / 'bridge-restarting'
+        try:
+            with guard.open('x') as marker:
+                marker.write(identifier)
+        except FileExistsError:
+            return 'precondition_failed', None, {'findings': 'A Telegram Bridge restart still needs reconciliation.'}
+        try:
+            path = connector / 'telegram.sqlite3'
+            if path.is_file():
+                from contextlib import closing
+                with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=3)) as sqlite:
+                    # The connector observes the guard before starting any delivery.
+                    if sqlite.execute("SELECT 1 FROM draft WHERE state IN ('publishing','matrix_accepted','unknown')").fetchone():
+                        return 'precondition_failed', None, {'findings': 'Reconcile the in-flight Telegram delivery before restarting.'}
+            return restart_service(data, plan['target'], read_diagnostic_config)
+        finally:
+            guard.unlink()
     if kind in {'inspect-services', 'telegram-diagnostics'}:
         return inspect_services(state.parents[2], plan.get('target', 'telegram'), read_diagnostic_config,
                                 legacy=kind == 'telegram-diagnostics')
@@ -274,8 +296,12 @@ def verify_matrix_receipt(config, payload, fetch_event):
             payload['id'] != sha(source + ':' + payload['request'])[:32]):
         raise ValueError('Unexpected source or review room.')
     request = fetch_event(source, payload['request'])
+    telegram = '@telegram-agent:' + config['root'].split(':', 1)[1]
     if source == review and request.get('sender') not in {config['owner'], config.get('dot')}:
-        raise ValueError('Control Room requests require the operator or the configured Dot identity.')
+        if (request.get('sender') != telegram or telegram not in config.get('control_audience', ())
+                or payload['operation'] != REVIEWED_PLAN or
+                read_plan(payload['plan']) != {'kind': 'restart-service', 'target': 'telegram-bridge'}):
+            raise ValueError('The Control Room sender is not authorized for this operation.')
     proposal = fetch_event(review, payload['proposal'])
     poll = fetch_event(review, payload['poll'])
     vote = fetch_event(review, payload['decision'])

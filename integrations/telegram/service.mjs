@@ -7,6 +7,7 @@ import { TelegramStore, controlCommand, digest, pollStart, pollEnd, reviewAnswer
 import { bridgeAudit, matrixConnection, statusEvidence } from './matrix.mjs';
 import { draftWithInstance, runDelegatedWithInstance, summarizeWithInstance } from './acp.mjs';
 import { addressedRequest, controlThread, historyRange, isDirect, matrixLink, operatorNotice, resolveDestination, updateReply } from './control.mjs';
+import { createTelegramAdmin } from './admin.mjs';
 import { createTelegramDelegation, listenTelegramSocket } from './delegation.mjs';
 import { requestTelegramService } from '../../agents/connector/telegram-office.mjs';
 
@@ -25,6 +26,7 @@ const audit = bridgeAudit(settings);
 const [action, argument] = process.argv.slice(2);
 const matrix = await matrixConnection(settings, directory, { crypto: !action });
 const pausedFile = () => existsSync(join(directory, 'paused'));
+const bridgeRestarting = () => existsSync(join(directory, 'bridge-restarting'));
 const date = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Rome', dateStyle: 'short', timeStyle: 'long' });
 const pollText = 'org.matrix.msc1767.text';
 
@@ -208,6 +210,8 @@ async function run() {
       nextContext = now + 30_000;
     }
   }
+  const admin = settings.controlAudience && createTelegramAdmin({ store, settings, matrix, guide,
+    record: (id, result) => recordContext('telegram:admin_result', id, result) });
   const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom, officeFirst }, checkRoom, checkOffice,
     guide,
     getOfficeEvent: id => matrix.officeEvent(officeRoom, id),
@@ -232,7 +236,7 @@ async function run() {
     reactOffice: (...args) => matrix.react(officeRoom, ...args),
     clearOfficeReaction: (...args) => matrix.redact(officeRoom, ...args),
     runAgent: (grant, tool) => runDelegatedWithInstance(settings.engine, grant, tool),
-    getBinding, prepareBinding,
+    getBinding, prepareBinding, requestAdmin: admin?.request,
   });
   const sockets = delegation ? [await listenTelegramSocket(TELEGRAM_MCP_SOCKET, delegation.tool)] : [];
   if (delegation && TELEGRAM_HANDOFF_SOCKET) sockets.push(await listenTelegramSocket(TELEGRAM_HANDOFF_SOCKET, delegation.office));
@@ -291,6 +295,7 @@ async function run() {
       // Recover the mapping if Synapse accepted the poll before a process restart.
       const review = /^review-([a-f0-9-]{36})-([1-9][0-9]{0,4})$/u.exec(event.unsigned?.transaction_id);
       if (review) store.registerReview(review[1], Number(review[2]), event.event_id);
+      else admin?.rememberPoll(event);
     }
     if (initial || (room !== settings.controlRoom && !binding?.active)) return;
     if (binding && ['m.room.tombstone', 'm.room.encryption', 'm.room.join_rules'].includes(event.type)) {
@@ -308,6 +313,7 @@ async function run() {
       const command = controlCommand({ room, sender: event.sender, type: event.type, content: event.content, encrypted }, settings);
       // Authentication and bridge commands are for the bridge bot alone.
       if (typeof event.content?.body === 'string' && /^\s*!tg(?:\s|$)/iu.test(event.content.body)) return;
+      if (command && await admin?.accept(command, event)) return;
       if (command) {
         if ((!officeFirst || command.action === 'pause') && await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
       } else if (!await delegation?.direct(event)) {
@@ -613,7 +619,7 @@ async function run() {
 
   async function publish() {
     const draft = store.nextSend(Date.now());
-    if (!draft || pausedFile() || store.paused() || Date.now() - lastGood > 15_000) return;
+    if (!draft || bridgeRestarting() || pausedFile() || store.paused() || Date.now() - lastGood > 15_000) return;
     if (draft.control_event &&
         !(await matrix.verifyControl({ requireDot: store.controlRequiresDot(draft.control_event) }))) return store.stale(draft.id);
     const target = JSON.parse(draft.target);
@@ -629,7 +635,11 @@ async function run() {
       store.pause(draft.binding, 'portal_or_audience_changed');
       return;
     }
-    if (Date.now() - lastGood > 15_000 || pausedFile() || !store.prepareSend(draft.id, ciphertext, Date.now())) return;
+    if (Date.now() - lastGood > 15_000 || pausedFile() || bridgeRestarting() || !store.prepareSend(draft.id, ciphertext, Date.now())) return;
+    if (bridgeRestarting()) {
+      store.run("UPDATE draft SET state='ready', attempts=attempts-1 WHERE id=? AND state='publishing'", draft.id);
+      return;
+    }
     const started = performance.now();
     let timingOutcome = 'matrix_accepted';
     try {
@@ -689,6 +699,7 @@ async function run() {
         await notify(notice);
       }
       await closeReviewedPoll();
+      await admin?.tick();
       await publish();
       await publishControlResult(store.nextControl('ready', now));
       delegation?.settleDrafts();

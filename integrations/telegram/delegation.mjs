@@ -3,14 +3,15 @@ import { createServer } from 'node:http';
 import { chmod, unlink } from 'node:fs/promises';
 import { digest } from './policy.mjs';
 import { controlThread, matrixLink, operatorNotice } from './control.mjs';
-import { explicitTelegramRequest, matchTelegramName, telegramIntent, telegramMention, telegramTaskPayload } from '../../agents/connector/telegram-intent.mjs';
+import { explicitTelegramRequest, isTelegramAdmin, matchTelegramName, telegramIntent, telegramMention, telegramTaskPayload } from '../../agents/connector/telegram-intent.mjs';
 import { telegramHandoffKey, telegramReceiptKey, telegramTaskStatus, telegramTerminal } from '../../agents/connector/telegram-office.mjs';
 
 const dotPlanKey = 'net.matrix_agents.dot_plan';
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
 const peerId = /^(?:user|chat|channel):[1-9][0-9]{0,18}$/u;
 const jobAge = 15 * 60_000;
-const toolFor = { status: 'bridge_status', list: 'list_rooms', lookup: 'resolve_chat', open: 'open_room', unlink: 'unlink_room',
+const toolFor = { resync: 'resync_bridge', revoke: 'revoke_chat_access', disconnect: 'disconnect_account',
+  restart: 'restart_bridge', status: 'bridge_status', list: 'list_rooms', lookup: 'resolve_chat', open: 'open_room', unlink: 'unlink_room',
   draft: 'prepare_draft', send: 'send_message', read: 'read_recent', create_group: 'create_group', add_members: 'add_members' };
 const status = { completed: { status: 'completed' }, blocked: { status: 'blocked' } };
 
@@ -76,7 +77,7 @@ function candidates(rooms, scope) {
 }
 
 export function createTelegramDelegation({ store, settings, checkRoom, checkOffice, guide, post, postOffice,
-  reactOffice, clearOfficeReaction, runAgent, getBinding, prepareBinding, getOfficeEvent, recordOffice, now = Date.now }) {
+  reactOffice, clearOfficeReaction, runAgent, getBinding, prepareBinding, getOfficeEvent, recordOffice, requestAdmin, now = Date.now }) {
   store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_task (
     id TEXT PRIMARY KEY, office INTEGER NOT NULL, created INTEGER NOT NULL, fingerprint TEXT NOT NULL,
     thread TEXT, intent TEXT, phase TEXT NOT NULL DEFAULT 'queued', selection TEXT, feedback TEXT,
@@ -325,6 +326,11 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     return { matches: candidates(result.rooms, scope) };
   }
   async function perform(row, scope, tool) {
+    if (isTelegramAdmin(scope.action)) {
+      const result = row.office ? { message: 'Request Telegram administration in Control Room.' } :
+        await requestAdmin?.(row, scope);
+      return feedback(row, result?.message ?? 'Telegram administration is unavailable.', result?.ok ? 'completed' : 'blocked');
+    }
     if (tool === 'bridge_status') {
       const result = await guide({ id: row.id, action: 'status' });
       return feedback(row, result?.message ?? 'Telegram Bridge status is unavailable.', result?.ok ? 'completed' : 'blocked');

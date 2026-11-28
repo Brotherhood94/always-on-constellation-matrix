@@ -15,7 +15,7 @@ import { readEncryptedRoomMessage } from '../../agents/connector/matrix-session.
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from '../../agents/connector/context.mjs';
 import { agentTurnKey, auditRecord, diagnosticReceipt, diagnosticThreadRelation, digest, eventId, executionCause, resultHandoff,
   maintenanceProposal, maintenanceReleaseOperation, matrixLink, pollChoice, pollDecision, pollEnd, pollStart, pollText, pollVote, privateReview, proposal, requestText,
-  ProposalError, repositoryIntent, reviewedPlanOperation, reviewedScriptOperation, reviewBody, reviewWindow, sourceTurn, submittedProposal, serviceDiagnosticProposal, twinProposal, twinRequest, validateDiagnosticReview } from './protocol.mjs';
+  ProposalError, repositoryIntent, reviewedPlanOperation, reviewedScriptOperation, reviewBody, reviewWindow, sourceTurn, submittedProposal, serviceDiagnosticProposal, telegramRestartProposal, telegramRestartRequest, telegramRestartSource, twinProposal, twinRequest, validateDiagnosticReview } from './protocol.mjs';
 
 const state = '/state';
 const readiness = state + '/synced';
@@ -191,7 +191,12 @@ async function dispatch(room, raw) {
   const direct = room === audit;
   const requestedByDot = direct && config.control_audience && raw.sender === config.dot &&
     /^[a-z0-9_-]{8,80}$/iu.test(event.content?.['net.matrix_agents.control_request']?.request_id ?? '');
-  if (direct && ((!requestedByDot && raw.sender !== owner) || !await canReview())) return;
+  const telegramAgent = '@telegram-agent' + root.slice(root.indexOf(':'));
+  const restartSource = direct && config.control_audience?.includes(telegramAgent) && raw.sender === telegramAgent &&
+    telegramRestartRequest(event, config);
+  const verifiedRestart = restartSource && telegramRestartSource(
+    await readEncryptedRoomMessage(client, room, restartSource), config);
+  if (direct && ((!requestedByDot && !verifiedRestart && raw.sender !== owner) || !await canReview())) return;
   if (!direct && (room !== agents || !(await client.getJoinedRoomMembers(agents)).includes(raw.sender))) return;
   const maximumBytes = raw.sender === owner ? 3600 : 1800;
   const relates = event.content?.['m.relates_to'];
@@ -271,7 +276,8 @@ function precedingDiagnosis(task) {
 async function planNext(task) {
   let stage = 'proposal-format';
   try {
-    let result = submittedProposal(task.body) ?? serviceDiagnosticProposal(task.body);
+    const bridgeRestart = task.room === audit && task.sender === '@telegram-agent' + root.slice(root.indexOf(':'));
+    let result = bridgeRestart ? telegramRestartProposal() : submittedProposal(task.body) ?? serviceDiagnosticProposal(task.body);
     const twin = !result && process.env.ARCHITECT_EXECUTOR_SOCKET && twinRequest(task.body);
     if (twin) {
       if (task.sender !== owner || task.room !== audit) throw new ProposalError('Select the twin profile in Control Room.');
@@ -459,20 +465,22 @@ async function sendPollEvent(type, transaction, content) {
 }
 
 async function publishPoll(task) {
+  const bridgeRestart = task.room === audit && task.sender.startsWith('@telegram-agent:');
   db.prepare('INSERT OR IGNORE INTO review_polls (id,proposal_transaction) VALUES (?,?)')
     .run(task.id, digest('proposal:' + task.id));
   const { impact } = JSON.parse(task.review_details);
   const question = `${task.summary}\n${impact}\nHost: ${host} · Review the exact operation before voting.\n` +
     `SHA-256 ${task.hash}\n${matrixLink(audit, task.proposal_event)}`;
   const event = await sendPollEvent(pollStart, 'root-review-' + task.id, {
+    ...(bridgeRestart && { ...diagnosticThreadRelation(task.source_thread, task.proposal_event), 'm.mentions': { user_ids: [owner] } }),
     [pollText]: question,
     [pollStart]: {
       kind: 'org.matrix.msc3381.poll.disclosed',
       max_selections: 1,
       question: { [pollText]: question },
       answers: [
-        { id: pollChoice(task, 'approve'), [pollText]: 'Accept' },
-        { id: pollChoice(task, 'reject'), [pollText]: 'Reject' },
+        { id: pollChoice(task, 'approve'), [pollText]: bridgeRestart ? '✅ Accept' : 'Accept' },
+        { id: pollChoice(task, 'reject'), [pollText]: bridgeRestart ? '❌ Decline' : 'Reject' },
       ],
     },
   });
@@ -527,7 +535,8 @@ async function deliverAudit(task) {
   const body = fields.map(([label, value]) => `${label} · ${value}`).join('\n');
   const formatted = fields.map(([label, value]) => `<strong>${label}</strong> · ${html(value).replaceAll('\n', '<br>')}`).join('<br>');
   const linkLabel = task.proposal_event ? 'Review details' : 'Source request';
-  const parent = precedingDiagnosis(task) ? task.source_thread : undefined;
+  const bridgeRestart = task.room === audit && task.sender === '@telegram-agent' + root.slice(root.indexOf(':'));
+  const parent = bridgeRestart || precedingDiagnosis(task) ? task.source_thread : undefined;
   const event = await say('audit:' + task.id, `${decision}${actor}\n${body}\nOperation ${task.id}\n${link}`,
     `<strong>${html(decision)}</strong>${html(actor)}<br>${formatted}<br>` +
     `Operation <code>${task.id}</code><br><a href="${link}">${linkLabel}</a>`, undefined, parent, task.event);

@@ -60,7 +60,7 @@ Enabling **Telegram** installs **Telegram Agent** automatically. Telegram Agent 
 ### Finish in Element
 
 - **Agents → Control Room → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Agents → Control Room → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Telegram Agent verifies the destination and reports the result in the originating thread. Use a draft request to preview a message. [Telegram setup and examples](docs/telegram.md)
+- **Agents → Control Room → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Telegram Agent verifies the destination and reports the result in the originating thread. Use a draft request to preview a message. In Control Room, mention Telegram Agent to check the bridge or request an approved administration operation. [Telegram setup and examples](docs/telegram.md)
 
 ### Send your first task
 

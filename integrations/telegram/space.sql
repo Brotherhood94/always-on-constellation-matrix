@@ -24,4 +24,9 @@ SELECT user_mxid AS owner, count(*) AS linked_accounts
 FROM user_login WHERE bridge_id='' GROUP BY user_mxid;
 REVOKE ALL ON telegram_space_login_status FROM PUBLIC;
 GRANT SELECT ON telegram_space_login_status TO matrix_telegram_space;
+CREATE OR REPLACE VIEW telegram_space_admin_login AS
+SELECT user_mxid AS owner, id::text AS login, xmin::text AS revision
+FROM user_login WHERE bridge_id='';
+REVOKE ALL ON telegram_space_admin_login FROM PUBLIC;
+GRANT SELECT ON telegram_space_admin_login TO matrix_telegram_space;
 COMMIT;

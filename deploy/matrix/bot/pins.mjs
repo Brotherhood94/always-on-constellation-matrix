@@ -88,7 +88,7 @@ function dotGuide({ command, systemd, dotTunnelSupported = systemd }) {
   ]);
 }
 
-function telegramGuide(command, legacy) {
+function telegramGuide(command, legacy, administration = false) {
   const operatorCommand = command.replace(/^sudo /u, '');
   return message('Set up Telegram', [
     ['Connect or reconnect your Telegram account', [
@@ -106,6 +106,12 @@ function telegramGuide(command, legacy) {
       'Telegram: summarize what I missed today in Project Room.',
       'Use “prepare a draft” for a preview. An explicit send goes to the verified chat when the match is clear. Contacts and groups appear under Telegram → People.',
     ]],
+    ...(administration ? [['Manage Telegram Bridge', [
+      'Mention @Telegram Agent in Control Room and send one request.',
+      'Telegram status · Telegram: resync groups · Telegram: restart bridge',
+      'Telegram: revoke access to Project Room · Telegram: disconnect account',
+      'Vote in Element to approve or decline a change. The Architect reviews bridge restarts.',
+    ]]] : []),
     ...(legacy ? [['Earlier requests', [{ label: 'Open the archived Telegram Agent history',
       url: 'https://matrix.to/#/' + encodeURIComponent(legacy) }]]] : []),
   ]);
@@ -202,7 +208,7 @@ export function reconcilePins(matrix, links, state, options = {}) {
       .map(([key, { label, url }]) => [key, `${label} — ${url}`]) },
     { key: 'dot-setup', content: options.dot ? dotGuide(options) : null, entries: [['dot-setup', 'Connect Dot']] },
     { key: 'telegram-setup',
-      content: links.telegramInControlRoom ? telegramGuide(options.command, archive && decodeURIComponent(new URL(archive).hash.slice(2))) : null,
+      content: links.telegramInControlRoom ? telegramGuide(options.command, archive && decodeURIComponent(new URL(archive).hash.slice(2)), true) : null,
       entries: [['telegram-setup', 'Set up Telegram']] },
   ], state, { refreshDevices: false });
 }

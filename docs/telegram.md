@@ -33,6 +33,20 @@ Group creation uses Telegram’s standard group type and needs at least one part
 
 Ask “Dot, ask Task Manager in Office to send a Telegram message to Project Room saying «Hello»” or “Dot, summarize what happened today in Project Room on Telegram through Office.” Dot uses `publish_telegram_task` and reads its own result with `get_task`. Telegram Agent tags Dot in the original Office thread. Office members can read summaries posted in the room. Requests made in Control Room receive their summary there. To skip Task Manager for an explicit task, ask Dot to address Telegram Agent directly.
 
+## Administer Telegram from Control Room
+
+Use Element’s mention picker to select **@Telegram Agent** in **Agents → Control Room**. Send one request:
+
+- `Telegram status` checks whether the bridge has a linked account.
+- `Telegram: resync groups` refreshes Telegram group discovery and reconciles linked rooms.
+- `Telegram: revoke access to Project Room` removes the agent from one verified chat and pauses its binding. The operator keeps the original chat in **Telegram → People**.
+- `Telegram: disconnect account` logs out the one verified linked account. Use `./constellation_matrix telegram setup` on the VPS to link it again.
+- `Telegram: restart bridge` asks The Architect to prepare a restart of the Telegram Bridge service.
+
+Vote **Accept** or **Decline** in the encrypted poll. The first operator vote is final. A restart uses The Architect’s approval poll. A Telegram action with an uncertain result needs reconciliation before another attempt.
+
+If Dot is connected, ask it to request the same action in Control Room. Cast your vote in Element.
+
 ## Get the Telegram API credentials
 
 1. Sign in with your phone number and the confirmation code Telegram sends to your account. [Telegram API development tools](https://my.telegram.org/apps)

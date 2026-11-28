@@ -76,6 +76,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     const child = await request('GET', `${route(space)}/state/m.space.child/${encodeURIComponent(room)}`).catch(error => {
       if (error.status !== 404 || error.code !== 'M_NOT_FOUND') throw error;
     });
+    if (child?.['org.matrixconstellation.telegram.access_revoked'] === true) return true;
     return config.bridgeControl ? !child?.via?.length : child !== undefined && !child.via?.length;
   }
 
