@@ -1002,7 +1002,7 @@ def install(data, args, *, entered=None):
         sync_workshop(settings, data, registry)
         if settings.get('maintenance') and registry['agents'].get('the-architect', {}).get('active'):
             from maintenance_setup import initialize
-            initialize(data, settings, registry)
+            initialize(data, settings, registry, update_base=True)
         active = [key for key in local_agents if registry['agents'][key]['active']]
         up(data, *active, *(['helper-dm'] if 'helper' in active else []))
         publish_inventory(settings, data, registry)

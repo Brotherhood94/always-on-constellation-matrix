@@ -8,12 +8,12 @@ from repository_maintenance import Maintenance, ordinary
 from setup_guide import interactive_terminal
 
 
-def initialize(data, settings, registry):
+def initialize(data, settings, registry, *, update_base=False):
     if not (settings['systemd'] or settings.get('control_runtime')):
         raise ValueError('The Architect maintenance requires the deployment approval broker.')
     candidates = settings.get('maintenance_restart_services', [])
     maintenance = Maintenance(data)
-    maintenance.initialize(SOURCE, settings['project'], candidates, registry)
+    maintenance.initialize(SOURCE, settings['project'], candidates, registry, update_base=update_base)
     config_path = data / 'state/the-architect/config.json'
     config = load(config_path)
     save(config_path, {**config, 'maintenance': True}, mode=0o444)

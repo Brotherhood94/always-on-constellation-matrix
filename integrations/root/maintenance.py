@@ -173,7 +173,7 @@ class Maintenance:
     def active(self):
         return read(self.root / 'active.json')
 
-    def initialize(self, source, project, allow, registry):
+    def initialize(self, source, project, allow, registry, *, update_base=False):
         if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', project):
             raise ValueError('Use a valid Compose project for maintenance.')
         if not (self.root / 'policy.json').exists() and any(not ordinary(key, registry, require_active=False) for key in allow):
@@ -181,7 +181,10 @@ class Maintenance:
         for name in (self.root, self.drafts, self.releases, self.jobs):
             name.mkdir(mode=0o711 if name in (self.root, self.drafts) else 0o700, exist_ok=True)
         base_path = self.root / 'active.json'
-        if not base_path.exists():
+        active = self.active() if base_path.exists() else None
+        use_checkout = active is None or (update_base and not active['images'] and not active['dashboard']
+                                          and not self.incomplete_releases())
+        if use_checkout:
             export = self.releases / 'initial'
             if export.exists():
                 shutil.rmtree(export)
@@ -199,7 +202,7 @@ class Maintenance:
             prior = self.config()
             trusted, tag = prior['base_id'], prior['base_image']
         atomic(self.root / 'policy.json', {'project': project, 'restart': sorted(set(allow)), 'base_image': tag, 'base_id': trusted})
-        if not base_path.exists():
+        if use_checkout:
             atomic(base_path, {'revision': revision, 'images': {}, 'dashboard': None})
         self.dashboard(self.active())
 

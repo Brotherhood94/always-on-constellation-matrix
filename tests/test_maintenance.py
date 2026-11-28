@@ -5,6 +5,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integrations/root'))
 from maintenance import Maintenance, atomic, read
@@ -49,6 +50,25 @@ class Fixtures(unittest.TestCase):
         (release / 'protected').mkdir()
         (release / 'protected/root.py').write_text('original\n')
         instance.dashboard(instance.active())
+
+    def test_install_upgrade_updates_clean_maintenance_base_and_preserves_approved_releases(self):
+        service = self.maintenance
+        revision = '0' * 40
+        def checkout(_source, target, **_):
+            dashboard = target / 'dashboard'
+            dashboard.mkdir()
+            for name in ('index.html', 'dashboard.css', 'dashboard.mjs', 'connections.mjs'):
+                (dashboard / name).write_text('updated ' + name)
+            return revision
+        with patch('maintenance.exported_checkout', side_effect=checkout) as export:
+            service.initialize(ROOT, PROJECT, ['coder'], self.registry, update_base=True)
+            self.assertEqual(service.active()['revision'], revision)
+            self.assertEqual((self.data / 'dashboard/index.html').read_text(), 'updated index.html')
+            prior = {**service.active(), 'images': {'coder': 'fixture:active-release'}}
+            atomic(service.root / 'active.json', prior)
+            service.initialize(ROOT, PROJECT, ['coder'], self.registry, update_base=True)
+            self.assertEqual(service.active(), prior)
+            export.assert_called_once()
 
     def docker(self, *args, **kwargs):
         self.calls.append(args)
