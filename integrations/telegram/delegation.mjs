@@ -77,7 +77,8 @@ function candidates(rooms, scope) {
 }
 
 export function createTelegramDelegation({ store, settings, checkRoom, checkOffice, guide, post, postOffice,
-  reactOffice, clearOfficeReaction, runAgent, getBinding, prepareBinding, getOfficeEvent, recordOffice, requestAdmin, now = Date.now }) {
+  reactOffice, clearOfficeReaction, runAgent, getBinding, prepareBinding, getOfficeEvent, recordOffice, requestAdmin,
+  isPaused = () => store.paused(), now = Date.now }) {
   store.db.exec(`CREATE TABLE IF NOT EXISTS telegram_task (
     id TEXT PRIMARY KEY, office INTEGER NOT NULL, created INTEGER NOT NULL, fingerprint TEXT NOT NULL,
     thread TEXT, intent TEXT, phase TEXT NOT NULL DEFAULT 'queued', selection TEXT, feedback TEXT,
@@ -150,13 +151,16 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       const row = load(input.id);
       if (row?.office) return receipt(row);
       const waiting = officeFlow && store.get('SELECT created FROM telegram_handoff_queue WHERE request=?', input.id);
+      if (isPaused()) return { status: 'blocked', reason: 'paused' };
       if (!waiting) return { status: 'missing' };
       return waiting.created + jobAge < now() ? { status: 'blocked' } : { status: 'pending', office: true };
     }
-    if (input.method !== 'submit' || !await checkOffice() || !await checkRoom()) return { status: 'unavailable' };
+    if (input.method !== 'submit' || !await checkOffice()) return { status: 'unavailable' };
+    const existing = load(input.id);
+    if (officeFlow && existing?.office) return receipt(existing);
+    if (isPaused()) return { status: 'blocked', reason: 'paused' };
+    if (!await checkRoom()) return { status: 'unavailable' };
     if (officeFlow) {
-      const existing = load(input.id);
-      if (existing?.office) return receipt(existing);
       if (eventId.test(input.handoff ?? '')) {
         store.run('INSERT OR IGNORE INTO telegram_handoff_queue VALUES (?,?,?,?,?)',
           input.id, input.handoff, input.actor, now(), now());

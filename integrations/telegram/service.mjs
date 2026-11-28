@@ -77,7 +77,10 @@ if (action) {
       if (pausedFile()) throw new Error('Remove the external pause only after reconciling delivery.');
       if (!matrix.tokenHash || matrix.tokenHash !== store.setting('identity')) throw new Error('Verify the original Matrix identity.');
       if (!(await matrix.verifyControl())) throw new Error('Control is not ready.');
-      store.set('paused', false);
+      store.atomic(() => {
+        store.set('paused', false);
+        store.run("DELETE FROM settings WHERE key='pause_reason'");
+      });
       console.log('Global pause cleared. Individual bindings must be revalidated.');
     } else if (action === 'probe') {
       const fixture = [{ author: 'remote', body: 'Connectivity test only. Answer with TELEGRAM_READY.' }];
@@ -88,7 +91,8 @@ if (action) {
       await writeFile(join(directory, 'backend-verified'), settings.engine.revision, { mode: 0o600 });
       console.log('Telegram backend generated a synthetic draft and loaded its saved ACP session.');
     } else if (action === 'report') {
-      console.log(JSON.stringify({ paused: store.paused() || pausedFile(), bindings: store.bindings().map(row => ({
+      console.log(JSON.stringify({ paused: store.paused() || pausedFile(),
+        pauseReason: pausedFile() ? 'external_pause' : store.setting('pause_reason') ?? null, bindings: store.bindings().map(row => ({
         id: row.id, mode: row.mode, enabled: Boolean(row.active), generation: row.generation,
         ...(row.active ? {} : { pauseReason: store.setting('pause_reason:' + row.id) ?? null }),
       })), lastSync: store.setting('last_sync') ?? null,
@@ -142,7 +146,8 @@ async function run() {
       store.set('office_first_enabled', 'true');
     });
   }
-  const checkRoom = () => !pausedFile() && !store.paused() && matrix.verifyControl();
+  const isPaused = () => pausedFile() || store.paused();
+  const checkRoom = () => !isPaused() && matrix.verifyControl();
   async function checkOffice() {
     if (!officeRoom || officeRoom === settings.controlRoom || officeRoom === settings.space) return false;
     const state = await matrix.liveState(officeRoom).catch(error => {
@@ -236,7 +241,7 @@ async function run() {
     reactOffice: (...args) => matrix.react(officeRoom, ...args),
     clearOfficeReaction: (...args) => matrix.redact(officeRoom, ...args),
     runAgent: (grant, tool) => runDelegatedWithInstance(settings.engine, grant, tool),
-    getBinding, prepareBinding, requestAdmin: admin?.request,
+    getBinding, prepareBinding, requestAdmin: admin?.request, isPaused,
   });
   const sockets = delegation ? [await listenTelegramSocket(TELEGRAM_MCP_SOCKET, delegation.tool)] : [];
   if (delegation && TELEGRAM_HANDOFF_SOCKET) sockets.push(await listenTelegramSocket(TELEGRAM_HANDOFF_SOCKET, delegation.office));
@@ -350,7 +355,7 @@ async function run() {
   async function handleSync() {
     const previous = store.setting('sync');
     const bindRequest = store.setting('bind_sync_request');
-    const batch = await matrix.sync(previous);
+    const batch = await matrix.sync(previous, 1_000, isPaused() ? 'offline' : 'online');
     if (typeof batch.next_batch !== 'string' || !batch.next_batch) throw new Error('Missing Matrix sync cursor.');
     for (const binding of store.bindings()) {
       if (binding.active) {

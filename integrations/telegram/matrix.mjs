@@ -122,9 +122,9 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     return { events, unreadable, complete };
   }
 
-  async function sync(since, timeout = 1_000) {
+  async function sync(since, timeout = 1_000, presence = 'offline') {
     const filter = { room: { timeline: { limit: 100 } }, presence: { types: [] } };
-    const params = new URLSearchParams({ filter: JSON.stringify(filter), timeout: String(timeout), set_presence: 'offline' });
+    const params = new URLSearchParams({ filter: JSON.stringify(filter), timeout: String(timeout), set_presence: presence });
     if (since) params.set('since', since);
     return request('GET', `/_matrix/client/v3/sync?${params}`, undefined, 12_000);
   }

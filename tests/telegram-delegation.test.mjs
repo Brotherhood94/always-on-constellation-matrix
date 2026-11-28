@@ -82,6 +82,7 @@ function fixture({ officeFirst = false, controlAudience } = {}) {
   const settings = { domain, owner, agent, officeRoom, controlRoom, officeFirst, controlAudience };
   const options = { store, settings, now: () => clock, checkRoom: async () => true,
     checkOffice: async () => true,
+    isPaused: () => store.paused(),
     getOfficeEvent: async id => originalEvents.get(id),
     getBinding: async () => binding,
     prepareBinding: async (destination, id) => {
@@ -439,6 +440,30 @@ test('the Office handoff verifies the original sender and queues an exact send w
   assert.equal(JSON.parse(work[0].payload).text, 'domani sarà una bella giornata');
   assert.equal(f.store.all('SELECT event FROM draft_review').length, 0);
   assert.equal(f.messages.size, 0);
+});
+
+test('an Office handoff separates the Telegram Agent routing words from the exact recipient and message', async () => {
+  const f = fixture({ officeFirst: true });
+  const text = 'manda un messaggio a @SampleContact su Telegram con telegram agent con scritto "hello fixture!"';
+  const id = '$office-with-telegram-agent';
+  assert.equal(await f.broker().receiveOffice(officeHandoff(f, id, text)), true);
+  const row = f.store.get('SELECT intent FROM telegram_task WHERE id=?', id);
+  assert.deepEqual(JSON.parse(row.intent), { action: 'send', target: '@SampleContact', type: 'direct', text: 'hello fixture!' });
+  assert.equal(telegramIntent('Telegram: scrivi a @SampleContact and @OtherContact «hello»', { office: true }), null);
+});
+
+test('the handoff socket returns a terminal pause reason and queues nothing while Telegram is paused', async () => {
+  const f = fixture({ officeFirst: true });
+  const id = '$office-paused';
+  const handoff = officeHandoff(f, id, 'Telegram: send a message to Sam Example saying Hello.');
+  f.store.pause();
+  const request = { ...caller, id, handoff: handoff.event_id };
+  for (const method of ['submit', 'status']) {
+    assert.deepEqual(telegramReceipt(await f.broker().office({ ...request, method })),
+      { status: 'blocked', reason: 'paused' });
+  }
+  assert.equal(f.store.get('SELECT count(*) AS count FROM telegram_handoff_queue').count, 0);
+  assert.deepEqual(f.effects, []);
 });
 
 test('a Dot read reports its result in the original Office thread with a real Dot mention', async () => {

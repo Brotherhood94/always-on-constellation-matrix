@@ -17,7 +17,7 @@ import { describeTurnFailure, runTurn } from './acp.mjs';
 import { activityReaction, outcomeReaction, replyLimit } from './office-policy.mjs';
 import { assignmentEvidence, executionEvidence, writeExecutionEvidence } from './context.mjs';
 import { requestTelegramOffice, requestTelegramService, telegramOfficeCommand, telegramOfficeHelp, telegramReceipt,
-  telegramHandoffKey, telegramReceiptKey, telegramTaskStatus, telegramTerminal } from './telegram-office.mjs';
+  telegramHandoffKey, telegramPausedNotice, telegramReceiptKey, telegramTaskStatus, telegramTerminal } from './telegram-office.mjs';
 import { helperIdentity, supportEvidence } from './helper-support.mjs';
 import { staffingOutcome, staffingReceipt, staffingReceiptKey, verifyStaffingHandoff } from './staffing-office.mjs';
 
@@ -391,9 +391,10 @@ async function delegateTelegram(client, event, request) {
     executionEvidence({ roomId, actor: userId, event, sent: handoff, target: specialist.id, flow: 'dispatch', policyRevision: snapshot?.policyRevision });
   if (dispatched) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(handoff, JSON.stringify(dispatched));
   const result = handoff ? await telegramRequest(event.id, 'submit', { ...request, handoff }) : { status: 'unavailable' };
-  if (!handoff && !Object.hasOwn(telegramTaskStatus, result.status)) {
+  if (result?.reason === 'paused' || !Object.hasOwn(telegramTaskStatus, result?.status)) {
     const sent = await sendEncrypted(client, roomId, reactionTransaction('telegram-unavailable', event.id), {
-      msgtype: 'm.text', body: 'Telegram Agent is unavailable. Check its setup or service and retry.',
+      msgtype: 'm.text', body: result?.reason === 'paused' ? telegramPausedNotice :
+        'Telegram Agent could not confirm the handoff. Check its service and the delivery status before retrying.',
       [telegramReceiptKey]: { status: 'blocked' },
       'm.relates_to': threadRelation(event),
     });
@@ -431,7 +432,7 @@ async function pollTelegram(client) {
     store.telegramProgress(row.id, 'pending', Date.now());
   }
   if (result.status === (row.status ?? 'pending')) return;
-  const sent = await post(result.status, telegramTaskStatus[result.status]);
+  const sent = await post(result.status, result.reason === 'paused' ? telegramPausedNotice : telegramTaskStatus[result.status]);
   if (telegramTerminal(result.status)) {
     const status = result.status === 'declined' ? 'blocked' : result.status;
     store.finishTelegram(row.id, outcomeReaction[status], evidence(sent, { flow: 'return', status }));

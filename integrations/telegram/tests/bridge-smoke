@@ -528,6 +528,14 @@ async function castVote(device, draft, action, transaction) {
 }
 try {
   await waitFor(() => store.setting('last_sync'), 'the connector to sync');
+  const presencePath = '/presence/' + encodeURIComponent(agent.user_id) + '/status';
+  const presence = () => api(presencePath, undefined, agent.access_token, 'GET');
+  await waitFor(async () => (await presence()).presence === 'online', 'Telegram Agent to appear online');
+  store.set('paused', true);
+  await waitFor(async () => (await presence()).presence === 'offline', 'paused Telegram Agent to appear offline');
+  store.set('paused', false);
+  await waitFor(async () => (await presence()).presence === 'online', 'resumed Telegram Agent to appear online');
+  console.log('Matrix presence follows the Telegram connector’s readiness and pause state.');
   if (!process.env.TELEGRAM_OFFICE_ONLY) {
   worker.kill('SIGSTOP');
   binder = spawn(process.execPath, ['/app/service.mjs', 'bind', 'binding-pilot.json'], {stdio:'inherit'});

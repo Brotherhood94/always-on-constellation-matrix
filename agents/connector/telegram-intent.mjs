@@ -40,6 +40,7 @@ function destination(value, type) {
     if (type === 'group') return null;
     target = 'user:' + target;
   }
+  if (target.startsWith('@') && !/^@[a-z0-9_]{4,32}$/iu.test(target)) return null;
   if (/^@|^user:/u.test(target)) {
     if (type === 'group') return null;
     type = 'direct';
@@ -141,7 +142,7 @@ export function telegramIntent(body, { office = false } = {}) {
     const text = exact[1] ?? exact[2] ?? exact[3];
     return dest?.type === 'direct' && text.trim() && Buffer.byteLength(text) <= 3500 ? { action: 'send', ...dest, text } : null;
   }
-  const draft = /^(?<verb>prepare|draft|send|write|prepara|scrivi|invia|manda)(?:\s+(?:a|an|un|una))?\s+(?:(?<private>private|privat[oa])\s+)?(?:(?:telegram\s+)?(?:message|messaggio|bozza|draft)(?:\s+(?<privateAfter>privat[oa]|private))?\s+)?(?:to|for|ad?|per|nel)\s+(?<target>[^\r\n]{1,130}?)(?:\s+(?:on|su) telegram)?(?:(?:\s+(?:saying|that says|dicendo|che dice|che)|\s*:\s+)\s*(?<text>[\s\S]+)|\s+(?:(?:con il testo(?: esatto)?|with (?:the )?(?:exact )?text)\s+)?(?<literal>["“«][\s\S]+))$/iu.exec(input);
+  const draft = /^(?<verb>prepare|draft|send|write|prepara|scrivi|invia|manda)(?:\s+(?:a|an|un|una))?\s+(?:(?<private>private|privat[oa])\s+)?(?:(?:telegram\s+)?(?:message|messaggio|bozza|draft)(?:\s+(?<privateAfter>privat[oa]|private))?\s+)?(?:to|for|ad?|per|nel)\s+(?<target>[^\r\n]{1,130}?)(?:\s+(?:on|su|via) telegram)?(?:\s+(?:using|via|through|con|tramite|usando)\s+(?:the |il )?telegram\s+(?:agent|agente))?(?:(?:\s+(?:saying|that says|dicendo|che dice|che)|\s*:\s+)\s*(?<text>[\s\S]+)|\s+(?:(?:con (?:il testo(?: esatto)?|scritto)|with (?:the )?(?:exact )?text)\s+)?(?<literal>["“«][\s\S]+))$/iu.exec(input);
   if (draft) {
     const { verb, target, text, literal } = draft.groups;
     if (office && !explicitChannel && !/\btelegram\b/iu.test(input.slice(0, -(text ?? literal).length))) return null;

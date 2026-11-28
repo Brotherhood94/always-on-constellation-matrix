@@ -195,6 +195,7 @@ export class TelegramStore {
     this.atomic(() => {
       if (!id) {
         this.set('paused', true);
+        this.set('pause_reason', reason);
         this.run("UPDATE control_request SET status='cancelled', payload=NULL, result=NULL WHERE status IN ('queued','ready')");
       }
       for (const item of id ? this.bindings().filter(row => row.id === id) : this.bindings()) {

@@ -49,6 +49,7 @@ export const telegramTaskStatus = {
 };
 
 export const telegramTerminal = status => ['completed', 'blocked', 'declined'].includes(status);
+export const telegramPausedNotice = 'Telegram is paused. Review its delivery status on the VPS and resume Telegram before retrying.';
 
 export const telegramHandoffKey = 'org.matrixconstellation.telegram.handoff';
 export const telegramReceiptKey = 'org.matrixconstellation.telegram.receipt';
@@ -56,6 +57,7 @@ const privateTelegramLink = /^https:\/\/matrix\.to\/#\/(?:%21|!)[A-Za-z0-9_.:%-]
 
 export function telegramReceipt(result) {
   if (!result || !Object.hasOwn(telegramTaskStatus, result.status)) return null;
+  if (result.status === 'blocked' && result.reason === 'paused') return { status: 'blocked', reason: 'paused' };
   if (result.office === true) return { status: result.status, office: true,
     ...(result.status === 'unconfirmed' && result.terminal === true && { terminal: true }) };
   if (typeof result.link === 'string' && privateTelegramLink.test(result.link)) return { status: result.status, link: result.link };

@@ -47,6 +47,8 @@ Vote **Accept** or **Decline** in the encrypted poll. The first operator vote is
 
 If Dot is connected, ask it to request the same action in Control Room. Cast your vote in Element.
 
+If an Office reply reports that Telegram is paused, run `./constellation_matrix telegram report` on the VPS to check pending deliveries. After reconciling any uncertain deliveries, run `./constellation_matrix telegram resume` to clear the global pause. A separately paused binding still needs verification before it can send.
+
 ## Get the Telegram API credentials
 
 1. Sign in with your phone number and the confirmation code Telegram sends to your account. [Telegram API development tools](https://my.telegram.org/apps)
