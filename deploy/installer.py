@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install and operate a private Matrix Constellation deployment."""
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 import fcntl
 from hashlib import sha256
@@ -46,6 +46,8 @@ RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'person
             'telegram-agent', 'telegrambot', 'hiring-provider', 'roster-inviter', 'root', 'the-architect-ops', 'helper-dm'}
 TELEGRAM_AGENT = 'telegram-agent'
 LEGACY_CONNECTION = 'chatgpt-codex'
+# Bump when an existing workspace needs operator-authenticated Matrix changes.
+MATRIX_LAYOUT_VERSION = 1
 PORTS = {'matrix_port': 18008, 'dashboard_https_port': 8443, 'neo4j_port': 17474,
          'neo4j_https_port': 8444, 'bolt_port': 17688, 'bolt_https_port': 17687,
          'context_port': 18081, 'context_https_port': 8445, 'hiring_port': 18792}
@@ -282,9 +284,10 @@ def compose(data, *args, **kwargs):
     return run('docker', 'compose', '--project-directory', str(data), *args, **kwargs)
 
 
-def up(data, *services):
+def up(data, *services, recreate=False):
     if services:
-        compose(data, '--profile', 'agents', 'up', '-d', '--wait', '--wait-timeout', '150', *services)
+        compose(data, '--profile', 'agents', 'up', '-d', '--wait', '--wait-timeout', '150',
+                *(['--force-recreate'] if recreate else []), *services)
 
 
 def refresh_context(data, *, retire=None):
@@ -588,14 +591,14 @@ def provision_control(settings, data, rooms, token):
             save(config_path, {**config, 'control_audience': audience}, mode=0o444)
 
 
-def provision_layout(settings, data, registry, passphrase, *, unattended=False, office_setup=False):
+def provision_layout(settings, data, registry, passphrase, *, unattended=False, office_setup=False, operator_token=None):
     from roster import prepare_management
 
-    own = login(settings['owner'], passphrase)
-    token = own['access_token']
+    owner = f"@{settings['owner']}:{settings['server_name']}"
+    token = operator_token or login(settings['owner'], passphrase)['access_token']
     try:
         monitor = login('the-architect', private_secret(data / 'bot/password', uid=RUNTIME_UID))
-        rooms = create_layout(settings['server_name'], own['user_id'], token)
+        rooms = create_layout(settings['server_name'], owner, token)
         join(rooms['alerts'], monitor['user_id'], monitor['access_token'])
         request('POST', CLIENT + '/logout', {}, monitor['access_token'])
         save(data / 'bot/room-id', rooms['alerts'] + '\n', uid=RUNTIME_UID)
@@ -608,18 +611,40 @@ def provision_layout(settings, data, registry, passphrase, *, unattended=False, 
             provision_telegram_layout(settings, data, rooms, token, unattended=unattended, join_office=not office_setup)
         save(data / 'rooms.json', rooms)
         prepare_management(data, settings, registry, token)
+        save(data / 'matrix-layout.json', matrix_layout(settings, rooms))
     finally:
-        request('POST', CLIENT + '/logout', {}, token)
+        if operator_token is None:
+            request('POST', CLIENT + '/logout', {}, token)
+
+
+def matrix_layout(settings, rooms):
+    return {'version': MATRIX_LAYOUT_VERSION, 'rooms': rooms,
+            'control_runtime': bool(settings.get('control_runtime')), 'dot': settings['dot'],
+            'telegram': settings['telegram'], 'telegram_agent': telegram_agent_selected(settings)}
+
+
+def matrix_layout_needed(settings, data, registry):
+    from roster import invitation_ready
+
+    marker, rooms = data / 'matrix-layout.json', data / 'rooms.json'
+    if not marker.is_file() or not rooms.is_file() or load(marker) != matrix_layout(settings, load(rooms)):
+        return True
+    return bool((settings['systemd'] or settings.get('control_runtime')) and
+                {'hiring-manager', 'chief-of-staff'}.intersection(registry['agents']) and not invitation_ready(data))
+
+
+def checkout_revision():
+    git = ['git', '-c', f'safe.directory={SOURCE}', '-C', str(SOURCE)]
+    revision = (subprocess.run([*git, 'rev-parse', '--verify', 'HEAD'],
+                               capture_output=True, text=True).stdout.strip() if which('git') else '')
+    return revision if re.fullmatch(r'[a-f0-9]{40}', revision) else None
 
 
 def publish_helper_guides(data):
     paths = ('README.md', 'docs/architecture.md', 'docs/setup-guide.md', 'docs/team.md',
              'docs/runbook.md', 'docs/dot.md', 'docs/telegram.md', 'policy/README.md')
     git = ['git', '-c', f'safe.directory={SOURCE}', '-C', str(SOURCE)]
-    revision = (subprocess.run([*git, 'rev-parse', '--verify', 'HEAD'],
-                               capture_output=True, text=True).stdout.strip() if which('git') else '')
-    if not re.fullmatch(r'[a-f0-9]{40}', revision):
-        revision = None
+    revision = checkout_revision()
     guides = []
     for path in paths:
         file = SOURCE / path
@@ -887,16 +912,22 @@ def finalize_setup(data, *, print_only=False, passphrase=None):
     guide(data, settings, workspace_command(data), passphrase)
 
 
-def install(data, args, *, entered=None):
+def install(data, args, *, entered=None, updating=False):
     from setup_guide import interactive_terminal
     registry_path = data / 'agents.json'
-    saved_registry = load(registry_path) if registry_path.exists() else {}
-    presets = available_profiles(saved_registry)
     previous = data / 'settings.json'
-    registry_file = data / 'agents.json'
-    if registry_file.exists() and 'root' in load(registry_file)['agents']:
+    release = data / 'deployment-release.json'
+    revision = checkout_revision()
+    ready_paths = (previous, registry_path, data / 'compose.yaml', data / 'synapse/homeserver.yaml')
+    if updating and not all(path.is_file() for path in ready_paths):
+        raise ValueError(f'No installed workspace found at {data}. Run {workspace_command(data, elevated=False)} install to begin.')
+    saved_registry = load(registry_path) if registry_path.is_file() else None
+    if saved_registry and 'root' in saved_registry['agents']:
         raise ValueError('Run agent migrate-root before updating the existing Root deployment.')
-    if entered is not None:
+    presets = available_profiles(saved_registry)
+    if updating:
+        operator_token = None
+    elif entered is not None:
         raw, passphrase = entered['settings'], entered['password']
         if not isinstance(passphrase, str) or password_error(passphrase):
             raise ValueError('Enter a valid Matrix operator password')
@@ -912,19 +943,47 @@ def install(data, args, *, entered=None):
         raw, passphrase = interactive(presets, load(previous) if previous.exists() else {})
         settings = normalized(raw, presets)
     directory(data, 0o711)
-    with operator_lock(data):
+    with operator_lock(data), ExitStack() as sessions:
         current = load(previous) if previous.exists() else None
+        saved_registry = load(registry_path) if registry_path.is_file() else None
+        presets = available_profiles(saved_registry)
+        if saved_registry and 'root' in saved_registry['agents']:
+            raise ValueError('Run agent migrate-root before updating the existing Root deployment.')
+        if saved_registry and any(entry.get('retirement') for entry in saved_registry['agents'].values()):
+            raise ValueError('Resume the pending agent removal before updating the workspace.')
         if current:
             from mobility import TERMINAL
-            if any(move['phase'] not in TERMINAL for move in load(registry_path).get('relocations', {}).values()):
-                raise ValueError('Resume or roll back the pending agent move before reinstalling the workspace.')
+            if any(move['phase'] not in TERMINAL for move in (saved_registry or {}).get('relocations', {}).values()):
+                raise ValueError('Resume or roll back the pending agent move before updating the workspace.')
+        if updating:
+            if not all(path.is_file() for path in ready_paths):
+                raise ValueError('The workspace was removed before the update could start.')
+            if COMPOSE_RUNTIME and current['systemd']:
+                raise ValueError(f'Update this systemd deployment with {workspace_command(data, elevated=True)} update.')
+            settings = normalized(current, presets)
+            read_password_file(data / 'context/neo4j-password', 'Context Intelligence')
+            installed_revision = load(release).get('revision') if release.is_file() else None
+            print(f"⬆️  Update {settings['project']}\n"
+                  f"Last completed revision · {installed_revision or 'not recorded'}\n"
+                  f"Checkout revision · {revision or 'unavailable'}", flush=True)
+            if matrix_layout_needed(settings, data, saved_registry):
+                print('Matrix needs to verify or migrate the managed rooms. Sign in as the existing operator.', flush=True)
+                if not args.owner_password_file and not interactive_terminal():
+                    raise ValueError('Run update in an interactive terminal or pass --owner-password-file with a private file.')
+                passphrase = password(settings, args.owner_password_file)
+                from operator_cli import matrix_session
+                # Start the existing homeserver so a stopped deployment can also be updated.
+                up(data, 'postgres', 'synapse')
+                operator_token = sessions.enter_context(matrix_session(
+                    {'settings': settings, 'matrix_port': settings['matrix_port']}, passphrase))
+        if current:
             for key in ('server_name', 'owner', 'project', 'matrix_port'):
                 if current[key] != settings[key]:
                     raise ValueError(f'{key} belongs to the existing deployment identity')
         source = settings.pop('neo4j_password_file', None)
-        if entered is None:
+        if not updating and entered is None:
             prepare_graph_password(data, source, interactive=not args.config)
-        else:
+        elif entered is not None:
             value = entered.get('graph_password')
             if value is not None and not isinstance(value, str):
                 raise ValueError('Enter a valid Context Intelligence password')
@@ -936,14 +995,11 @@ def install(data, args, *, entered=None):
         if any(option.split(',')[0] == 'name=rootless' for option in security or []):
             raise ValueError('Select a standard Docker Engine context')
         prepare_storage(settings, data)
-        registry_path = data / 'agents.json'
-        registry = load(registry_path) if registry_path.exists() else {
+        registry = saved_registry if saved_registry is not None else {
             'local_server': settings['server_name'], 'dynamic_handoffs': True, 'agents': {},
             'team_version': 1 if set(settings['agents']).intersection({'chief-of-staff', 'manager'}) else 2}
         if 'the-architect' in registry['agents']:
             registry['agents']['the-architect']['name'] = ARCHITECT_NAME
-        if any(entry.get('retirement') for entry in registry['agents'].values()):
-            raise ValueError('Resume the pending agent removal before reinstalling')
         if current and current.get('maintenance'):
             settings['maintenance'] = True
             settings.setdefault('maintenance_restart_services', current.get('maintenance_restart_services', []))
@@ -951,16 +1007,17 @@ def install(data, args, *, entered=None):
             settings['roster_management'] = True
         else:
             settings.pop('roster_management', None)
-        for key in settings['agents']:
-            if key not in registry['agents']:
-                register_entry(settings, registry, key, presets[key])
+        if not updating:
+            for key in settings['agents']:
+                if key not in registry['agents']:
+                    register_entry(settings, registry, key, presets[key])
         settings.pop('owner_password_file', None)
         telegram_api_file = settings.pop('telegram_api_file', None)
         onboarding_path = data / 'onboarding.json'
         if not args.config and not current and not onboarding_path.exists():
             save(onboarding_path, {'confirmed': [], 'select_agents': True})
         save(previous, settings)
-        commit_registry(registry_path, registry, actor=settings['owner'], reason='installation')
+        commit_registry(registry_path, registry, actor=settings['owner'], reason='update' if updating else 'installation')
         environment = compose_config(settings, data, registry)
         compose(data, 'config', '--quiet')
         service_units(settings, data, broker=registry['agents'].get('the-architect', {}).get('active', False))
@@ -983,18 +1040,25 @@ def install(data, args, *, entered=None):
             elif not (bridge / 'registration.yaml').is_file():
                 print('Telegram setup is waiting for API credentials. Run setup-guide to continue.')
         office_setup = not args.config and onboarding_path.exists() and load(onboarding_path).get('select_agents') is True
-        provision_layout(settings, data, registry, passphrase, unattended=bool(args.config) or entered is not None,
-                         office_setup=office_setup)
+        if not updating:
+            provision_layout(settings, data, registry, passphrase, unattended=bool(args.config) or entered is not None,
+                             office_setup=office_setup)
+        elif operator_token is not None:
+            provision_layout(settings, data, registry, None, unattended=not interactive_terminal(),
+                             office_setup=office_setup, operator_token=operator_token)
+            publish_dashboard(settings, data)
         compose(data, 'build', 'monitor')
         prepare_images(settings, registry)
         local_agents = [key for key, entry in registry['agents'].items() if entry['placement'] == 'local']
         services = ['monitor', 'private-edge']
         if settings['dot']:
             services.append('dot')
+            if updating and settings.get('control_runtime') and (data / 'dot/tunnel-id').is_file():
+                services.append('dot-tunnel')
         services.extend(f'engine-{key}' for key in local_agents)
-        up(data, *services)
+        up(data, *services, recreate=updating)
         if settings['telegram']:
-            run_telegram(data, 'start-guide')
+            run_telegram(data, 'start-guide', *(['--refresh-bridge'] if updating else []))
             if args.config and telegram_agent_selected(settings) and not (data / 'telegram/connector/engine-token').is_file():
                 run_telegram(data, 'prepare-agent')
             if args.config and (data / 'telegram/bridge/registration.yaml').is_file():
@@ -1003,8 +1067,11 @@ def install(data, args, *, entered=None):
         if settings.get('maintenance') and registry['agents'].get('the-architect', {}).get('active'):
             from maintenance_setup import initialize
             initialize(data, settings, registry, update_base=True)
+        if updating and settings.get('control_runtime'):
+            # The supervisor imports Python from a bind mount. Reload it even when its image is unchanged.
+            up(data, 'control-runtime', recreate=True)
         active = [key for key in local_agents if registry['agents'][key]['active']]
-        up(data, *active, *(['helper-dm'] if 'helper' in active else []))
+        up(data, *active, *(['helper-dm'] if 'helper' in active else []), recreate=updating)
         publish_inventory(settings, data, registry)
         configure_network(settings, data, current)
         if settings['systemd']:
@@ -1016,10 +1083,14 @@ def install(data, args, *, entered=None):
                 state.pop('selection', None)
                 save(onboarding_path, state)
                 close_office_setup_notice(data)
+        if any(registry['agents'].get(k, {}).get('active') for k in PRIVATE_ROLES | {'chief-of-staff'}):
+            from roster import enable_management
+            enable_management(data, automatic=True, locked=True)
+        save(release, {'revision': revision})
     refresh_connections(data)
-    if any(registry['agents'].get(k, {}).get('active') for k in PRIVATE_ROLES | {'chief-of-staff'}):
-        from roster import enable_management
-        enable_management(data, automatic=True)
+    if updating:
+        print('Workspace updated.')
+        return
     print('Workspace deployed.')
     if entered is not None:
         return
@@ -1504,8 +1575,11 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     doctor = commands.add_parser('doctor', help='Check the local runtime and deployment state')
     doctor.add_argument('--config', type=Path)
-    install_parser = commands.add_parser('install')
+    install_parser = commands.add_parser('install', help='Set up a workspace')
     install_parser.add_argument('--config', type=Path)
+    update_parser = commands.add_parser('update', help='Update an installed workspace from this checkout')
+    update_parser.set_defaults(config=None)
+    update_parser.add_argument('--owner-password-file', type=Path, help='Private Matrix operator password file for room migrations')
     commands.add_parser('validate').add_argument('--config', type=Path, required=True)
     hiring = commands.add_parser('hiring', help='Manage the Office hiring tool catalog').add_subparsers(dest='action', required=True)
     hiring.add_parser('connect', help='Connect a reusable provider account')
@@ -1666,8 +1740,8 @@ def main():
     if args.command == '_host':
         execute_host(data, args)
         return
-    if args.command == 'install':
-        install(data, args)
+    if args.command in {'install', 'update'}:
+        install(data, args, updating=args.command == 'update')
     elif args.command == 'setup-guide':
         finalize_setup(data, print_only=args.print_only)
     elif args.command == 'uninstall':
@@ -1804,7 +1878,7 @@ def main():
             except (OSError, ValueError, subprocess.SubprocessError):
                 print('Could not refresh operation timings. The previous snapshot is retained.', file=sys.stderr)
         compose(data, '--profile', 'agents', 'ps')
-    if args.command in {'install', 'setup-guide', 'agent'} or args.command == 'remote' and args.action == 'confirm':
+    if args.command in {'install', 'update', 'setup-guide', 'agent'} or args.command == 'remote' and args.action == 'confirm':
         publish_metadata(data)
 
 
@@ -1823,7 +1897,7 @@ if __name__ == '__main__':
             from operation_timing import record
             from setup_guide import interactive_terminal
             args = sys.argv[1:]
-            command = next((part for part in args if part in {'install', 'setup-guide', 'agent', 'host', 'telegram',
+            command = next((part for part in args if part in {'install', 'update', 'setup-guide', 'agent', 'host', 'telegram',
                 'hiring', 'maintenance', 'backup', 'restore-check', 'dot-connect', 'twin', 'layout'}), None)
             if command:
                 record(selected_data(args) / 'runtime/timing', 'cli-' + command, watch, outcome, actor='operator',

@@ -9,14 +9,14 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import DEFAULT, Mock, patch
+from unittest.mock import ANY, DEFAULT, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'deploy'))
 from agent_picker import BACK, agent_checklist, choose_option, menu, select_agents, select_integrations, text_page
 from installer import (
     PRESETS, RUNTIME_UID, agent_activate, agent_sign_in, close_office_setup_notice, context_config, install, interactive, load, main,
-    normalized, onboarding_profiles, operator_lock, password, prepare_graph_password, prepare_storage,
+    matrix_layout, normalized, onboarding_profiles, operator_lock, password, prepare_graph_password, prepare_storage,
     provision_layout, provision_selected_agents, register_entry, save, show_element_setup, tailscale_dns, telegram,
     telegram_agent_pending,
 )
@@ -897,7 +897,8 @@ class InstallerTest(unittest.TestCase):
                 steps['interactive'].return_value = (config, 'matrix-fixture-password')
                 steps['command_output'].return_value = '[]'
 
-                def start_services(path, *services):
+                def start_services(path, *services, recreate=False):
+                    self.assertFalse(recreate)
                     if 'monitor' in services:
                         steps['compose'].assert_any_call(path, 'build', 'monitor')
 
@@ -950,6 +951,71 @@ class InstallerTest(unittest.TestCase):
             self.assertFalse(steps['provision_layout'].call_args.kwargs['office_setup'])
             self.assertEqual([args[1:] for args, _ in steps['run_telegram'].call_args_list],
                              [('start-guide',), ('prepare-agent',)])
+
+    def test_update_requires_existing_workspace(self):
+        with TemporaryDirectory() as work, patch('installer.compose') as compose:
+            data = Path(work) / 'missing'
+            with self.assertRaisesRegex(ValueError, 'No installed workspace found'):
+                install(data, SimpleNamespace(config=None, owner_password_file=None), updating=True)
+            self.assertFalse(data.exists())
+            compose.assert_not_called()
+
+    def test_update_reuses_state_and_only_authenticates_for_matrix_migration(self):
+        settings = {**self.settings, 'systemd': False}
+        rooms = {'office': '!office:fixture.test', 'owner': '@operator:fixture.test'}
+        onboarding = {'confirmed': ['element'], 'welcome': {'event': '$welcome'}}
+        before, target = 'a' * 40, 'b' * 40
+        for migrate in (False, True):
+            with self.subTest(migrate=migrate), TemporaryDirectory() as work, redirect_stdout(StringIO()) as output:
+                data = Path(work)
+                (data / 'synapse').mkdir()
+                (data / 'context').mkdir()
+                save(data / 'synapse/homeserver.yaml', {})
+                save(data / 'compose.yaml', {})
+                save(data / 'context/neo4j-password', 'fixture graph password\n')
+                save(data / 'settings.json', settings)
+                save(data / 'agents.json', self.registry)
+                save(data / 'rooms.json', rooms)
+                save(data / 'onboarding.json', onboarding)
+                save(data / 'deployment-release.json', {'revision': before})
+                if not migrate:
+                    save(data / 'matrix-layout.json', matrix_layout(settings, rooms))
+                args = SimpleNamespace(config=None, owner_password_file=data / 'operator-password' if migrate else None)
+                with patch.multiple(
+                    'installer', checkout_revision=DEFAULT, interactive=DEFAULT, password=DEFAULT, prepare_storage=DEFAULT,
+                    command_output=DEFAULT, compose_config=DEFAULT, compose=DEFAULT, service_units=DEFAULT, up=DEFAULT,
+                    provision_layout=DEFAULT, prepare_images=DEFAULT, sync_workshop=DEFAULT, publish_inventory=DEFAULT,
+                    configure_network=DEFAULT, finalize_setup=DEFAULT, run_telegram=DEFAULT, publish_dashboard=DEFAULT,
+                ) as steps, patch('setup_guide.interactive_terminal', return_value=False), patch('operator_cli.matrix_session') as session:
+                    steps['checkout_revision'].return_value = target
+                    steps['command_output'].return_value = '[]'
+                    steps['password'].return_value = 'fixture-matrix-password'
+                    session.return_value.__enter__.return_value = 'fixture-matrix-token'
+                    steps['prepare_images'].side_effect = CalledProcessError(1, 'docker build')
+                    with self.assertRaises(CalledProcessError):
+                        install(data, args, updating=True)
+                    self.assertEqual(load(data / 'deployment-release.json')['revision'], before)
+                    steps['prepare_images'].side_effect = None
+                    install(data, args, updating=True)
+                    steps['interactive'].assert_not_called()
+                    steps['finalize_setup'].assert_not_called()
+                    steps['run_telegram'].assert_called_once_with(data, 'start-guide', '--refresh-bridge')
+                    if migrate:
+                        self.assertEqual(steps['password'].call_count, 2)
+                        self.assertEqual(session.call_count, 2)
+                        steps['provision_layout'].assert_called_with(settings, data, ANY, None,
+                            unattended=True, office_setup=False, operator_token='fixture-matrix-token')
+                    else:
+                        steps['password'].assert_not_called()
+                        session.assert_not_called()
+                        steps['provision_layout'].assert_not_called()
+                self.assertEqual(load(data / 'settings.json'), settings)
+                self.assertEqual(load(data / 'agents.json')['agents'], self.registry['agents'])
+                self.assertEqual(load(data / 'onboarding.json'), onboarding)
+                self.assertEqual(load(data / 'deployment-release.json')['revision'], target)
+                self.assertIn(f'Last completed revision · {before}', output.getvalue())
+                self.assertIn(f'Checkout revision · {target}', output.getvalue())
+                self.assertIn('Workspace updated.', output.getvalue())
 
     def test_telegram_activation_and_layout_repair_share_the_linking_flow(self):
         with TemporaryDirectory() as work, redirect_stdout(StringIO()):

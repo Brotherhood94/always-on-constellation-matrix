@@ -20,6 +20,18 @@ Use `./constellation_matrix setup-guide` to resume. `./constellation_matrix agen
 
 State defaults to `$XDG_STATE_HOME/constellation-matrix` or `~/.local/state/constellation-matrix`. Give a separate test deployment its own `--data-dir`, project and port settings.
 
+## Update an existing workspace
+
+After bringing your VPS checkout to the revision you want to run, use the same account and data directory as your original installation.
+
+```sh
+./constellation_matrix update
+```
+
+The command shows the last completed deployment revision and the checkout revision, then updates the services using the saved workspace settings. It reuses the agent roster, provider sessions, Matrix data, and integration settings. Some services may restart during the update.
+
+When the managed Matrix layout needs verification or migration, sign in with the existing operator password. This includes the first update from an installation that predates layout tracking. For an unattended migration, pass `--owner-password-file /path/to/private-file` with a regular file with mode `0600`. If the update stops, rerun `update` from the same checkout.
+
 ## Host privileges
 
 Run Constellation from the regular Linux account that can already use Docker. `./constellation_matrix doctor` checks daemon and Compose access. The Docker control runtime handles protected state and exposes scoped operations to agent containers.

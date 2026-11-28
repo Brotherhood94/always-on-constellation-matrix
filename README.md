@@ -190,6 +190,7 @@ For unattended provisioning, edit the example configuration, check it with `./co
 | Task | Start here |
 | --- | --- |
 | Check the stack | Run `./constellation_matrix status` for the latest dashboard snapshot, or use **Agents → Control Room → Pinned messages** to open the dashboard or Context Intelligence. |
+| Update an existing workspace | Run `./constellation_matrix update` from the checkout containing the revision you want to deploy. [Update a workspace](docs/runbook.md#update-an-existing-workspace) |
 | Add a local Office worker | Run `./constellation_matrix agent add --profile /path/to/agent.json --configure`. This opens native Amplifier sign-in after provisioning. See [agent profiles](docs/runbook.md#add-a-worker) and the [shared desktop](desktop/README.md). |
 | Retire a local Office worker | Run `./constellation_matrix agent remove <id>` to finish accepted work, revoke access, and archive the workspace. [Retirement](docs/runbook.md#retire-a-worker) |
 | Manage staffing | Ask **Hiring Manager** to hire or retire a teammate and review its exact proposal in the private chat. [Staffing](docs/team.md#first-interactions) |

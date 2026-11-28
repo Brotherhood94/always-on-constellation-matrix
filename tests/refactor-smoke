@@ -36,6 +36,13 @@ ports = dict(zip(('matrix_port','neo4j_port','bolt_port','context_port','hiring_
 PY
 ./constellation_matrix --data-dir "$work/workspace" doctor --config "$work/install.json"
 ./constellation_matrix --data-dir "$work/workspace" install --config "$work/install.json"
+fixture_runtime=(docker exec "$project-control-runtime-1")
+"${fixture_runtime[@]}" cat "$work/workspace/rooms.json" > "$work/rooms-before.json"
+"${fixture_runtime[@]}" rm -- "$work/workspace/matrix-layout.json"
+./constellation_matrix --data-dir "$work/workspace" update --owner-password-file "$work/operator-password" </dev/null
+./constellation_matrix --data-dir "$work/workspace" update </dev/null | tee "$work/update.log"
+grep -Fxq 'Workspace updated.' "$work/update.log"
+"${fixture_runtime[@]}" cat "$work/workspace/rooms.json" | cmp - "$work/rooms-before.json"
 ./constellation_matrix --data-dir "$work/workspace" doctor
 for _ in $(seq 1 36); do
   if [[ -s "$work/workspace/dashboard/operation-timings.json" ]]; then break; fi

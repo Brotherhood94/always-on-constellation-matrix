@@ -1,5 +1,5 @@
 """Host lifecycle for local Office workers."""
-from contextlib import closing
+from contextlib import closing, nullcontext
 from datetime import datetime, timezone
 import sqlite3
 from pathlib import Path
@@ -303,11 +303,11 @@ def prepare_management(data, settings, registry, operator):
         prepare_invitation(data, settings, operator)
 
 
-def enable_management(data, password_file=None, *, automatic=False):
+def enable_management(data, password_file=None, *, automatic=False, locked=False):
     from host_services import roster_units
     from installer import configure_network, prepare_images
 
-    with operator_lock(data):
+    with nullcontext() if locked else operator_lock(data):
         settings = load(data / 'settings.json')
         registry = load(data / 'agents.json')
         authorities = [key for key in ('chief-of-staff', 'hiring-manager', 'coach', 'scouter')
