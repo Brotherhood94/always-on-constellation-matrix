@@ -392,8 +392,9 @@ async function delegateTelegram(client, event, request) {
   if (dispatched) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(handoff, JSON.stringify(dispatched));
   const result = handoff ? await telegramRequest(event.id, 'submit', { ...request, handoff }) : { status: 'unavailable' };
   if (result?.reason === 'paused' || !Object.hasOwn(telegramTaskStatus, result?.status)) {
+    const paused = result?.reason === 'paused' || (!handoff && registered?.status === 'Paused');
     const sent = await sendEncrypted(client, roomId, reactionTransaction('telegram-unavailable', event.id), {
-      msgtype: 'm.text', body: result?.reason === 'paused' ? telegramPausedNotice :
+      msgtype: 'm.text', body: paused ? telegramPausedNotice :
         'Telegram Agent could not confirm the handoff. Check its service and the delivery status before retrying.',
       [telegramReceiptKey]: { status: 'blocked' },
       'm.relates_to': threadRelation(event),

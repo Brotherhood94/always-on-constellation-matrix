@@ -101,7 +101,7 @@ An upgrade preserves delivery receipts and stops the room migration while an in-
 
 Telegram Agent has its own contributor identity in the shared Context Intelligence instance. Office handoffs and outcomes carry event references and status. Telegram message text, drafts, and conversation summaries stay in the relevant encrypted Matrix room and Telegram.
 
-Run `./constellation_matrix telegram status` to read the published health snapshot. Use `sudo ./constellation_matrix telegram status --refresh` to collect a new snapshot from Docker.
+Run `./constellation_matrix telegram status` to read the published health snapshot. On Docker-managed workspaces, run `./constellation_matrix telegram status --refresh` to refresh it immediately. The host monitor updates Telegram health every minute and shares it with the dashboard and Office routing. **Paused** blocks new handoffs. **Status stale** means the observation or Matrix sync is older than three minutes.
 
 The Compose services use the existing Matrix cgroup and restart with Docker. `telegram metrics` exports sanitized health and queue counts to `telegram.json` under the private resource dashboard origin. `telegram enable-operations` installs backup and metrics timers for the selected deployment. Enable the timers after accepting the Telegram setup. Scheduled Telegram backups begin once the workspace has an encrypted Restic repository.
 

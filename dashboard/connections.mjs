@@ -6,6 +6,7 @@ const halfHeight = 29;
 const healthTones = {
   available: 'good', running: 'good', healthy: 'good', ready: 'good', active: 'good',
   'sign-in required': 'warn', 'setup required': 'warn', starting: 'warn', registered: 'warn', pending: 'warn',
+  paused: 'warn', 'status stale': 'warn', 'status unavailable': 'down',
   unavailable: 'down', exited: 'down', stopped: 'down', unhealthy: 'down', failed: 'down',
 };
 

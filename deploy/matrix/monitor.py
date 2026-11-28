@@ -11,6 +11,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from agent_catalog import REGISTRY, document as agent_catalog_document, read as read_agent_registry, workshop_profiles
 from connection_history import refresh_connections
+from telegram_health import SERVICES as TELEGRAM_SERVICES, publish_telegram_health
 
 THRESHOLDS = {"CPU": (50, 45, 5), "RAM": (50, 45, 5), "Disk": (25, 22.5, 1)}
 RETENTION_SECONDS = 30 * 24 * 60 * 60
@@ -154,21 +155,26 @@ def replace_json(path, value, mode):
 
 def integration_status():
     project = os.environ.get("MATRIX_PROJECT", "matrix-stack")
-    ids = project_containers(project) + project_containers(project + "-telegram")
+    telegram_project = os.environ.get("TELEGRAM_PROJECT", project + "-telegram")
+    ids = project_containers(project) + project_containers(telegram_project)
     if not ids:
-        return {}
+        return {}, {}
     monitored = {"context": "Context Intelligence", "neo4j": "Neo4j", "synapse": "Matrix",
                  "dot": "Dot", "monitor": "Control Room", "persona-workshop": "Persona Workshop",
                  "connector": "Telegram Agent", "telegram-bridge": "Telegram bridge",
                  "telegram-engine": "Telegram engine", "telegram-guide": "Telegram guide"}
     status = {}
+    telegram = {}
     for item in json.loads(command("docker", "inspect", *ids)):
         labels = item["Config"]["Labels"] or {}
         name = labels.get("com.docker.compose.service")
         if name in monitored and labels.get("com.docker.compose.oneoff", "false").lower() != "true":
             state = item["State"]
-            status[monitored[name]] = state.get("Health", {}).get("Status") or state["Status"]
-    return status
+            health = state.get("Health", {}).get("Status")
+            status[monitored[name]] = health or state["Status"]
+            if name in TELEGRAM_SERVICES and labels.get("com.docker.compose.project") == telegram_project:
+                telegram[name] = {"state": state["Status"], "health": health}
+    return status, telegram
 
 
 def export(db, outbox, acknowledgements, dashboard, timestamp, data):
@@ -197,11 +203,22 @@ def export(db, outbox, acknowledgements, dashboard, timestamp, data):
         "lastBackup": last_backup.read_text().strip() if last_backup.is_file() else None,
     }
     replace_json(dashboard / "metrics.json", page, 0o644)
+    integrations = None
+    try:
+        integrations, telegram = integration_status()
+        if os.environ.get("TELEGRAM_CONTEXT_ENABLED") == "true" or telegram:
+            publish_telegram_health(data, telegram, timestamp)
+    except (OSError, subprocess.SubprocessError, sqlite3.Error, ValueError, TypeError, KeyError) as error:
+        print(f"Integration health unavailable: {error}", flush=True)
     try:
         catalog = agent_catalog_document(read_agent_registry(), page["agents"], os.environ["MATRIX_SERVER_NAME"],
                                          timestamp, workshop_profiles(REGISTRY.parent), data=data)
         replace_json(dashboard / "agents.json", catalog, 0o644)
-        replace_json(dashboard / "integrations.json", {"time": timestamp, "services": integration_status()}, 0o644)
+        if integrations is not None:
+            for agent in catalog["agents"]:
+                if agent["key"] == "telegram-agent":
+                    integrations["Telegram Agent"] = agent["status"]
+            replace_json(dashboard / "integrations.json", {"time": timestamp, "services": integrations}, 0o644)
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as error:
         print(f"Agent catalog unavailable: {error}", flush=True)
     refresh_connections(data)

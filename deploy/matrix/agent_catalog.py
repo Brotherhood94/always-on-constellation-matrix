@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import re
+from telegram_health import telegram_status
 
 
 REGISTRY = Path(os.environ.get('MATRIX_REGISTRY', '/srv/constellation-matrix/agents.json'))
@@ -208,9 +209,12 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
     settings = json.loads(settings_file.read_text()) if settings_file and settings_file.is_file() else {}
     if settings.get('telegram') and settings.get('telegram_agent', True):
         status_file = data / 'dashboard/telegram.json'
-        status = json.loads(status_file.read_text()) if status_file.is_file() else {}
-        services = status.get('services', {})
-        ready = services.get('connector', {}).get('state') == 'running' and services.get('telegram-engine', {}).get('health') == 'healthy'
+        try:
+            status = json.loads(status_file.read_text())
+        except (OSError, ValueError):
+            status = {}
+        remote = (integration or {}).get('placement') == 'remote'
+        readiness, checked = telegram_status(status, now, remote_engine=remote)
         for row in result:
             if row['key'] in ('task-manager', 'manager'):
                 row['contacts'] = sorted(set(row['contacts']) | {'telegram-agent'})
@@ -223,7 +227,7 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
         ]
         specialist = dict(key='telegram-agent', id=f'@telegram-agent:{server_name}', name='Telegram Agent',
                            role='worker',
-                           status='Available' if ready else 'Telegram setup pending', active=ready, contacts=[],
+                           status=readiness, contacts=[],
                            capabilities=[dict(code=code, description=description, resources=['workspace:telegram', 'telegram:*'])
                                          for code, description in abilities],
                            limits='Accept verified operator or Dot requests and Task Manager handoffs.',
@@ -231,8 +235,16 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
                                     'working_style': 'Use verified recipients, ask about ambiguous matches, and report the outcome in the original thread.'},
                            tools=['Scoped Telegram MCP'], model=status.get('agent', {}).get('model'),
                            effort=status.get('agent', {}).get('effort'),
-                           server=registry['local_server'], placement='local')
-        specialist.update(integration or {})
+                           server=registry['local_server'], placement='local', healthCheckedAt=checked)
+        if integration:
+            specialist.update(integration)
+            if not integration.get('move') or integration['move']['phase'] == 'preparing':
+                if readiness != 'Available':
+                    specialist.update(status=readiness, healthCheckedAt=checked)
+                elif remote and integration.get('status') != 'Available':
+                    specialist['status'] = 'Unavailable'
+                elif remote and integration.get('healthCheckedAt'):
+                    specialist['healthCheckedAt'] = min(checked, integration['healthCheckedAt'])
         specialist['active'] = specialist['status'] == 'Available'
         result.append(specialist)
     return dict(version=1, contactPolicy=governed, time=now, telegramPlacement=integration, dynamicHandoffs=registry.get('dynamic_handoffs') is True,

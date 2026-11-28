@@ -26,30 +26,31 @@ export function freshness(timestamp, now = Date.now()) {
   return `${label} ${new Date(timestamp * 1000).toLocaleString()}`;
 }
 
-export function officeCatalog(catalog, integrations, telegram, selected) {
+export function officeCatalog(catalog, integrations, telegram, selected, now = Date.now()) {
   const services = integrations?.services ?? {};
-  const connector = telegram?.services?.connector;
   const lastCheck = Date.parse(telegram?.generatedAt) / 1000;
   const monitored = services['Telegram Agent'] ?? services['Telegram Control'];
-  const fromTelegram = connector && Number.isFinite(lastCheck) &&
-    (lastCheck > integrations?.time || (!monitored && !Number.isFinite(integrations?.time)));
-  const enabled = fromTelegram || ['Telegram', 'Telegram guide', 'Telegram Agent', 'Telegram Control']
+  const isStale = checked => Number.isFinite(checked) && (now / 1000 - checked > 180 || checked - now / 1000 > 60);
+  const specialist = catalog?.agents?.find(agent => agent.key === 'telegram-agent');
+  if (specialist) {
+    const checked = specialist.healthCheckedAt ?? catalog.time;
+    if (!isStale(checked) || (specialist.move && specialist.move.phase !== 'preparing')) return catalog;
+    return { ...catalog, agents: catalog.agents.map(agent => agent === specialist ?
+      { ...agent, status: 'Status stale', active: false } : agent) };
+  }
+  const enabled = Boolean(telegram?.services?.connector) || ['Telegram', 'Telegram guide', 'Telegram Agent', 'Telegram Control']
     .some(name => Object.hasOwn(services, name));
-  if (!(selected ?? enabled) || !catalog?.agents || catalog.agents.some(agent => agent.key === 'telegram-agent')) return catalog;
+  if (!(selected ?? enabled) || !catalog?.agents) return catalog;
   const manager = ['task-manager', 'manager'].find(key => catalog.agents.some(agent => agent.key === key));
   const agents = catalog.agents.map(agent => agent.key === manager ? {
     ...agent, contacts: [...new Set([...(agent.contacts ?? []), 'telegram-agent'])],
   } : agent);
-  const state = fromTelegram ? (connector.health || connector.state) : monitored;
-  const engine = fromTelegram ? telegram.services['telegram-engine']?.health : services['Telegram engine'];
-  const status = state === 'healthy' || (state === 'running' && engine === 'healthy') ? 'Available'
-    : state === 'running' && engine === 'unhealthy' ? 'Unavailable'
-      : state ? state[0].toUpperCase() + state.slice(1) : services.Telegram === 'configured' ? 'Unavailable' : 'Setup required';
-  const checked = fromTelegram ? Math.floor(lastCheck) : integrations?.time;
+  const status = isStale(lastCheck) ? 'Status stale' :
+    monitored || telegram?.services?.connector || services.Telegram === 'configured' ? 'Status unavailable' : 'Setup required';
   agents.push({ key: 'telegram-agent', name: 'Telegram Agent', role: 'worker', contacts: [], placement: 'local',
     server: catalog.agents.find(agent => agent.placement === 'local')?.server ?? 'VPS', status,
     model: telegram?.agent?.model, effort: telegram?.agent?.effort,
-    ...(state && Number.isSafeInteger(checked) ? { healthCheckedAt: checked } : {}),
+    ...(Number.isFinite(lastCheck) ? { healthCheckedAt: Math.floor(lastCheck) } : {}),
     limits: 'Operates on verified Telegram chats through the scoped bridge.',
     persona: {
       purpose: 'Manage the Telegram Space and take Telegram assignments in Office.',
@@ -58,7 +59,6 @@ export function officeCatalog(catalog, integrations, telegram, selected) {
       working_style: 'Resolve clear recipients and ask about ambiguous matches in the original thread.',
     },
     tools: ['Scoped Telegram MCP'],
-    ...(catalog.telegramPlacement ?? {}),
   });
   return { ...catalog, agents };
 }
@@ -276,7 +276,9 @@ function render(metrics, roster, links, integrationStates, connections, telegram
   }
   renderConnections(catalog);
   showView(metrics, catalog, connections);
-  const entries = Object.entries(integrationStates?.services ?? {});
+  const telegramAgent = agents.find(agent => agent.key === 'telegram-agent');
+  const entries = Object.entries(integrationStates?.services ?? {}).map(([name, state]) =>
+    [name, name === 'Telegram Agent' && telegramAgent ? telegramAgent.status : state]);
   el('integration-freshness').textContent = freshness(integrationStates?.time, now);
   el('integrations').replaceChildren();
   for (const [name, state] of entries) {

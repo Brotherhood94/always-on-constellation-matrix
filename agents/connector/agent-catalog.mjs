@@ -112,6 +112,10 @@ export function createCatalog(server, source) {
 }
 
 export function canDispatch(agent, joined) {
+  if (agent?.key === 'telegram-agent' && Number.isSafeInteger(agent.healthCheckedAt)) {
+    const age = Date.now() - agent.healthCheckedAt * 1000;
+    if (age > maxAge || age < -60000) return false;
+  }
   return agent?.role !== 'observer' && Boolean(agent && dispatchable.has(agent.status) && joined.has(agent.id));
 }
 

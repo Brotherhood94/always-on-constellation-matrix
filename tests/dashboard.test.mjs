@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshness, historyWithin, httpsLink, officeCatalog } from '../dashboard/dashboard.mjs';
 import { connectionDetails, connectionGraph, connectionRoute } from '../dashboard/connections.mjs';
+import { canDispatch } from '../agents/connector/agent-catalog.mjs';
 import { reconcilePins, reconcileTelegramPin, shortcutRecipientKey } from '../deploy/matrix/bot/pins.mjs';
 
 test('the dashboard shows the Telegram specialist and its managed route when Telegram is enabled', () => {
@@ -13,16 +14,34 @@ test('the dashboard shows the Telegram specialist and its managed route when Tel
   const setup = officeCatalog(catalog, { services: { 'Telegram guide': 'running' } });
   assert.deepEqual(connectionGraph(setup).edges, [['task-manager', 'telegram-agent']]);
   assert.equal(setup.agents.at(-1).status, 'Setup required');
-  assert.equal(officeCatalog(catalog, { services: { 'Telegram Agent': 'running' } }).agents.at(-1).status, 'Running');
+  assert.equal(officeCatalog(catalog, { services: { 'Telegram Agent': 'running' } }).agents.at(-1).status, 'Status unavailable');
   const deployed = officeCatalog(catalog, { time: 1810000000, services: { 'Telegram Control': 'running',
     'Telegram guide': 'running', 'Telegram engine': 'healthy' } }, {
     generatedAt: '2026-11-26T18:25:20Z', agent: { model: 'fixture-model', effort: 'low' },
     services: { connector: { state: 'running' } },
-  });
-  assert.equal(deployed.agents.at(-1).status, 'Available');
+  }, undefined, Date.parse('2026-11-28T12:00:00Z'));
+  assert.equal(deployed.agents.at(-1).status, 'Status stale');
   assert.equal(deployed.agents.at(-1).model, 'fixture-model');
-  assert.equal(deployed.agents.at(-1).healthCheckedAt, 1810000000);
+  assert.equal(deployed.agents.at(-1).healthCheckedAt, Date.parse('2026-11-26T18:25:20Z') / 1000);
   assert.deepEqual(catalog.agents[0].contacts, []);
+});
+
+test('a paused or stale Telegram catalog entry is displayed and never dispatched', () => {
+  const now = Date.now();
+  const id = '@telegram-agent:fixture.test';
+  const recent = Math.floor(now / 1000);
+  const available = { key: 'telegram-agent', id, role: 'worker', healthCheckedAt: recent, status: 'Available', active: true };
+  const joined = new Set([id]);
+  const catalog = agent => ({ time: recent, agents: [agent] });
+  assert.equal(canDispatch(available, joined), true);
+  const paused = { ...available, status: 'Paused', active: false };
+  assert.equal(officeCatalog(catalog(paused), {}, null, true, now).agents[0].status, 'Paused');
+  assert.equal(canDispatch(paused, joined), false);
+  const expired = { ...available, healthCheckedAt: recent - 181 };
+  const row = officeCatalog(catalog(expired), {}, null, true, now).agents[0];
+  assert.equal(row.status, 'Status stale');
+  assert.equal(row.active, false);
+  assert.equal(canDispatch(expired, joined), false);
 });
 
 test('Telegram setup only republishes unchanged instructions for a previously unseen device', async () => {

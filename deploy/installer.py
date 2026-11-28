@@ -760,7 +760,11 @@ def publish_inventory(settings, data, registry):
             status = 'Unavailable'
         observed.append({'name': entry['name'], 'server': entry['server'], 'status': status})
     now = int(time.time())
-    save(data / 'dashboard/agents.json', document(registry, observed, settings['server_name'], now, workshop_profiles(data), data=data), mode=0o644)
+    catalog = document(registry, observed, settings['server_name'], now, workshop_profiles(data), data=data)
+    for agent in catalog['agents']:
+        if agent['key'] == TELEGRAM_AGENT:
+            integrations['Telegram Agent'] = agent['status']
+    save(data / 'dashboard/agents.json', catalog, mode=0o644)
     save(data / 'dashboard/integrations.json', {'time': now, 'services': integrations}, mode=0o644)
     publish_metadata(data, settings, registry)
 
@@ -1467,6 +1471,7 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None, owner
         return
     if args == ['status', '--refresh']:
         run_telegram(data, 'metrics')
+        publish_inventory(settings, data, registry)
         show_telegram_status(data)
         return
     if args == ['enable-operations']:
@@ -1863,12 +1868,12 @@ def main():
             if 'connection_history' not in registry:
                 commit_registry(data / 'agents.json', registry)
             publish_dashboard(settings, data)
-        publish_inventory(settings, data, registry)
         if settings['telegram']:
             try:
                 run_telegram(data, 'metrics')
             except subprocess.CalledProcessError:
                 print('Could not refresh Telegram telemetry. The previous snapshot is retained.', file=sys.stderr)
+        publish_inventory(settings, data, registry)
         refresh_connections(data)
         if settings.get('control_runtime'):
             from datetime import datetime
