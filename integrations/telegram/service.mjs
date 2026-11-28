@@ -320,7 +320,9 @@ async function run() {
       if (typeof event.content?.body === 'string' && /^\s*!tg(?:\s|$)/iu.test(event.content.body)) return;
       if (command && await admin?.accept(command, event)) return;
       if (command) {
-        if ((!officeFirst || command.action === 'pause') && await matrix.verifyControl()) store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
+        if ((!officeFirst || ['pause', 'review'].includes(command.action)) && await matrix.verifyControl()) {
+          store.command({ event: event.event_id, room, sender: event.sender, encrypted }, command, settings, now);
+        }
       } else if (!await delegation?.direct(event)) {
         const request = addressedRequest(event, settings);
         const requireDot = !settings.bridgeControl && (event.sender === settings.dot ||
