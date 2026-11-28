@@ -38,9 +38,7 @@ On a Linux VPS with Docker Engine and Compose, run setup as your regular user af
 
 1. Choose your network, operator, passwords, integrations, and starter team.
 2. Connect one provider and pick a model and reasoning effort. Reuse that connection for the team or choose exceptions. The installer checks the selected agents before showing the Element page.
-3. Set up the optional Digital Twin and choose its provider, model, reasoning effort, and test agents. You can also set it up later with `./constellation_matrix twin setup`.
-
-4. Sign in to Element with the displayed homeserver. Open **Agents → Rooms → Control Room** for the dashboard, Context Intelligence, and enabled integration guides. If you enabled Telegram, finish its QR sign-in in the VPS terminal.
+3. Sign in to Element with the displayed homeserver. Open **Agents → Rooms → Control Room** for the dashboard, Context Intelligence, and enabled integration guides. If you enabled Telegram, finish its QR sign-in in the VPS terminal.
 
 Resume an interrupted setup with `./constellation_matrix setup-guide`. [Guided setup](docs/setup-guide.md)
 
@@ -226,11 +224,9 @@ Helper shares one tip per day in **Agents → People → Helper**, starting afte
 
 **Operation timings** shows measured work, queue and approval durations for the last seven or thirty days. A weekly Control Room summary identifies groups that consumed the most time in measured phases. [Maintenance and timing guide](integrations/root/README.md)
 
-### Digital twins
-
-Choose the twin’s connection, model, reasoning effort and agent roster before Element sign-in, or run `./constellation_matrix twin setup` later. You can also ask The Architect to **start a digital twin** and vote in Control Room. The time-limited twin uses synthetic data, separate Matrix identities and storage, and scoped temporary provider access on the workspace’s Docker Engine. See its state on the dashboard under **Digital twins**. [Digital twin workflow](integrations/root/README.md#start-a-digital-twin)
-
 ## Planned features
+
+- Run a Linux Digital Twin on the same VPS so The Architect can test installer and infrastructure changes with a separate Docker Engine. [Digital Twin plan](next_features_plans/plan.md#linux-digital-twin)
 
 - Copy files from workspaces and approved folders to the shared desktop from local and remote agents. The plan includes approval for protected agents. [Shared desktop copy plan](next_features_plans/plan.md#shared-desktop-file-copying)
 - Attach a named file from the VPS shared desktop to a Telegram message. [Telegram attachment plan](next_features_plans/plan.md#attach-a-file-from-the-vps)

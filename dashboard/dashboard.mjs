@@ -314,31 +314,13 @@ function renderTimings(snapshot) {
   }));
 }
 
-function renderTwins(snapshot) {
-  const body = document.getElementById('twin-jobs');
-  if (!body) return;
-  body.replaceChildren();
-  const jobs = snapshot?.jobs ?? [];
-  document.getElementById('twins-freshness').textContent = snapshot
-    ? freshness(snapshot.time, Date.now()) + (jobs.length ? '' : ' · No digital twins have been started.')
-    : 'Digital Twin status is unavailable.';
-  for (const job of jobs) {
-    const row = body.insertRow();
-    for (const value of [job.id, [job.status, job.phase].filter(Boolean).join(' · '), job.agents.join(', '),
-      job.model, job.expires ? new Date(job.expires * 1000).toLocaleString() : '—']) {
-      row.insertCell().textContent = value;
-    }
-  }
-}
-
 if (typeof document !== 'undefined') {
   let state = [];
   async function refresh() {
-    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections', 'telegram', 'maintenance', 'operation-timings', 'twins'].map(path => fetchJson(path + '.json')));
+    const reports = await Promise.allSettled(['metrics', 'agents', 'links', 'integrations', 'connections', 'telegram', 'maintenance', 'operation-timings'].map(path => fetchJson(path + '.json')));
     state = reports.map(({ status, value }, index) => status === 'fulfilled' ? value : state[index]);
     render(...state);
     renderTimings(state[7]);
-    renderTwins(state[8]);
     const release = document.getElementById('maintenance-revision');
     const revision = state[6]?.revision;
     if (release && /^[a-f0-9]{40,64}$/u.test(revision ?? '')) {

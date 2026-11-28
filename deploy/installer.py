@@ -1569,7 +1569,6 @@ def main():
                          help='Permanently delete the deployment data, backups, and project volumes.')
     twins = commands.add_parser('twin').add_subparsers(dest='action', required=True)
     twins.add_parser('list')
-    twins.add_parser('setup', help='Choose a provider, model and roster for a test workspace')
     for action in ('status', 'stop', 'access'):
         twins.add_parser(action).add_argument('id')
     context = commands.add_parser('context').add_subparsers(dest='action', required=True)

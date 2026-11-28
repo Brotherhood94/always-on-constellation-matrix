@@ -1,4 +1,10 @@
-# Shared desktop and Telegram feature plans
+# Planned features
+
+## Linux Digital Twin
+
+Run a Linux VM alongside Constellation on the same VPS. Give The Architect administrative access inside the guest, with a dedicated Docker Engine, disk, network, and resource limits. Keep production credentials, volumes, and the Docker socket outside the VM. Use a clean guest snapshot and synthetic Matrix and Telegram data. Prefer hardware virtualization when the VPS exposes KVM.
+
+The Architect tests changes to the repository and installer in the guest and brings the exact diff and verification results to Control Room. The production broker deploys the approved revision, verifies service health, and rolls back on failure.
 
 ## Shared desktop file copying
 

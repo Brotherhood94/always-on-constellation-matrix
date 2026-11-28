@@ -63,19 +63,6 @@ Opt in with `./constellation_matrix maintenance enable --auto-config-policy <fil
 
 Run `bash integrations/root/tests/run` for the disposable encrypted Matrix approval and host broker fixtures. Run `bash tests/synapse-smoke` for account migration and private room checks. Run `python3 integrations/root/tests/maintenance-docker` with `MAINTENANCE_TEST_IMAGE` set to a locally built connector image to exercise a sealed release and an unhealthy connector recovery in isolated Docker containers.
 
-## Start a digital twin
-
-In **Control Room**, ask The Architect to **start a digital twin**. Follow the response to list models for a connected account. Send the `twin create` command with the selected model, reasoning effort, and comma-delimited agent IDs. The approval shows the snapshot revision and duration. The twin starts with a separate Matrix workspace and temporary provider grants.
-
-```sh
-./constellation_matrix twin list
-./constellation_matrix twin status <id>
-./constellation_matrix twin access <id>
-./constellation_matrix twin stop <id>
-```
-
-The status command shows the loopback Matrix port. Use SSH forwarding and retrieve the private test login with `twin access`. The twin uses new Matrix identities, database state, and workspaces. Dot and Telegram remain disabled in the twin. Stop and expiration revoke the provider grants.
-
 ## Operation timings
 
-The **Operation timings** dashboard section shows 7- and 30-day aggregates. Work measures execution observed by a producer. Queue and approval durations are shown separately when known. The weekly Monday report posts to **Control Room** at or after 10:00 in the deployment timezone. Use the twin filter to explore measurements for isolated runs.
+The **Operation timings** dashboard section shows 7- and 30-day aggregates. Work measures execution observed by a producer. Queue and approval durations are shown separately when known. The weekly Monday report posts to **Control Room** at or after 10:00 in the deployment timezone.

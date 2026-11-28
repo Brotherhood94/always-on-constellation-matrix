@@ -18,10 +18,6 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 4. Wait for the installer to verify the agents.
 
-## 🧪 Set up a Digital Twin
-
-The Digital Twin step follows agent configuration. Choose its account, model, effort, agents and duration, or return later with `./constellation_matrix twin setup`.
-
 ## 💬 Element Desktop
 
 1. **Browser.** Download and install Element Desktop. If the deployment uses Tailscale, connect this computer to the tailnet before opening the private workspace URLs. [Element download](https://element.io/download)

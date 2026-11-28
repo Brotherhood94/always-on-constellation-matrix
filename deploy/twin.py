@@ -11,7 +11,7 @@ from subprocess import SubprocessError
 import time
 from types import SimpleNamespace
 
-from installer import directory, load, operator_lock, run, save
+from installer import SOURCE, directory, load, operator_lock, run, save
 
 ID = re.compile(r'[a-f0-9]{32}')
 PROFILE = re.compile(r'[a-f0-9]{24}')
@@ -39,86 +39,6 @@ def models(data, account):
         raise ValueError('Use a connected account ID.')
     result = control(data, {'action': 'catalog', 'account': account})
     return {'models': [{'id': row['id'], 'efforts': row['efforts']} for row in result.get('models', [])[:16]]}
-
-
-def setup(data, *, onboarding=False):
-    from agent_picker import BACK, checklist, choose_option, terminal_picker
-    from installer import workspace_command
-    from setup_guide import interactive_terminal
-    from shared_provider import catalog
-
-    command = workspace_command(data, elevated=False) + ' twin setup'
-    settings = load(data / 'settings.json')
-    if not settings.get('control_runtime'):
-        raise ValueError('Digital twin setup requires the workspace control runtime.')
-    existing = sorted((data / 'twins').glob('*/job.json'))
-    for item in existing:
-        job = load(item)
-        if job['status'] != 'stopped' and not job.get('cleaned'):
-            print(f"Digital twin {job['id']} · {job['status']}.")
-            return
-    path = data / 'twins/setup.json'
-    if onboarding and path.is_file() and load(path).get('result') in {'queued', 'skipped'}:
-        return
-    registry = load(data / 'agents.json')
-    snapshot_file = data / 'architecture/snapshot.json'
-    if not snapshot_file.is_file() or not registry['agents'].get('the-architect', {}).get('active'):
-        if not onboarding:
-            raise ValueError('Configure The Architect and refresh the workspace status first.')
-        return
-    snapshot = load(snapshot_file)
-    agents = {key: entry['name'] for key, entry in snapshot['agents'].items() if key != 'the-architect'}
-    if not agents:
-        if not onboarding:
-            raise ValueError('Configure an Office agent to run tests in the twin.')
-        return
-    if not interactive_terminal():
-        raise ValueError('Run ' + command + ' from an interactive terminal.')
-    provider_file = data / 'team-provider.json'
-    preferred = load(provider_file).get('default') if provider_file.is_file() else None
-    while True:
-        action = choose_option('🧪 Set up a Digital Twin', {'start': 'Configure a test workspace', 'later': 'Set up later'},
-                               default='later', details=(
-            'Use a separate workspace on this Docker Engine to test agent workflows with synthetic data.',
-            'The twin has its own Matrix account, rooms, storage and temporary provider access. It expires automatically.',
-            'Changes tested in the twin are not applied to the main workspace.',
-        ))
-        if action == 'later':
-            if onboarding:
-                directory(path.parent)
-                save(path, {'result': 'skipped'})
-            print('Configure the twin later with ' + command)
-            return
-        profile = catalog(data, preferred=preferred, back=True)
-        if profile is not BACK:
-            break
-    initial = list(agents)[:3]
-    selected = terminal_picker(checklist, '🤖 Select Digital Twin agents', agents, initial, focus_done=True)
-    if selected is None:
-        print('Available agents: ' + ', '.join(agents))
-        entered = input('Twin agent IDs, separated by commas (Enter to use ' + ', '.join(initial) + '): ')
-        selected = [key.strip() for key in entered.split(',') if key.strip()] if entered.strip() else initial
-    if not 1 <= len(selected) <= 8:
-        raise ValueError('Select between one and eight agents for the Digital Twin.')
-    durations = {'60': '1 hour', '180': '3 hours', '360': '6 hours'}
-    minutes = int(choose_option('⏱ Digital Twin runtime', durations, default='60',
-                                details=('The twin automatically stops and expires the test credentials after this period.',)))
-    identifier = secrets.token_hex(16)
-    plan = {**profile, 'agents': selected, 'minutes': minutes, 'revision': snapshot['revision']}
-    directory(path.parent)
-    enqueue(data, identifier, plan)
-    save(path, {'result': 'queued', 'id': identifier})
-    print(f'Digital twin {identifier} queued.')
-    print(workspace_command(data, elevated=False) + ' twin status ' + identifier)
-
-
-def dashboard_snapshot(data, timestamp):
-    jobs = sorted((load(path) for path in (data / 'twins').glob('*/job.json')),
-                  key=lambda job: job['created'], reverse=True)[:10]
-    return {'time': timestamp, 'jobs': [{
-        'id': job['id'], 'status': job['status'], 'created': job['created'], 'expires': job.get('expires_at'),
-        'agents': job['plan']['agents'], 'model': job['plan']['model'], 'phase': job.get('phase'),
-    } for job in jobs]}
 
 
 def validate(plan):
@@ -291,9 +211,7 @@ def stop(data, identifier):
 
 
 def command(data, args):
-    if args.action == 'setup':
-        setup(data)
-    elif args.action == 'list':
+    if args.action == 'list':
         for item in sorted((data / 'twins').glob('*/job.json')):
             job = load(item)
             print(job['id'], job['status'])

@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import sys
 import re
 import sqlite3
 import subprocess
@@ -206,14 +205,6 @@ def export(db, outbox, acknowledgements, dashboard, timestamp, data):
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError) as error:
         print(f"Agent catalog unavailable: {error}", flush=True)
     refresh_connections(data)
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        from twin import dashboard_snapshot
-        replace_json(dashboard / 'twins.json', dashboard_snapshot(data, timestamp), 0o644)
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        print(f'Digital Twin status unavailable: {type(error).__name__}', flush=True)
-    finally:
-        sys.path.pop(0)
 
 
 def run():
