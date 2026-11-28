@@ -487,6 +487,17 @@ test('a username follow-up asks the operator to confirm the chat without replayi
   assert.equal(f.store.all('SELECT payload FROM control_request').length, 0);
 });
 
+test('the clarification examples are valid Telegram requests', async () => {
+  const f = fixture({ officeFirst: true });
+  await f.broker().directOffice(direct('$unknown-action', 'Can you handle this?'));
+  await f.broker().tick();
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  const [reply] = f.officeMessages.values();
+  const examples = [...reply.body.matchAll(/“([^”]+)”/gu)].map(match => telegramIntent(match[1]));
+  assert.deepEqual(examples.map(intent => intent?.action), ['open', 'send']);
+});
+
 test('an Office handoff separates the Telegram Agent routing words from the exact recipient and message', async () => {
   const f = fixture({ officeFirst: true });
   const text = 'manda un messaggio a @SampleContact su Telegram con telegram agent con scritto "hello fixture!"';

@@ -514,7 +514,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       if (row.outcome !== 'needs_input') store.run('UPDATE telegram_task SET selection=NULL WHERE id=?', row.id);
       return;
     }
-    if (scope.action === 'clarify') return feedback(row, 'I could not identify the Telegram action or chat. Try “Open the chat with @username” to add a contact, or “Send ‘Hello’ to @username” to request a message.', 'blocked');
+    if (scope.action === 'clarify') return feedback(row, 'I could not identify the Telegram action or chat. Try “Open the chat with @username” to add a contact, or “Send a message to @username saying Hello” to request a message.', 'blocked');
     if (!row.thread && !officeFlow && !['send', 'draft'].includes(scope.action)) {
       row.thread = await post('telegram-task-' + digest(row.id), { msgtype: 'm.text', body: 'Telegram request from Office.' });
       store.run('UPDATE telegram_task SET thread=? WHERE id=?', row.thread, row.id);
