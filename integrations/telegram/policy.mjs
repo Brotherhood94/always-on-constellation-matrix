@@ -143,8 +143,9 @@ export class TelegramStore {
   setting(key) { return this.get('SELECT value FROM settings WHERE key=?', key)?.value; }
   set(key, value) { this.run('INSERT OR REPLACE INTO settings VALUES (?, ?)', key, String(value)); }
   paused() { return this.setting('paused') === 'true'; }
+  needsRecipientApproval(id) { return this.setting('confirm_recipient:' + id) === 'true'; }
 
-  bind(binding, controlRoom, now, { createOnly = false } = {}) {
+  bind(binding, controlRoom, now, { createOnly = false, confirmRecipient = false } = {}) {
     validateBinding(binding, controlRoom);
     const target = JSON.stringify({ peer: binding.peer, login: binding.login, receiver: binding.receiver,
       operator: binding.operator, audience: binding.audience });
@@ -159,6 +160,7 @@ export class TelegramStore {
       if (!before) {
         this.run(`INSERT INTO binding VALUES (?, ?, ?, 1, ?, ?, 1, 1, 0, ?, NULL, NULL)`,
           binding.id, binding.room, target, binding.mode, binding.trigger, now);
+        if (confirmRecipient) this.set('confirm_recipient:' + binding.id, true);
       } else if (!before.active || before.trigger !== binding.trigger || before.mode !== binding.mode) {
         this.invalidate(binding.id);
         this.run('UPDATE binding SET mode=?, trigger=?, active=1, activated=?, revision=revision+1 WHERE id=?',
@@ -293,8 +295,9 @@ export class TelegramStore {
             binding.room, reply, binding.id, binding.generation))) return false;
       const operator = JSON.parse(binding.target).operator;
       if (explicitOperator && (explicitOperator !== operator || reply)) return false;
+      const confirmRecipient = this.needsRecipientApproval(binding.id);
       this.insertDraft(binding, text, reply ?? request.event, now, { control: request.event, recipient, reply,
-        directSend: Boolean(explicitOperator) });
+        directSend: Boolean(explicitOperator) && !confirmRecipient });
       this.run('UPDATE control_request SET binding=?, generation=?, revision=? WHERE event=?',
         binding.id, binding.generation, binding.revision, request.event);
       this.controlDelivered(request.event);
@@ -371,6 +374,7 @@ export class TelegramStore {
           target: draft.target, room: draft.room, generation: draft.generation, revision: draft.revision,
           context: draft.context, expiry: draft.until, at: now });
         this.run(`UPDATE draft SET state='ready', approval=? WHERE id=?`, approval, draft.id);
+        this.run('DELETE FROM settings WHERE key=?', 'confirm_recipient:' + draft.binding);
       } else return false;
       this.run('UPDATE draft_review SET decision=? WHERE event=?', decision, review.event);
       return true;

@@ -66,7 +66,9 @@ function candidates(rooms, scope) {
     if (!room.room && samePeer.length) continue;
     if (room.room) selected.delete(room.peer);
     const name = String(room.name || room.peer).replace(/[\p{Cc}\p{Cf}]/gu, ' ').slice(0, 120);
-    selected.set(key, { peer: room.peer, room: room.room ?? null, name, type, ...(room.needsChoice && { needsChoice: true }) });
+    selected.set(key, { peer: room.peer, room: room.room ?? null, name, type,
+      ...(/^@[a-z0-9_]{4,32}$/iu.test(room.username ?? '') && { username: room.username }),
+      ...(room.needsChoice && { needsChoice: true }) });
   }
   const matches = [...selected.values()];
   if (scope.action === 'list') return matches.slice(0, 31);
@@ -257,7 +259,9 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       const transaction = action => 'telegram-office-' + digest([row.id, action]);
       const activity = row.activity ?? await reactOffice(transaction('activity'), task.handoff ?? row.id, '👀');
       const detail = result.office && state !== 'pending' ? task.feedback : null;
-      const body = detail || (result.office && state === 'needs_input' ? 'Choose the intended Telegram chat in this thread.' : telegramTaskStatus[state]);
+      const body = detail || (result.office && state === 'awaiting_approval'
+        ? 'Confirm the recipient and review the exact message in the Telegram approval poll in Agents → Control Room.'
+        : result.office && state === 'needs_input' ? 'Choose the intended Telegram chat in this thread.' : telegramTaskStatus[state]);
       const sent = await postOffice(transaction(state), { ...(result.office && state !== 'pending'
         ? operatorNotice(task.origin, body) : { msgtype: 'm.text', body: [body, result.link].filter(Boolean).join('\n') }),
         ...(result.office && { [telegramReceiptKey]: { status: state, office: true, ...(result.terminal && { terminal: true }) } }),
@@ -323,12 +327,25 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
   async function resolve(row, scope) {
     const picked = row.selection && JSON.parse(row.selection);
     if (picked) return { matches: [picked] };
-    const result = await guide({ id: row.id, action: 'resolve', target: scope.target, type: scope.type,
+    const request = { id: row.id, action: 'resolve', target: scope.target, type: scope.type,
       ...(['draft', 'send', 'read', 'add_members'].includes(scope.action) && { allowGivenName: true, ...(officeFlow && { bestMatch: true }) }),
-      linkedOnly: !['open', 'lookup'].includes(scope.action), forOpening: scope.action === 'open' });
+      linkedOnly: !['open', 'lookup'].includes(scope.action), forOpening: scope.action === 'open' };
+    const result = await guide(request);
     if (!result?.ok || !Array.isArray(result.rooms)) return { error: result?.message ?? 'Telegram Bridge is unavailable.' };
-    return { matches: candidates(result.rooms, scope) };
+    const matches = candidates(result.rooms, scope);
+    if (matches.length || !officeFlow || !['send', 'draft'].includes(scope.action)) return { matches };
+    const discovered = await guide({ ...request, linkedOnly: false, forOpening: true });
+    if (!discovered?.ok || !Array.isArray(discovered.rooms)) {
+      return { error: discovered?.message ?? 'Telegram Bridge is unavailable.' };
+    }
+    // A discovered chat may have a portal already. The bridge still has to link and verify it.
+    return { matches: candidates(discovered.rooms, scope).map(chat => ({ ...chat, room: null, discovered: true,
+      needsChoice: scope.action === 'draft' || chat.needsChoice || !(chat.username ||
+        scope.target.startsWith('@') ||
+        chat.peer === scope.target || matchTelegramName(chat.name, scope.target)) })) };
   }
+  const rememberDestination = (row, destination) => store.run(
+    "UPDATE telegram_task SET selection=? WHERE id=? AND phase='queued'", JSON.stringify(destination), row.id);
   async function perform(row, scope, tool) {
     if (isTelegramAdmin(scope.action)) {
       const result = row.office ? { message: 'Request Telegram administration in Control Room.' } :
@@ -350,34 +367,51 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     if (scope.action === 'create_group') return mutateGroup(row, scope);
     const { matches, error } = await resolve(row, scope);
     if (error) return feedback(row, error, 'blocked');
-    if (!matches.length) return feedback(row, 'No eligible Telegram chat matched. Check the exact @username, peer ID, or chat name. For drafts and updates, first open and join the chat under Telegram → People.', 'blocked');
+    if (!matches.length) return feedback(row, scope.action === 'read' || scope.action === 'unlink'
+      ? 'No linked chat matched in Telegram → People. Check its exact name, @username, or peer ID.'
+      : 'Telegram did not find a matching chat. Check the name, or try its exact @username or peer ID.', 'blocked');
     if (matches.length > 10) return feedback(row, 'More than ten chats matched. Start a request with a more specific name or exact Telegram ID.', 'blocked');
-    const choices = matches.map((item, index) => `${index + 1}. ${item.name} (${item.type}, ${item.peer})`);
+    const choices = matches.map((item, index) =>
+      `${index + 1}. ${item.name}${item.username ? ' · ' + item.username : ''} (${item.type}, ${item.peer})`);
     if (scope.action === 'lookup') return feedback(row, choices.join('\n'), 'completed');
-    if (matches.length > 1 || (matches[0].needsChoice && !row.selection)) {
-      return feedback(row, choices.join('\n') + '\n\nReply in this thread with telegram choose <number>.', 'needs_input', matches);
+    const newRoom = officeFlow && scope.action === 'open' && !matches[0].room;
+    if (matches.length > 1 || (!row.selection && (matches[0].needsChoice || newRoom))) {
+      const reply = matches.length === 1 ? 'telegram choose 1' : 'telegram choose <number>';
+      return feedback(row, choices.join('\n') + '\n\nConfirm the Telegram chat by replying in this thread with ' + reply + '.', 'needs_input', matches);
     }
-    const destination = matches[0];
+    let destination = matches[0];
     if (scope.action === 'add_members') return mutateGroup(row, scope, destination);
     if (tool === 'open_room' || tool === 'unlink_room') {
       if (!await checkRoom()) return;
       // Persist the exact selection before the idempotent bridge operation. A retry cannot resolve another chat.
-      store.run('UPDATE telegram_task SET selection=? WHERE id=? AND phase=\'queued\'', JSON.stringify(destination), row.id);
+      rememberDestination(row, destination);
       const remove = tool === 'unlink_room';
       const result = await guide({ id: row.id, action: remove ? 'remove' : 'add',
         target: remove ? destination.room : destination.peer, ...(remove && { retryByRoom: true }) });
       if (officeFlow && !remove && result?.ok && result.room) {
+        if (result.peer !== destination.peer) return feedback(row, 'Telegram Bridge could not verify the opened chat.', 'blocked');
         const prepared = await getBinding(result.room, destination.peer) ??
           (await prepareBinding({ ...destination, room: result.room }, row.id, true)).binding;
         if (!prepared) return feedback(row, 'The chat was linked. Its access could not be verified yet. Run the request again after checking Telegram Bridge.', 'blocked');
       }
       return feedback(row, result?.message ?? 'Telegram Bridge is unavailable.', result?.ok ? 'completed' : 'blocked');
     }
+    if (destination.discovered && !destination.room) {
+      if (!await checkRoom() || (row.office && !await checkOffice())) return;
+      rememberDestination(row, destination);
+      const opened = await guide({ id: row.id, action: 'add', target: destination.peer, automatic: true });
+      if (!opened?.ok || !opened.room || opened.peer !== destination.peer) {
+        return feedback(row, opened?.ok ? 'Telegram Bridge could not verify the opened chat.' :
+          opened?.message ?? 'Telegram Bridge could not open the selected chat.', 'blocked');
+      }
+      destination = { ...destination, room: opened.room };
+      rememberDestination(row, destination);
+    }
     let binding = destination.room && await getBinding(destination.room, destination.peer);
     if (!binding && destination.room && (tool === 'prepare_draft' || (officeFlow && ['send_message', 'read_recent'].includes(tool)))) {
       // Pin the exact destination before changing its relay or binding.
-      store.run("UPDATE telegram_task SET selection=? WHERE id=? AND phase='queued'", JSON.stringify(destination), row.id);
-      const prepared = await prepareBinding(destination, row.id, officeFlow);
+      rememberDestination(row, destination);
+      const prepared = await prepareBinding(destination, row.id, officeFlow, officeFlow && scope.action === 'send');
       if (!prepared.binding) return feedback(row, prepared.error, 'blocked');
       binding = prepared.binding;
     }
@@ -480,7 +514,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       if (row.outcome !== 'needs_input') store.run('UPDATE telegram_task SET selection=NULL WHERE id=?', row.id);
       return;
     }
-    if (scope.action === 'clarify') return feedback(row, 'Send one request at a time. For example, say “Send a private message to Sample Contact saying ‘Hello’.” You can also ask for a draft preview, open or unlink a chat, manage a group, or request an update.', 'blocked');
+    if (scope.action === 'clarify') return feedback(row, 'I could not identify the Telegram action or chat. Try “Open the chat with @username” to add a contact, or “Send ‘Hello’ to @username” to request a message.', 'blocked');
     if (!row.thread && !officeFlow && !['send', 'draft'].includes(scope.action)) {
       row.thread = await post('telegram-task-' + digest(row.id), { msgtype: 'm.text', body: 'Telegram request from Office.' });
       store.run('UPDATE telegram_task SET thread=? WHERE id=?', row.thread, row.id);

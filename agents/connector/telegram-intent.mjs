@@ -116,6 +116,10 @@ export function telegramIntent(body, { office = false } = {}) {
   const findAndDraft = /^(?:find|look up) (.{1,120}?) on telegram and (?:prepare|draft) a (private )?message (?:saying|that says) ([\s\S]+)$/iu.exec(input);
   if (findAndDraft) input = `prepare a ${findAndDraft[2] ?? ''}message to ${findAndDraft[1]} saying ${findAndDraft[3]}`;
   const plain = input.replace(/\s+(?:on|su) telegram[.!]?$/iu, '').replace(/[.!?]$/u, '');
+  const registerUsername = /^(?:(?:il )?username\s+(?:è|e|is)\s+)(@?[a-z0-9_]{4,32}),?\s+(?:se non (?:è )?presente,?\s+aggiungilo|add (?:it|them) if (?:missing|not linked))$/iu.exec(plain);
+  if (registerUsername) {
+    return { action: 'open', target: '@' + registerUsername[1].replace(/^@/u, ''), type: 'direct' };
+  }
   if (/^(?:list|show(?: me)?|elenca|mostrami)(?:\s+(?:my|the|le|mie))*\s+(?:(?:telegram\s+)?rooms|(?:stanze|chat)(?:\s+(?:di )?telegram)?)$/iu.test(plain)) {
     return { action: 'list' };
   }

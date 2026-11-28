@@ -349,6 +349,8 @@ await spaceClient.doRequest('PUT', childRoute.replace(encodeURIComponent(portal)
   null, {via:['telegram.test']});
 await api('/join/' + encodeURIComponent(autoPortal), {}, b.access_token);
 await api('/join/' + encodeURIComponent(autoPortal), {}, remote.access_token);
+const discoveredPortal = await privateRoom(botToken, [agent.user_id, b.user_id, remote.user_id], bridgeBot);
+await api('/join/' + encodeURIComponent(discoveredPortal), {}, remote.access_token);
 const admissionOwner = await api('/login', {type:'m.login.password', identifier:{type:'m.id.user',user:'operator'},
   password:'fixture-long-password'});
 const admittedPortal = await privateRoom(botToken, [admissionOwner.user_id], bridgeBot);
@@ -385,6 +387,8 @@ try {
     [portal, 'user:1001', '2002', b.user_id, 'dm']);
   await pool.query('INSERT INTO telegram_audit_portal VALUES ($1, $2, $3, $3, $4, NULL, $5, false, false, false)',
     [autoPortal, 'user:1002', '2002', b.user_id, 'dm']);
+  await pool.query('INSERT INTO telegram_audit_portal VALUES ($1, $2, $3, $3, $4, NULL, $5, false, false, false)',
+    [discoveredPortal, 'user:1004', '2002', b.user_id, 'dm']);
 } finally {
   await pool.end();
 }
@@ -394,23 +398,40 @@ let prompt, draftPrompt;
 const sockets = { TELEGRAM_HANDOFF_SOCKET: '/tmp/handoffs.sock', TELEGRAM_MCP_SOCKET: '/tmp/tools.sock',
   TELEGRAM_GUIDE_SOCKET: '/tmp/guide.sock', TELEGRAM_DOT_SOCKET: '/tmp/dot-requests.sock' };
 let relayPreparations = 0;
+let discoveredPortalOpens = 0;
 const guide = await listenTelegramSocket(sockets.TELEGRAM_GUIDE_SOCKET, async input => {
   if (input.action === 'history') {
     assert.equal(input.target, autoPortal);
     return { ok: true, complete: true, messages: [{ author: 'Fixture person', body: 'Meet by the station.', ts: Date.now() - 5000 }] };
   }
   if (input.action === 'prepare-binding') {
-    assert.equal(input.target, autoPortal);
-    assert.equal(input.peer, 'user:1002');
-    relayPreparations++;
+    const discovering = input.target === discoveredPortal;
+    assert.equal(input.target, discovering ? discoveredPortal : autoPortal);
+    assert.equal(input.peer, discovering ? 'user:1004' : 'user:1002');
+    if (!discovering) relayPreparations++;
     const database = new pg.Pool({ connectionString:auditDatabase });
     try {
       assert.equal((await database.query('UPDATE telegram_audit_portal SET relay=login WHERE room=$1 AND peer=$2',
-        [autoPortal, input.peer])).rowCount, 1);
+        [input.target, input.peer])).rowCount, 1);
     } finally {
       await database.end();
     }
-    return { ok: true, room: autoPortal, peer: input.peer, login: '2002' };
+    return { ok: true, room: input.target, peer: input.peer, login: '2002' };
+  }
+  if (input.action === 'resolve' && input.target === '@SampleContact') {
+    return { ok: true, rooms: input.linkedOnly && discoveredPortalOpens === 0 ? [] :
+      [{ peer: 'user:1004', name: 'Sample Contact', username: '@SampleContact',
+        ...(discoveredPortalOpens > 0 && { room: discoveredPortal }) }] };
+  }
+  if (input.action === 'add' && input.target === 'user:1004') {
+    assert.equal(input.automatic, true);
+    discoveredPortalOpens++;
+    await spaceClient.doRequest('PUT', childRoute.replace(encodeURIComponent(portal), encodeURIComponent(discoveredPortal)),
+      null, { via: ['telegram.test'] });
+    await api('/join/' + encodeURIComponent(discoveredPortal), {}, b.access_token);
+    await api('/rooms/' + encodeURIComponent(discoveredPortal) + '/state/m.room.name' + asBridge,
+      { name: 'Sample Contact' }, botToken, 'PUT');
+    return { ok: true, room: discoveredPortal, peer: 'user:1004' };
   }
   if (input.action === 'resolve' && input.target === 'Auto Pilot') {
     return { ok: true, rooms: [{ peer: 'user:1002', room: autoPortal, name: 'Auto Pilot' }] };
@@ -880,6 +901,15 @@ try {
   assert.equal(store.setting('pause_reason:pilot'), 'portal_membership_lost');
   console.log('Initial portal sync completed before activation, and later membership loss still paused the binding.');
 
+  } else {
+    // This branch skips the earlier binding setup. Establish the verified recipient used below.
+    const relay = await requestTelegramService(sockets.TELEGRAM_GUIDE_SOCKET,
+      { action: 'prepare-binding', target: autoPortal, peer: 'user:1002' });
+    assert.equal(relay.ok, true);
+    await writeFile('/state/binding-auto-pilot.json', JSON.stringify({ id: 'auto-pilot', peer: relay.peer,
+      login: relay.login, receiver: relay.login, room: autoPortal, mode: 'draft', trigger: 'request' }));
+    binder = spawn(process.execPath, ['/app/service.mjs', 'bind', 'binding-auto-pilot.json'], { stdio: 'inherit' });
+    assert.equal((await once(binder, 'exit'))[0], 0);
   }
   worker.kill('SIGTERM');
   await workerExit;
@@ -922,6 +952,51 @@ try {
   store.delivery(autoPortal, exactSend.event, 'SUCCESS', Date.now());
   await waitFor(() => store.get('SELECT status FROM telegram_office_receipt WHERE id=?', requested)?.status === 'completed',
     'Telegram Agent to complete the original Office thread');
+
+  const unboundSend = async (suffix, message, decision) => {
+    const request = await sendRoot(reader, 'discover-send-' + suffix,
+      'Task Manager: manda un messaggio a @SampleContact su Telegram con telegram agent con scritto "' + message + '"');
+    assert.equal((await submitHandoff(request, b.user_id)).office, true);
+    let draft, pollId;
+    await waitFor(() => {
+      draft = store.get('SELECT * FROM draft WHERE control_event=?', request);
+      pollId = draft && store.get('SELECT event FROM draft_review WHERE draft=?', draft.id)?.event;
+      return Boolean(pollId);
+    }, 'the new recipient approval poll');
+    assert.equal(draft.state, 'awaiting_approval');
+    assert.equal(draft.room, discoveredPortal);
+    assert.equal(draft.event, null);
+    await waitFor(async () => {
+      const next = await reader.sync(cursor, 0);
+      cursor = next.next_batch;
+      let reviewed = false;
+      await reader.applySync(next, async (room, event, encrypted, failed) => {
+        if (room !== controlRoom || event.event_id !== pollId || !encrypted || failed) return;
+        assert.equal(event.type, pollStart);
+        assert.equal(event.content['m.relates_to'], undefined);
+        const question = event.content[pollStart].question['org.matrix.msc1767.text'];
+        assert.match(question, /Sample Contact \(private chat, user:1004\)/u);
+        assert.equal(question.split('\n\n').at(-1), message);
+        reviewed = true;
+      });
+      return reviewed;
+    }, 'the operator to decrypt the exact new-recipient approval');
+    await castVote(reader, draft, decision, 'discover-vote-' + suffix);
+    return { request, draft };
+  };
+  const declined = await unboundSend('decline', 'Do not send this fixture', 'reject');
+  await waitFor(() => store.get('SELECT status FROM telegram_office_receipt WHERE id=?', declined.request)?.status === 'declined',
+    'the decline in the original Office thread');
+  assert.equal(store.draft(declined.draft.id).event, null);
+  const confirmed = await unboundSend('accept', 'Confirm this fixture', 'approve');
+  await waitFor(() => store.draft(confirmed.draft.id).state === 'matrix_accepted', 'the approved new-recipient send');
+  const delivered = store.draft(confirmed.draft.id);
+  assert.equal(delivered.attempts, 1);
+  assert.equal(discoveredPortalOpens, 1);
+  store.delivery(discoveredPortal, delivered.event, 'SUCCESS', Date.now());
+  await waitFor(() => store.get('SELECT status FROM telegram_office_receipt WHERE id=?', confirmed.request)?.status === 'completed',
+    'the approved send receipt in Office');
+  console.log('Office discovered an unlinked recipient, opened one portal, and required approval even after a decline.');
 
   dotReader = await connect(dot, 'office-dot');
   await dotReader.applySync(await dotReader.sync(null, 0), async () => {});

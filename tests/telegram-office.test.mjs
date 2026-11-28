@@ -176,9 +176,32 @@ test('an Italian exact-text request resolves an exact Telegram username with or 
   assert.deepEqual(lookups, ['@SampleHandle', '@SampleHandle']);
   linkedRoom = unlinked.room;
   assert.deepEqual((await resolve('SampleHandle')).rooms, []);
+  assert.deepEqual((await telegramOfficeAction({ id: '$discover', action: 'resolve', target: 'SampleHandle',
+    forOpening: true, linkedOnly: false, allowGivenName: true }, options)).rooms,
+  [{ peer: 'user:1001', name: linked.name, username: '@SampleHandle' }]);
   lookupError = 'M_NOT_FOUND';
   assert.deepEqual(await resolve('UnknownHandle'), { ok: true, rooms: [] });
   assert.equal((await resolve('@UnknownHandle')).ok, false);
+});
+
+test('automatic discovery respects a chat that the operator explicitly unlinked', async () => {
+  const space = '!telegram:sample.test';
+  const room = '!unlinked:sample.test';
+  const peer = 'user:1001';
+  const state = (type, content, state_key = '') => ({ type, content, state_key });
+  const options = { space, control: '!bridge:sample.test', owner, guide: agent, domain: 'sample.test', key: 'fixture',
+    database: { query: async () => ({ rows: [{ room, peer }] }) },
+    client: { getRoomState: async () => [
+      state('m.room.create', { type: 'm.space', 'm.federate': false }),
+      state('m.room.join_rules', { join_rule: 'invite' }),
+      ...[owner, agent].map(member => state('m.room.member', { membership: 'join' }, member)),
+      state('m.space.child', {}, room),
+    ] },
+    bridgeFetch: async () => assert.fail('automatic linking called the provisioner for an unlinked room'),
+  };
+  const result = await telegramOfficeAction({ id: '$discovery', action: 'add', target: peer, automatic: true }, options);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /unlinked/u);
 });
 
 test('only a linked, operator-owned chat can use the private binding route', async () => {

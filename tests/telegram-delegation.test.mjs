@@ -67,7 +67,7 @@ test('the pinned requests and Italian Telegram requests have bounded intents', (
     { action: 'read', target: 'Sam', type: 'direct', question: 'Cosa è successo oggi nel privato Sam?' });
 });
 
-function fixture({ officeFirst = false, controlAudience } = {}) {
+function fixture({ officeFirst = false, controlAudience, discovery = [] } = {}) {
   const store = new TelegramStore(':memory:');
   const effects = [];
   const originalEvents = new Map();
@@ -85,14 +85,19 @@ function fixture({ officeFirst = false, controlAudience } = {}) {
     isPaused: () => store.paused(),
     getOfficeEvent: async id => originalEvents.get(id),
     getBinding: async () => binding,
-    prepareBinding: async (destination, id) => {
-      effects.push({ action: 'prepare-binding', destination, id });
+    prepareBinding: async (destination, id, _admitOwner, confirmRecipient) => {
+      effects.push({ action: 'prepare-binding', destination, id, ...(confirmRecipient && { confirmRecipient }) });
       if (prepareError) return { error: prepareError };
       return { binding: { id: 'sam', room: destination.room, generation: 1, revision: 1 } };
     },
     guide: async input => {
-      if (input.action === 'resolve' || input.action === 'list') return { ok: true, rooms: resolved };
+      if (input.action === 'resolve' || input.action === 'list') {
+        return { ok: true, rooms: !input.linkedOnly && discovery.length ? discovery : resolved };
+      }
       effects.push(input);
+      if (input.action === 'add' && discovery.some(chat => chat.peer === input.target)) {
+        return { ok: true, room: '!discovered:sample.test', peer: input.target, message: 'Chat opened under Telegram → People.' };
+      }
       return { ok: true, message: 'Private details for ' + input.target };
     },
     post: async (txn, content) => {
@@ -423,6 +428,7 @@ function officeHandoff(f, id, body, sender = owner, structured) {
 
 test('the Office handoff verifies the original sender and queues an exact send without a poll', async () => {
   const f = fixture({ officeFirst: true });
+  f.setBinding({ id: 'sam', room: '!sam:sample.test', generation: 1, revision: 1 });
   const id = '$office-send-without-vote';
   const handoff = officeHandoff(f, id, 'Scrivi a Sam su Telegram che domani sarà una bella giornata');
   const input = { ...caller, id, method: 'submit', text: 'Send a different message on Telegram' };
@@ -440,6 +446,45 @@ test('the Office handoff verifies the original sender and queues an exact send w
   assert.equal(JSON.parse(work[0].payload).text, 'domani sarà una bella giornata');
   assert.equal(f.store.all('SELECT event FROM draft_review').length, 0);
   assert.equal(f.messages.size, 0);
+});
+
+test('Office finds and binds a missing chat for an exact send, requiring the operator to confirm the recipient', async () => {
+  const f = fixture({ officeFirst: true, discovery: [{ peer: 'user:2001', name: 'Sample Contact' }] });
+  f.resolved.length = 0;
+  const id = '$office-new-contact';
+  const handoff = officeHandoff(f, id, 'manda un messaggio a @SampleContact su Telegram con telegram agent con scritto "hello fixture!"');
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  await f.broker().tick();
+  f.restart();
+  await f.broker().receiveOffice(handoff);
+  await f.broker().tick();
+  assert.deepEqual(f.effects.map(({ action }) => action), ['add', 'prepare-binding']);
+  assert.equal(f.effects[0].target, 'user:2001');
+  assert.equal(f.effects[1].confirmRecipient, true);
+  const [work] = f.store.all('SELECT payload FROM control_request');
+  assert.equal(f.store.all('SELECT payload FROM control_request').length, 1);
+  assert.equal(JSON.parse(work.payload).verifiedBinding.room, '!discovered:sample.test');
+  assert.equal(JSON.parse(work.payload).text, 'hello fixture!');
+});
+
+test('a username follow-up asks the operator to confirm the chat without replaying a send', async () => {
+  const f = fixture({ officeFirst: true, discovery: [{ peer: 'user:2001', name: 'Sample Contact' }] });
+  f.resolved.length = 0;
+  const id = '$add-if-missing';
+  assert.equal(await f.broker().directOffice(direct(id, 'username è SampleContact se non presente aggiungilo')), true);
+  await f.broker().tick();
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  const [reply] = f.officeMessages.values();
+  assert.equal(reply[telegramReceiptKey].status, 'needs_input');
+  assert.match(reply.body, /Sample Contact.*user:2001/su);
+  assert.deepEqual(f.effects, []);
+  const choice = { event_id: '$confirm-contact', type: 'm.room.message', sender: owner,
+    content: { msgtype: 'm.text', body: 'scegli 1', 'm.relates_to': { rel_type: 'm.thread', event_id: id } } };
+  await f.broker().receiveOffice(choice);
+  await f.broker().tick();
+  assert.deepEqual(f.effects.map(({ action }) => action), ['add', 'prepare-binding']);
+  assert.equal(f.store.all('SELECT payload FROM control_request').length, 0);
 });
 
 test('an Office handoff separates the Telegram Agent routing words from the exact recipient and message', async () => {

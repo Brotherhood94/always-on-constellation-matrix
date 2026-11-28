@@ -163,7 +163,7 @@ async function run() {
     const target = binding?.active && JSON.parse(binding.target);
     return target?.peer === peer && await liveBinding(room, target) === target.audience ? binding : null;
   }
-  async function prepareBinding({ room, peer }, id, admitOwner = false) {
+  async function prepareBinding({ room, peer }, id, admitOwner = false, confirmRecipient = false) {
     const paused = { error: 'This chat already has a paused or changed binding. Review its status before starting a new request.' };
     if (store.inRoom(room)) return paused;
     if (!await checkRoom()) return { error: 'Telegram Bridge is unavailable or paused.' };
@@ -185,7 +185,7 @@ async function run() {
     if (!audience || !await checkRoom()) return { error: 'Telegram Bridge could not verify the selected chat, relay, and private room membership.' };
     const bindingId = 'auto-' + digest([room, peer, relay.login]).slice(0, 32);
     const created = store.bind({ id: bindingId, room, ...target, audience, operator: settings.owner, mode: 'draft',
-      trigger: 'request' }, settings.controlRoom, Date.now(), { createOnly: true });
+      trigger: 'request' }, settings.controlRoom, Date.now(), { createOnly: true, confirmRecipient });
     return created ? { binding: store.binding(bindingId) } : paused;
   }
   store.db.exec('CREATE TABLE IF NOT EXISTS telegram_context_outbox (id TEXT PRIMARY KEY, payload TEXT NOT NULL)');
@@ -438,7 +438,8 @@ async function run() {
       return result('The portal or its membership changed. Verify the binding before requesting another update or draft.');
     }
     if (input.action === 'compose') {
-      const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
+      const type = isDirect(binding) ? 'private chat' : 'group';
+      const recipient = `${name} (${type}${store.needsRecipientApproval(binding.id) ? ', ' + target.peer : ''})`;
       if (pausedFile() || !(await matrix.verifyControl({ requireDot }))) return;
       if (officeFirst && !input.explicitSend && !input.requireApproval) {
         return result(`Draft for ${recipient}\n\n${input.text}`, [], binding, true);

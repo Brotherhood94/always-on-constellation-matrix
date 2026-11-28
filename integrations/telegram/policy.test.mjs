@@ -350,3 +350,35 @@ test('an explicit operator send uses the outbox without a poll, preserving the v
   assert.equal(store.prepareSend(send.id, 'ciphertext', now + 3), true);
   assert.equal(store.prepareSend(send.id, 'ciphertext', now + 3), false);
 });
+
+test('declining delivery does not confirm the new recipient, including after restart', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'telegram-confirm-recipient-'));
+  const path = join(dir, 'telegram.sqlite3');
+  let store = new TelegramStore(path);
+  try {
+    assert.equal(store.bind(dm, config.controlRoom, now, { createOnly: true, confirmRecipient: true }), true);
+    const compose = event => {
+      assert.equal(store.queueControl(event, { action: 'compose' }, now, { requireDot: false }), true);
+      assert.equal(store.prepareControlDraft({ event }, store.binding(dm.id), 'Verified recipient',
+        'fixture message', null, now + 1, undefined, config.owner), true);
+      return store.get('SELECT * FROM draft WHERE control_event=?', event);
+    };
+    const first = compose('$first-send');
+    assert.equal(first.state, 'awaiting_approval');
+    assert.equal(store.nextSend(now + 2), undefined);
+    assert.equal(cmd(store, review(store, first.id, 'reject', '$first-poll'), '$decline'), true);
+    store.db.close();
+    store = new TelegramStore(path);
+
+    const second = compose('$second-send');
+    assert.equal(second.state, 'awaiting_approval');
+    assert.equal(store.nextSend(now + 2), undefined);
+    assert.equal(cmd(store, review(store, second.id, 'approve', '$second-poll'), '$accept'), true);
+    assert.equal(store.nextSend(now + 6).id, second.id);
+    assert.equal(store.draft(first.id).state, 'cancelled');
+    assert.equal(compose('$third-send').direct_send, 1);
+  } finally {
+    store.db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -338,23 +338,25 @@ export async function telegramOfficeAction(input, options) {
       if (input.forOpening) return { ok: true, rooms: [{ peer: selector, name: selector }] };
       return { ok: true, rooms: [] };
     }
+    if (!account && input.forOpening && input.allowGivenName && input.type !== 'group' && username.test('@' + selector)) {
+      account = '@' + selector;
+    }
     if (account) {
       if (!key) return fail('Activate Telegram Bridge before looking up a username.');
       const response = await bridgeFetch(bridgeProvisioning + 'resolve_identifier/' + encodeURIComponent(account) +
         '?' + new URLSearchParams({ user_id: owner }), { redirect: 'error', headers: { authorization: 'Bearer ' + key },
         signal: AbortSignal.timeout(15_000) });
-      if (!response.ok) {
-        if (account !== selector && response.status === 404 &&
-            (await response.clone().json().catch(() => null))?.errcode === 'M_NOT_FOUND') {
-          return { ok: true, rooms: [] };
-        }
-        return bridgeOpenFailure(response, true);
+      if (response.ok) {
+        const result = await response.json();
+        if (typeof result.id !== 'string' || !userPeer.test('user:' + result.id)) return fail('Telegram returned an invalid user ID.');
+        const peer = 'user:' + result.id;
+        const known = eligible.filter(row => row.peer === peer && linked.has(row.room));
+        return { ok: true, rooms: known.length || input.linkedOnly ? known :
+          [{ peer, name: result.name || selector, username: account }] };
       }
-      const result = await response.json();
-      if (typeof result.id !== 'string' || !userPeer.test('user:' + result.id)) return fail('Telegram returned an invalid user ID.');
-      const peer = 'user:' + result.id;
-      const known = eligible.filter(row => row.peer === peer && linked.has(row.room));
-      return { ok: true, rooms: known.length || input.linkedOnly ? known : [{ peer, name: result.name || selector }] };
+      if (account === selector || response.status !== 404 ||
+          (await response.clone().json().catch(() => null))?.errcode !== 'M_NOT_FOUND') return bridgeOpenFailure(response, true);
+      if (input.linkedOnly) return { ok: true, rooms: [] };
     }
     const namedGroups = async () => (await database.query(
       'SELECT room, peer, name FROM telegram_space_known_group WHERE owner = $1 AND lower(name) = lower($2) ORDER BY peer LIMIT 11',
@@ -385,6 +387,10 @@ export async function telegramOfficeAction(input, options) {
     return fail('Use @username, a user: peer ID, a Telegram group message link, or a chat: or channel: peer ID.');
   }
   if (!key) return fail('Activate Telegram Bridge before opening a chat from Office.');
+  const removed = room => state.some(event => event.type === 'm.space.child' && event.state_key === room &&
+    (!event.content?.via?.length || event.content?.[telegramAccessRevoked] === true));
+  const removedChat = () => fail('This chat was unlinked or agent access was revoked. Review its access before sending.');
+  if (input.automatic === true && eligible.some(record => record.peer === peer && removed(record.room))) return removedChat();
   const endpoint = bridgeProvisioning + (direct ? 'create_dm/' : 'constellation_group/') +
     encodeURIComponent(userId ?? peer) + '?' + new URLSearchParams({ user_id: owner });
   const open = () => bridgeFetch(endpoint, {
@@ -396,6 +402,7 @@ export async function telegramOfficeAction(input, options) {
   const result = await response.json();
   const room = direct ? result.dm_room_mxid : result.room;
   if (!matrixRoom.test(room ?? '') || room === space || room === control) return fail('The bridge did not return a Telegram room.');
+  if (input.automatic === true && removed(room)) return removedChat();
   const verified = await database.query('SELECT peer FROM telegram_space_sent_portal WHERE owner = $1 AND room = $2', [owner, room]);
   if (!verified.rows.length) return fail('The bridge did not verify the chat as an eligible Telegram room.');
   if ((userId || !direct) && !verified.rows.some(row => row.peer === peer)) {

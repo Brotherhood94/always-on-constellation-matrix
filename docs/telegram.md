@@ -25,7 +25,9 @@ In **Agents → Office**, choose **@Task Manager** from Element’s mention pick
 | Read a conversation | `Telegram: summarize what happened today in Project Room.` |
 | Unlink a chat | `Telegram: remove Project Room from my rooms.` |
 
-An explicit send delivers to the verified chat after resolution and returns the bridge’s receipt. Quoted text retains its punctuation and line breaks. Drafts are previews. Search and registration can look up contacts and known groups outside the Space. Drafts, sends and summaries use the registered chats listed under **Telegram → People**. Telegram Agent chooses a clear match automatically. An ambiguous match gets one question in the originating thread. Reply there with `telegram choose 2`, using the displayed number.
+An explicit send to an already verified chat returns the bridge’s delivery receipt. For a new recipient, Telegram Agent can find the contact or known group, link it under **Telegram → People**, and set up the binding. The approval poll in **Agents → Control Room** shows the recipient and exact message. Choose **✅ Accept** to send it or **❌ Decline** to cancel. Quoted text retains its punctuation and line breaks. Drafts are previews. Summaries use chats already linked under **Telegram → People**.
+
+Telegram Agent asks you to choose when the search is ambiguous or when you ask it to open a new chat on its own. Reply in the originating thread with `telegram choose 1`, using the displayed number for the intended chat.
 
 Group creation uses Telegram’s standard group type and needs at least one participant. The result includes the group link and each named participant’s status. Groups already accessible to your linked Telegram account can also accept new participants. Unlinking a chat removes the agent’s access and keeps your conversation.
 
