@@ -227,13 +227,17 @@ async function register(name) {
 }
 const [a,b] = await Promise.all([register('test-agent'), register('test-owner')]);
 const {room_id: room} = await api('/createRoom', {preset:'private_chat',visibility:'private',
-  creation_content:{'m.federate':false},invite:[b.user_id],initial_state:[{type:'m.room.encryption',state_key:'',content:{algorithm:'m.megolm.v1.aes-sha2'}}]}, a.access_token);
+  creation_content:{'m.federate':false},invite:[b.user_id],initial_state:[
+    {type:'m.room.encryption',state_key:'',content:{algorithm:'m.megolm.v1.aes-sha2'}},
+    {type:'m.room.history_visibility',state_key:'',content:{history_visibility:'joined'}},
+  ]}, a.access_token);
 await api('/join/' + encodeURIComponent(room), {}, b.access_token);
 async function connect(user, name) {
   const path='/tmp/' + name;
   await mkdir(path);
   await writeFile(path + '/matrix-token', user.access_token, {mode:0o600});
-  return matrixConnection({matrixUrl:url,agent:user.user_id,device:user.device,owner:user === a ? b.user_id : a.user_id,controlRoom:room},path);
+  return matrixConnection({matrixUrl:url,agent:user.user_id,device:user.device,owner:user === a ? b.user_id : a.user_id,
+    controlRoom:room,controlAudience:[a.user_id,b.user_id]},path);
 }
 const [sender,reader] = await Promise.all([connect(a,'sender'), connect(b,'reader')]);
 assert.equal(await sender.verifyControl(), true);
@@ -254,6 +258,20 @@ console.log('Telegram connector Matrix crypto round trip and exact-transaction r
 
 const adminState = new TelegramStore(':memory:');
 try {
+  let ownerCursor = batch.next_batch;
+  let agentCursor = initial.next_batch;
+  async function receive(client, start, expected, description) {
+    for (let tries = 0; tries < 25; tries++) {
+      const update = await client.sync(start, 400);
+      start = update.next_batch;
+      await client.applySync(update, async () => {});
+      const event = await client.officeEvent(room, expected).catch(error => {
+        if (error.code !== 'GenericFailure') throw error;
+      });
+      if (event) return [start, event];
+    }
+    throw new Error('Could not decrypt ' + description);
+  }
   const calls = [];
   const adminSettings = { owner: b.user_id, agent: a.user_id, domain: 'telegram.test',
     controlRoom: room, controlAudience: [a.user_id, b.user_id] };
@@ -270,17 +288,16 @@ try {
     assert.equal((await administration.request({ id: request, thread: request }, { action: 'resync' })).ok, true);
     await administration.tick();
     const review = adminState.get('SELECT * FROM telegram_admin_review WHERE id=?', request);
-    const last = await reader.sync(null, 0);
-    await reader.applySync(last, async () => {});
-    const poll = await reader.officeEvent(room, review.poll);
+    let poll;
+    [ownerCursor, poll] = await receive(reader, ownerCursor, review.poll, 'the administration poll');
     assert.deepEqual(poll.content[pollStart].answers.map(item => item['org.matrix.msc1767.text']), ['✅ Accept', '❌ Decline']);
     const type = 'org.matrix.msc3381.poll.response';
     const voteId = await reader.put(room, 'admin-ballot-' + index, await reader.encryptEvent(room, type, {
       [type]: { answers: [poll.content[pollStart].answers[index].id] },
       'm.relates_to': { rel_type: 'm.reference', event_id: review.poll },
     }));
-    await sender.applySync(await sender.sync(null, 0), async () => {});
-    const vote = await sender.officeEvent(room, voteId);
+    let vote;
+    [agentCursor, vote] = await receive(sender, agentCursor, voteId, 'the operator’s administration vote');
     await administration.accept(controlCommand({ ...vote, room, encrypted: true }, adminSettings), vote);
     assert.equal(adminState.get('SELECT state FROM telegram_admin_review WHERE id=?', request).state, decision);
     await administration.tick();

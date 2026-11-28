@@ -19,7 +19,7 @@ const owner = '@operator:' + domain;
 const password = 'synthetic-test-passphrase-88';
 const children = [];
 const base = await mkdtemp('/tmp/constellation-operations-');
-const links = { dashboard: 'https://fixture.test:8443/', context: 'https://fixture.test:8444/browser/' };
+const links = { dashboard: 'https://fixture.test:8443/', context: 'https://fixture.test:8444/browser/', telegramInControlRoom: true };
 
 async function api(path, { method = 'GET', body, token } = {}) {
   const response = await fetch(url + path, {
@@ -421,7 +421,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
 }
 
 try {
-  const alerts = await room('vps-alerts');
+  const alerts = await room('control-room');
   const office = await room('office');
   const telegramControl = await room('telegram-workspace');
   const token = await login('operator', 'PINREAD');
@@ -437,13 +437,13 @@ try {
   await writeFile(join(base, 'links.json'), JSON.stringify(links));
   await writeFile(join(monitor, 'password'), password);
   await writeFile(join(monitor, 'room-id'), alerts);
-  const monitorId = '@monitor:' + domain;
+  const monitorId = '@the-architect:' + domain;
   const officeRoute = '/_matrix/client/v3/rooms/' + encodeURIComponent(office);
   await api(officeRoute + '/invite', { method: 'POST', token, body: { user_id: monitorId } });
   const officeCommand = "./constellation_matrix --data-dir '/srv/fixture workspace' setup-guide";
   const officeReceipt = join(monitor, 'office-setup-receipt.json');
   await writeFile(join(monitor, 'office-setup.json'), JSON.stringify({ room: office, pending: true, command: officeCommand }));
-  const monitorToken = await login('monitor', 'VPSMONITOR');
+  const monitorToken = await login('the-architect', 'VPSMONITOR');
   await writeFile(join(monitor, 'token'), monitorToken);
   await writeFile(join(monitor, 'matrix-token'), monitorToken);
   const legacy = await openRoomClient({ url, state: monitor, roomId: alerts, userId: monitorId,
@@ -472,10 +472,11 @@ try {
   await writeFile(join(telegramGuide, 'room-id'), telegramControl);
   await writeFile(join(telegramGuide, 'space-id'), await room('telegram'));
   await writeFile(join(telegramGuide, 'command'), 'sudo ./constellation_matrix');
+  const telegramPins = state(telegramControl, 'm.room.pinned_events');
+  const beforeTelegramGuide = (await api(telegramPins, { token })).pinned;
   launch('/app/ops/monitor.mjs', { STATE_DIR: telegramGuide, TELEGRAM_GUIDE: 'true' });
   await eventually(async () => (await readState(join(telegramGuide, 'sync.json'))).syncToken);
-  const telegramPins = state(telegramControl, 'm.room.pinned_events');
-  await assert.rejects(api(telegramPins, { token }), /HTTP 404/);
+  assert.deepEqual((await api(telegramPins, { token })).pinned, beforeTelegramGuide);
 
   const pinReaderState = join(base, 'pin-reader');
   await mkdir(pinReaderState);
@@ -504,8 +505,9 @@ try {
       const { pinned } = await api(pinState, { token });
       const { entries = {} } = await readState(join(monitor, 'shortcut-pins.json'));
       const event = entries.dashboard?.event;
-      return pinned.length === 3 && pinned[0] === preexisting.event_id && pinned.includes(event) &&
-        pinned.includes(entries['dot-setup']?.event) && !exclude.includes(event) && event;
+      return pinned.length === 4 && pinned[0] === preexisting.event_id && pinned.includes(event) &&
+        pinned.includes(entries['dot-setup']?.event) && pinned.includes(entries['telegram-setup']?.event) &&
+        !exclude.includes(event) && event;
     });
   }
   async function verifyShortcut(event, expected) {
@@ -521,17 +523,21 @@ try {
   const dotSetup = await eventually(() => readShortcut(freshPins['dot-setup'].event));
   assert.match(dotSetup.body, /^Connect Dot\n/u);
   assert.match(dotSetup.body, /list_agents/u);
-  const telegramSetup = await eventually(async () => (await api(telegramPins, { token }).catch(error => {
-    if (!error.message.endsWith('HTTP 404')) throw error;
-    return { pinned: [] };
-  })).pinned[0]);
+  const telegramSetup = await eventually(async () => {
+    const { pinned } = await api(telegramPins, { token });
+    assert.ok(beforeTelegramGuide.every(event => pinned.includes(event)));
+    return pinned.find(event => !beforeTelegramGuide.includes(event));
+  });
   const telegramInstructions = await eventually(() => readShortcut(telegramSetup, telegramControl));
   assert.match(telegramInstructions.body, /^Set up Telegram\n/u);
-  assert.match(telegramInstructions.body, /REPLACE_WITH_YOUR_API_HASH/u);
-  assert.match(telegramInstructions.body, /4\. Element · Ask Telegram Agent/u);
-  assert.match(telegramInstructions.body, /mention Task Manager and say “Telegram:/u);
-  assert.match(telegramInstructions.body, /@Telegram Agent, add the Telegram user with ID 1001/u);
-  assert.doesNotMatch(telegramInstructions.body, /!tg pm|5\. Element/u);
+  assert.match(telegramInstructions.body, /\.\/constellation_matrix telegram setup/u);
+  assert.match(telegramInstructions.body, /choose @Task Manager from the mention picker/u);
+  assert.match(telegramInstructions.body, /Telegram: open the chat with @sample_contact/u);
+  assert.doesNotMatch(telegramInstructions.body, /!tg login|!tg pm/u);
+  const telegramAdmin = await eventually(() => readShortcut(freshPins['telegram-setup'].event));
+  assert.match(telegramAdmin.body, /^Set up Telegram\n/u);
+  assert.match(telegramAdmin.body, /Telegram: restart bridge/u);
+  assert.match(telegramAdmin.body, /Vote in Element to approve or decline/u);
   console.log('A fresh Control Room installation waited for operator keys and published one readable pin with both links.');
   const officeSetup = await eventually(async () => {
     const receipt = await readState(officeReceipt);
