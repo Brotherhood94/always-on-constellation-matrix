@@ -464,10 +464,13 @@ export class TelegramStore {
           draft.binding, draft.generation, draft.revision, event);
           if (this.get("SELECT 1 FROM sqlite_master WHERE type='table' AND name='telegram_task'")) {
             this.run('UPDATE telegram_task SET thread=? WHERE thread=?', event, draft.control_event);
+            if (this.all('PRAGMA table_info(telegram_task)').some(column => column.name === 'control_event')) {
+              this.run('UPDATE telegram_task SET control_event=? WHERE control_event=?', event, draft.control_event);
+            }
           }
         }
         this.run(`UPDATE draft SET state='awaiting_approval', approval=NULL, notified=NULL, version=version+1,
-          control_event=?, ciphertext=NULL, retry_at=0 WHERE id=?`, event ?? null, draft.id);
+          control_event=?, ciphertext=NULL, retry_at=0, direct_send=0 WHERE id=?`, event ?? null, draft.id);
       }
       this.set('review_room', room);
     });

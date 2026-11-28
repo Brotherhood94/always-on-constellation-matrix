@@ -57,6 +57,18 @@ export function improvementJobs(actor, rows, roster) {
   return jobs;
 }
 
+export function telegramRouteEvidence(rows, via, after) {
+  const requests = new Map();
+  for (const { data, at } of rows) {
+    const receipt = JSON.parse(data);
+    if (receipt.route === via && eventId(receipt.request) && eventId(receipt.result_event) &&
+        eventId(receipt.thread) && Date.parse(at) >= after && !requests.has(receipt.request)) {
+      requests.set(receipt.request, receipt);
+    }
+  }
+  return [...requests.values()];
+}
+
 export async function openDesk({client, db, catalog, office, owner, planner, actor, reportHire}) {
   const room = (await readFile('/state/control-room-id','utf8')).trim();
   const token = (await readFile('/context-token','utf8')).trim();
@@ -155,6 +167,18 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
     const jobs = improvementJobs(actor, rows, roster);
     if (staffing) staffingBatch = {examples:staffingExamples(rows, roster), exact:jobs};
     else for (const [id,job] of jobs) queue(id,job);
+    if (actor === 'coach' && enabled && roster.some(agent => agent.key === 'telegram-agent' && agent.active)) {
+      const after = Date.now() - 30 * 86400_000;
+      const result = await contextRequest('/office/review/telegram-deliveries', token, { room: office, since: new Date(after).toISOString() });
+      const shortcut = catalog.current().routingShortcuts?.['dot-telegram-send'];
+      if (shortcut?.enabled) {
+        const verified = telegramRouteEvidence(result.results, 'dot-direct', Date.parse(shortcut.time));
+        if (verified.length) queue('telegram-route-followup:' + shortcut.approval, { mode: 'telegram-route-followup', verified: verified.length });
+      } else {
+        const verified = telegramRouteEvidence(result.results, 'task-manager', Math.max(after, Date.parse(shortcut?.time) || 0));
+        if (verified.length >= 3) queue('telegram-route:' + (shortcut?.approval ?? 'initial'), { mode: 'telegram-route', verified: verified.slice(0, 3) });
+      }
+    }
     if (actor === 'scouter') {
       const week = weeklyWindow(Date.now(),process.env.SCOUT_WEEKLY_UTC);
       if (week && week >= started) queue('week:' + week,{mode:'weekly'});
@@ -208,6 +232,21 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
         operation:{kind:'add',agent:decision.key,profile,firstTask:decision.first_task}};
     }
     if (actor === 'coach') {
+      if (job.mode === 'telegram-route') {
+        const evidence = job.verified.map(row => row.result_event);
+        return { message: 'Three Office requests routed through Task Manager produced verified Telegram deliveries. Allow Dot to address Telegram Agent directly for an explicit send. ' +
+          'Telegram Agent still verifies the recipient and reports the result.\n' + job.verified.map(row => link(office, row.result_event)).join('\n'),
+          operation: { kind: 'route', agent: 'telegram-agent', evidence } };
+      }
+      if (job.mode === 'telegram-route-followup') {
+        return { message: 'Telegram confirmed ' + job.verified + ' direct Office deliveries since the shortcut was approved. Review the route in Team connections.' };
+      }
+      if (job.mode === 'request' && /^(?:undo telegram route|annulla scorciatoia telegram)$/iu.test(job.text.trim())) {
+        const shortcut = catalog.current().routingShortcuts?.['dot-telegram-send'];
+        if (!shortcut?.enabled) return { message: 'There is no active Telegram shortcut to undo.' };
+        return { message: 'Restore Task Manager as the default entry point for Telegram sends from Dot.',
+          operation: { kind: 'route-undo', agent: 'telegram-agent', revision: shortcut.approval } };
+      }
       if (job.mode === 'request' && /^undo\s+[\w-]+$/u.test(job.text)) {
         const key = job.text.trim().split(/\s+/u)[1];
         const prior = db.prepare('SELECT id,evidence FROM desk_followups WHERE agent=? ORDER BY rowid DESC LIMIT 1').get('@'+key+':'+process.env.MATRIX_SERVER_NAME);
@@ -263,7 +302,10 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
     }
     const op = result.operation;
     if (op && enabled) {
-      if (actor === 'coach') {
+      if (op.kind === 'route' || op.kind === 'route-undo') {
+        const source = await say(row.id, result.message);
+        approvals.enqueue(source, op, result.message, 'agent');
+      } else if (actor === 'coach') {
         const reply = await submit({actor,routine:true,operation:op});
         if (reply.status === 'retry') throw new Error('Workshop busy');
         if (reply.status === 'applied') {

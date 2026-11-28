@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
-import { improvementJobs, weeklyWindow } from './team.mjs';
+import { improvementJobs, telegramRouteEvidence, weeklyWindow } from './team.mjs';
 import { checkTargetTools, publicUrl, research, useTool } from '../../../agents/connector/team-tools.mjs';
 import { needFromReply } from '../../../agents/connector/capability-dispatch.mjs';
 import { acceptsContact } from '../../../agents/connector/agent-catalog.mjs';
@@ -120,4 +120,17 @@ test('target verification is durable and delivery retries reuse its decision', a
   assert.equal(reports.length,1);
   assert.deepEqual([reports[0].event,reports[0].data.status,reports[0].data.change],['office:tool_check','failed',change]);
   db.close();
+});
+
+test('Coach counts recent Telegram delivery evidence once per source request and direction', () => {
+  const at = '2026-11-28T09:00:00Z';
+  const row = (request, result_event, route = 'task-manager', time = at) => ({
+    at: time, data: JSON.stringify({ request, thread: '$thread', result_event, route }),
+  });
+  const rows = [row('$first', '$reply-one'), row('$first', '$reply-retry'), row('$second', '$reply-two'),
+    row('$third', '$reply-three', 'dot-direct'), row('$old', '$reply-old', 'task-manager', '2026-10-01T00:00:00Z')];
+  assert.deepEqual(telegramRouteEvidence(rows, 'task-manager', Date.parse('2026-11-01')).map(row => row.result_event),
+    ['$reply-one', '$reply-two']);
+  assert.deepEqual(telegramRouteEvidence(rows, 'dot-direct', Date.parse('2026-11-01')).map(row => row.result_event),
+    ['$reply-three']);
 });

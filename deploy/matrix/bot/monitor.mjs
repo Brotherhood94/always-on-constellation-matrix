@@ -81,7 +81,7 @@ async function initialize() {
     throw new Error('The guide room requires Matrix encryption');
   }
   await client.crypto.prepare();
-  if (!telegram) await client.setDisplayName('TheArchitect');
+  if (!telegram) await client.setDisplayName('The Architect');
   if (!telegram && !(await client.crypto.isRecoveryAvailable())) {
     const key = await client.crypto.createIdentity();
     await writeAtomic(join(STATE_DIR, 'bot-recovery-key'), key);
@@ -122,14 +122,16 @@ async function deliver({ client, roomId }) {
 
 async function shortcuts({ client, roomId }) {
   if (!WORKSPACE_LINKS && !telegram) return;
+  const audience = JSON.parse(await readOptional(join(STATE_DIR, 'control-audience.json')) ?? 'null');
+  if (telegram && audience) return;
   const file = join(STATE_DIR, 'shortcut-pins.json');
   const state = JSON.parse(await readOptional(file) ?? '{"entries":{},"replaced":[]}');
   const route = '/_matrix/client/v3/rooms/' + encodeURIComponent(roomId);
   const pinRoom = {
     recipientKey: async () => {
       if (!(await client.getJoinedRoomMembers(roomId)).includes(MATRIX_OWNER)) return null;
-      if (telegram && !(await privateTelegramControl(client, { control: roomId, domain: MATRIX_SERVER_NAME,
-        owner: MATRIX_OWNER, guide: userId, bridgeControl: true }))) return null;
+      if ((telegram || audience) && !(await privateTelegramControl(client, { control: roomId, domain: MATRIX_SERVER_NAME,
+        owner: MATRIX_OWNER, guide: userId, bridgeControl: true, controlAudience: audience }))) return null;
       return operatorDeviceKey(client);
     },
     getPinned: async () => {
@@ -212,8 +214,9 @@ async function telegramRooms({ client, roomId }) {
     spaceConnection = connection;
   }
   const space = (await readFile(join(STATE_DIR, 'space-id'), 'utf8')).trim();
+  const controlAudience = JSON.parse(await readOptional(join(STATE_DIR, 'control-audience.json')) ?? 'null');
   const options = {
-    space, domain: MATRIX_SERVER_NAME, owner: MATRIX_OWNER, guide: userId, control: roomId, bridgeControl: true,
+    space, domain: MATRIX_SERVER_NAME, owner: MATRIX_OWNER, guide: userId, control: roomId, bridgeControl: true, controlAudience,
   };
   const socketOptions = async () => ({ ...options, client, database: spaceDatabase,
     key: (await readOptional(join(STATE_DIR, 'office-bridge-key')))?.trim() });

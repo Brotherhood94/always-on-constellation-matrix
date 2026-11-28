@@ -151,6 +151,11 @@ class DefaultHandler:
             receipt = operation.get("id") if isinstance(operation, dict) else None
             if isinstance(receipt, str) and re.fullmatch(r"[a-f0-9]{32}", receipt):
                 node_props["vps_operation_id"] = receipt
+        if (event == "telegram:office_delivery" and self.services.graph.workspace == "telegram"
+                and self.services.graph.created_by == "telegram-agent"):
+            room = data.get("room")
+            if isinstance(room, str) and re.fullmatch(r"![^\s/#?%]{1,254}", room):
+                node_props["telegram_office_room"] = room
         office = office_step(event, evidence, scope, self.services.graph)
         if office:
             node_props.update(office)

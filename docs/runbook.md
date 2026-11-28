@@ -102,18 +102,18 @@ Retirement removes the worker from Office, the dashboard, Docker Compose, and Pe
 
 Hiring Manager can retire local specialists and other starter roles with operator approval. The operator can also retire Hiring Manager from the VPS. [Starter team and migration](team.md)
 
-### Upgrade from Root to TheArchitect
+### Upgrade from Root to The Architect
 
-From the updated VPS checkout, run the migration, then complete TheArchitect’s native Amplifier sign-in.
+From the updated VPS checkout, run the migration, then complete The Architect’s native Amplifier sign-in.
 
 ```sh
 ./constellation_matrix agent migrate-root
 ./constellation_matrix agent configure the-architect
 ```
 
-Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. TheArchitect joins the existing encrypted **Control Room** chat with a new Matrix identity. Update saved install configurations to use `the-architect` where they previously listed `root`. [TheArchitect guide](../integrations/root/README.md)
+Confirm the migration by typing `migrate`. Use the same migration command to resume if interrupted. The old Root account is deactivated, its pending approvals are superseded, and its audit archive stays on the host. The Architect joins the existing encrypted **Control Room** chat with a new Matrix identity. Update saved install configurations to use `the-architect` where they previously listed `root`. [The Architect guide](../integrations/root/README.md)
 
-For approved workspace changes or opted-in connector recovery, follow [TheArchitect maintenance](../integrations/root/README.md#repository-maintenance-and-automatic-recovery). Pause automatic recovery before planned service work.
+For approved workspace changes or opted-in connector recovery, follow [The Architect maintenance](../integrations/root/README.md#repository-maintenance-and-automatic-recovery). Pause automatic recovery before planned service work.
 
 ## Move agents between hosts
 
@@ -153,7 +153,7 @@ Run these commands from the VPS checkout. Omitting `--to` opens a host picker. T
 
 The old agent remains available during destination preflight. It then drains its current work while routing pauses. The destination gets the workspace, Matrix device and encryption state, Amplifier sessions, and any supported credentials over an authenticated, encrypted connection. Matrix and the shared desktop stay on the VPS. The dashboard shows **Draining** or **Moving** during the interruption. Check **Persona and duties** afterwards for the health time and move outcome.
 
-Task Manager, Hiring Manager, Coach, Scouter, Helper, and general Office workers can move. For Telegram Agent, the Amplifier Instance moves while the VPS retains the Matrix connector, pending requests, delivery receipts, and mautrix bridge. TheArchitect stays on the host it administers. Context Intelligence, Persona Workshop, and Dot’s tunnel also stay on the VPS.
+Task Manager, Hiring Manager, Coach, Scouter, Helper, and general Office workers can move. For Telegram Agent, the Amplifier Instance moves while the VPS retains the Matrix connector, pending requests, delivery receipts, and mautrix bridge. The Architect stays on the host it administers. Context Intelligence, Persona Workshop, and Dot’s tunnel also stay on the VPS.
 
 ### Resume or roll back
 

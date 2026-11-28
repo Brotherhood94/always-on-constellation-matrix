@@ -114,6 +114,34 @@ class RefactorTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate({**plan, **overwrite})
 
+    def test_digital_twin_setup_uses_selected_model_and_schedules_instead_of_starting(self):
+        from twin import dashboard_snapshot, setup
+        from installer import save
+        with TemporaryDirectory() as working:
+            data = Path(working)
+            (data / 'architecture').mkdir()
+            save(data / 'settings.json', {'control_runtime': True})
+            save(data / 'agents.json', {'agents': {'the-architect': {'active': True}}})
+            save(data / 'architecture/snapshot.json', {'revision': '1' * 64,
+                'agents': {'the-architect': {'name': 'The Architect'}, 'helper': {'name': 'Helper'}}})
+            profile = {'account': 'f' * 24, 'mode': 'chatgpt_codex', 'model': 'fixture-model', 'effort': 'low'}
+            with (patch('twin.enqueue') as enqueue, patch('setup_guide.interactive_terminal', return_value=True),
+                  patch('agent_picker.choose_option', side_effect=['start', '60']),
+                  patch('agent_picker.terminal_picker', return_value=['helper']),
+                  patch('shared_provider.catalog', return_value=profile)):
+                setup(data)
+            _, identifier, plan = enqueue.call_args.args
+            self.assertEqual(plan, {**profile, 'agents': ['helper'], 'minutes': 60, 'revision': '1' * 64})
+            self.assertEqual(json.loads((data / 'twins/setup.json').read_text())['id'], identifier)
+            job = data / 'twins' / identifier
+            job.mkdir()
+            save(job / 'job.json', {'id': identifier, 'status': 'queued', 'created': 1, 'plan': plan,
+                                    'grants': ['private-grant']})
+            snapshot = dashboard_snapshot(data, 2)
+            self.assertEqual(snapshot['jobs'][0]['agents'], ['helper'])
+            self.assertNotIn('private-grant', json.dumps(snapshot))
+            self.assertNotIn(profile['account'], json.dumps(snapshot))
+
     def test_timing_event_has_one_stable_replay_key_and_separate_queue_time(self):
         with TemporaryDirectory() as directory:
             outbox = Path(directory)

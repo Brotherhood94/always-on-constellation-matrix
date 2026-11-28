@@ -42,7 +42,7 @@ await writeFile('/office-token', 'office-fixture');
 await writeFile('/state/agents.json', JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
   dynamicHandoffs: true, agents: [
     { key: 'manager', id: manager.user_id, name: 'Manager', role: 'coordinator', limits: 'Fixture', status: 'Available', capabilities: [] },
-    { key: 'the-architect', id: root.user_id, name: 'TheArchitect', role: 'worker', limits: 'Fixture', status: 'Available', capabilities: [] },
+    { key: 'the-architect', id: root.user_id, name: 'The Architect', role: 'worker', limits: 'Fixture', status: 'Available', capabilities: [] },
   ],
 }));
 await writeFile('/state/model-ready', 'ready');
@@ -141,7 +141,7 @@ try {
   let cursor = (await timeline()).next_batch;
   const thread = await sendEncrypted(reader, agents, 'fixture-thread', mentionMessage('Original task thread', {id: manager.user_id, name: 'Manager'}));
   const forged = await sendEncrypted(managerClient, agents, 'fixture-forged', {
-    ...mentionMessage('Check a synthetic local ID.', {id: root.user_id, name: 'TheArchitect'}),
+    ...mentionMessage('Check a synthetic local ID.', {id: root.user_id, name: 'The Architect'}),
     [turnKey]: {request: thread, number: 1},
     'm.relates_to': {rel_type: 'm.thread', event_id: thread, 'm.in_reply_to': {event_id: '$unrelated'}},
   });
@@ -154,7 +154,7 @@ try {
       : dynamic ? 'Root: Check a synthetic local ID.' : 'Root: fixed status fixture';
     const sender = exact ? manager.user_id : owner.user_id;
     const source = await sendEncrypted(exact ? managerClient : reader, agents, 'fixture-request-' + index,
-      {...mentionMessage(body, {id: root.user_id, name: 'TheArchitect'}),
+      {...mentionMessage(body, {id: root.user_id, name: 'The Architect'}),
         ...(index === 1 && {'m.relates_to':{rel_type:'m.thread',event_id:thread,is_falling_back:true,'m.in_reply_to':{event_id:thread}},
           [turnKey]: {request:thread, number:1, managed:{version:2,manager:manager.user_id,target:root.user_id}}})});
     const state = await waitFor(() => {
@@ -236,7 +236,7 @@ try {
     assert.equal(new Set(entries.map(record => record.data.execution.task_id)).size, 1);
   }
   const malformed = await sendEncrypted(reader, agents, 'fixture-malformed',
-    mentionMessage('Invalid review\n\nROOT_REVIEW: private-marker', {id: root.user_id, name: 'TheArchitect'}));
+    mentionMessage('Invalid review\n\nROOT_REVIEW: private-marker', {id: root.user_id, name: 'The Architect'}));
   const invalid = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE id=? AND source_notified=1')
     .get(digest(agents + ':' + malformed).slice(0,32)));
   assert.equal(invalid.outcome, 'proposal_failed');
@@ -245,10 +245,10 @@ try {
   assert.equal(invalid.proposal_event, null);
   assert.equal(database.prepare('SELECT id FROM tasks WHERE event=?').get(forged), undefined);
   assert.equal(accepted.length, 3);
-  console.log('TheArchitect handoffs and reviewed plans reached the encrypted poll, the owner vote and the source receipt.');
+  console.log('The Architect handoffs and reviewed plans reached the encrypted poll, the owner vote and the source receipt.');
   console.log('Invalid input produced a specific reason, without publishing a poll or running a command.');
   const maintenance = await sendEncrypted(reader, agents, 'fixture-maintenance',
-    mentionMessage('maintenance dashboard fixture', {id: root.user_id, name: 'TheArchitect'}));
+    mentionMessage('maintenance dashboard fixture', {id: root.user_id, name: 'The Architect'}));
   const approval = await waitFor(() => {
     const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(maintenance);
     assert.equal(task?.outcome ?? null, null, task?.summary);
@@ -273,7 +273,7 @@ try {
   const diagnostic = await sendEncrypted(reader, agents, 'fixture-telegram-diagnostics', mentionMessage(
     'Diagnostica il blocco. Parti dallo stato dei servizi e dai log, e individua se il problema è nel destinatario, nel binding o nel bridge. ' +
     'Se trovi un guasto sul VPS, proponi la correzione minima in Control Room, con verifica e ripristino. Dopo l’approvazione, ripeti soltanto la prova della bozza.',
-    {id: root.user_id, name: 'TheArchitect'}));
+    {id: root.user_id, name: 'The Architect'}));
   const check = await waitFor(() => {
     const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(diagnostic);
     assert.equal(task?.outcome ?? null, null, task?.summary);
@@ -311,7 +311,7 @@ try {
   assert.equal(accepted.length, 5); // Analysis did not run a second operation.
 
   const directCheck = await sendEncrypted(reader, agents, 'fixture-synapse-diagnostics',
-    mentionMessage('Diagnostica synapse', {id: root.user_id, name: 'TheArchitect'}));
+    mentionMessage('Diagnostica synapse', {id: root.user_id, name: 'The Architect'}));
   const direct = await waitFor(() => {
     const task = database.prepare('SELECT tasks.*, review_polls.event AS poll_event FROM tasks LEFT JOIN review_polls USING(id) WHERE tasks.event=?').get(directCheck);
     assert.equal(task?.outcome ?? null, null, task?.summary);
@@ -325,7 +325,7 @@ try {
   await waitFor(() => database.prepare('SELECT id FROM tasks WHERE id=? AND outcome=? AND source_notified=1').get(direct.id, 'denied'));
   assert.equal(accepted[5].action, 'reject');
   const badCheck = await sendEncrypted(reader, agents, 'fixture-retry-invalid',
-    mentionMessage('fixture retry stays invalid', {id:root.user_id, name:'TheArchitect'}));
+    mentionMessage('fixture retry stays invalid', {id:root.user_id, name:'The Architect'}));
   const failedCheck = await waitFor(() => database.prepare('SELECT * FROM tasks WHERE event=? AND source_notified=1').get(badCheck));
   assert.equal(failedCheck.outcome, 'proposal_failed');
   assert.equal(failedCheck.proposal_event, null);

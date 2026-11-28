@@ -274,8 +274,8 @@ def verify_matrix_receipt(config, payload, fetch_event):
             payload['id'] != sha(source + ':' + payload['request'])[:32]):
         raise ValueError('Unexpected source or review room.')
     request = fetch_event(source, payload['request'])
-    if source == review and request.get('sender') != config['owner']:
-        raise ValueError('Only the operator may request an operation in Control Room.')
+    if source == review and request.get('sender') not in {config['owner'], config.get('dot')}:
+        raise ValueError('Control Room requests require the operator or the configured Dot identity.')
     proposal = fetch_event(review, payload['proposal'])
     poll = fetch_event(review, payload['poll'])
     vote = fetch_event(review, payload['decision'])
@@ -314,7 +314,7 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
     validate(payload, approvers, operations, now)
     operation = payload['operation']
     if require_review and ('proposal' not in payload or operation == REVIEWED_SCRIPT):
-        raise ValueError('TheArchitect requires a reviewed operation with verification.')
+        raise ValueError('The Architect requires a reviewed operation with verification.')
     digest, identifier, receipt = payload['hash'], payload['id'], payload['decision']
     existing = db.execute(
         'SELECT digest, decision, requested, approver, action, outcome, exit_code, result FROM audit WHERE id=?',
@@ -357,7 +357,7 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
                 outcome, code, result = plan_runner(payload['plan'], identifier)
             elif operation == MAINTENANCE_RELEASE:
                 if maintenance is None:
-                    raise ValueError('TheArchitect maintenance is disabled.')
+                    raise ValueError('The Architect maintenance is disabled.')
                 try:
                     with maintenance.locked():
                         release = json.loads(payload['plan'])
@@ -385,16 +385,19 @@ def handle(db, payload, approvers, operations, now=None, runner=execute, script_
 def maintenance_request(maintenance, config, payload, fetch_event):
     action = payload.get('maintenance')
     if maintenance is None or action not in {'prepare', 'seal', 'scan'}:
-        raise ValueError('TheArchitect maintenance is disabled.')
+        raise ValueError('The Architect maintenance is disabled.')
     with maintenance.locked():
         if action == 'scan':
             return {'receipts': maintenance.scan()[-10:]}
         event = payload.get('request')
         identifier = payload.get('id')
-        source = config['agents']
-        if not isinstance(event, str) or not EVENT_ID.fullmatch(event) or identifier != sha(source + ':' + event)[:32]:
-            raise ValueError('A maintenance workspace must belong to an Office request.')
+        source = payload.get('source_room', config['agents'])
+        if (source not in {config['agents'], config['audit']} or not isinstance(event, str)
+                or not EVENT_ID.fullmatch(event) or identifier != sha(source + ':' + event)[:32]):
+            raise ValueError('A maintenance workspace requires a verified Office or Control Room request.')
         raw = fetch_event(source, event)
+        if source == config['audit'] and raw['sender'] not in {config['owner'], config.get('dot')}:
+            raise ValueError('Use the operator or Dot in Control Room to request maintenance.')
         if raw['sender'] == config['root'] or raw['origin_server_ts'] + 2 * WINDOW < int(time.time() * 1000):
             raise ValueError('The maintenance request is stale or is from the executor.')
         return maintenance.prepare(identifier) if action == 'prepare' else maintenance.seal(identifier)

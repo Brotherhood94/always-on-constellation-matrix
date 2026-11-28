@@ -53,7 +53,7 @@ def revoke_legacy(data, settings, rooms, operator):
         raise ValueError('Restore the #root-dm alias to the original Control Room room before migrating')
     for room in (audit, rooms['office']):
         if membership(room, user, operator) in {'invite', 'join'}:
-            request('POST', room_route(room) + '/kick', {'user_id': user, 'reason': 'Replaced by TheArchitect'}, operator)
+            request('POST', room_route(room) + '/kick', {'user_id': user, 'reason': 'Replaced by The Architect'}, operator)
     account_data = f"{CLIENT}/user/{encoded(rooms['owner'])}/account_data/m.direct"
     direct = missing(account_data, operator) or {}
     if audit in direct.get(user, []):
@@ -97,15 +97,15 @@ def migrate_root(data, password_file, confirmed):
         settings, registry = open_existing(data)
         progress = load(journal) if journal.exists() else {}
         if progress.get('phase') == 'complete':
-            print('TheArchitect is already provisioned.')
+            print('The Architect is already provisioned.')
             return
         if 'root' not in registry['agents'] and not progress:
             raise ValueError('This deployment has no legacy Root agent to migrate')
         if not settings['systemd']:
-            raise ValueError('TheArchitect requires systemd on the deployment host')
+            raise ValueError('The Architect requires systemd on the deployment host')
         if not progress:
             if 'the-architect' in registry['agents'] or 'the-architect' in registry.get('retired', {}):
-                raise ValueError('Resolve the existing TheArchitect identity before migration')
+                raise ValueError('Resolve the existing The Architect identity before migration')
             if not confirmed and (not sys.stdin.isatty() or input(
                     'Type migrate to retire Root and keep its Control Room chat: ').strip() != 'migrate'):
                 raise ValueError('Migration requires confirmation. Use --yes for a scripted migration.')
@@ -142,10 +142,10 @@ def migrate_root(data, password_file, confirmed):
             sync_workshop(settings, data, registry)
             up(data, *(key for key, entry in registry['agents'].items()
                        if entry['placement'] == 'local' and entry['active']))
-            commit_registry(data / 'agents.json', registry, actor=settings['owner'], reason='TheArchitect migration')
+            commit_registry(data / 'agents.json', registry, actor=settings['owner'], reason='The Architect migration')
             save(data / 'settings.json', settings)
             publish_inventory(settings, data, registry)
             save(journal, {'phase': 'complete'})
         finally:
             request('POST', CLIENT + '/logout', {}, operator)
-    print('Root was retired. Activate TheArchitect with agent configure the-architect.')
+    print('Root was retired. Activate The Architect with agent configure the-architect.')

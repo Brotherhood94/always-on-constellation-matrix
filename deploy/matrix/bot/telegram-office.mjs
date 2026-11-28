@@ -72,12 +72,14 @@ async function bridgeOpenFailure(response, direct, userId) {
   return fail(`Telegram Bridge could not open the chat (HTTP ${response.status}). ${check}`);
 }
 
-export async function privateTelegramControl(client, { control, owner, guide, domain, bridgeControl = false }) {
+export async function privateTelegramControl(client, { control, owner, guide, domain, bridgeControl = false, controlAudience }) {
   const state = await client.getRoomState(control);
   const find = type => state.find(event => event.type === type && event.state_key === '')?.content;
   const members = new Map(state.filter(event => event.type === 'm.room.member' &&
     ['join', 'invite'].includes(event.content?.membership)).map(event => [event.state_key, event.content.membership]));
-  const allowed = new Set([owner, guide, (bridgeControl ? '@telegrambot:' : '@dot:') + domain]);
+  if (controlAudience && (find('m.room.history_visibility')?.history_visibility !== 'joined' ||
+      members.size !== controlAudience.length || !controlAudience.every(member => members.get(member) === 'join'))) return false;
+  const allowed = new Set(controlAudience ?? [owner, guide, (bridgeControl ? '@telegrambot:' : '@dot:') + domain]);
   return find('m.room.encryption')?.algorithm === 'm.megolm.v1.aes-sha2' &&
     find('m.room.join_rules')?.join_rule === 'invite' && find('m.room.create')?.['m.federate'] === false &&
     !find('m.room.tombstone') && members.get(owner) === 'join' && members.get(guide) === 'join' &&
@@ -145,8 +147,8 @@ export async function telegramControlSearch(room, event, options) {
 export async function telegramOfficeAction(input, options) {
   const { client, database, space, control, domain, owner, key, bridgeFetch = fetch } = options;
   if (!input || typeof input.id !== 'string' || !eventId.test(input.id) ||
-      !['add', 'remove', 'draft', 'resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history'].includes(input.action) ||
-      (input.action !== 'list' && (!bounded(input.target, 120) || /[\x00-\x1f]/u.test(input.target)))) {
+      !['add', 'remove', 'draft', 'resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history', 'status'].includes(input.action) ||
+      (!['list', 'status'].includes(input.action) && (!bounded(input.target, 120) || /[\x00-\x1f]/u.test(input.target)))) {
     return fail('Use a Telegram username, group ID, room ID, or exact chat name.');
   }
   const target = input.target?.trim();
@@ -170,6 +172,15 @@ export async function telegramOfficeAction(input, options) {
   if (!database || !matrixRoom.test(space ?? '')) return fail('Activate Telegram Bridge before managing Telegram rooms.');
   const state = await telegramSpaceState(client, options);
   if (!state) return fail('The private Telegram Space is not ready.');
+  if (input.action === 'status') {
+    if (!await privateTelegramControl(client, options)) return fail('The encrypted Control Room audience could not be verified.');
+    const { rows } = await database.query(
+      'SELECT linked_accounts FROM telegram_space_login_status WHERE owner = $1', [owner]);
+    const linked = Number(rows[0]?.linked_accounts ?? 0);
+    return { ok: true, message: linked === 1 ? 'Telegram Bridge has one linked Telegram account.' :
+      linked > 1 ? 'Telegram Bridge has multiple linked accounts. Verify the account before changing its configuration.' :
+        'Telegram Bridge is running. Link your account with telegram setup on the VPS.' };
+  }
   const route = roomRoute(space) + '/state/m.space.child/';
   const names = normalizeName;
   const linked = new Set(state.filter(event => event.type === 'm.space.child' &&
@@ -361,7 +372,7 @@ export async function listenTelegramOffice(path, options, { privateLookups = fal
         }
         const input = JSON.parse(Buffer.concat(chunks).toString());
         const task = pending.then(async () => {
-          if (!privateLookups && ['resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history'].includes(input?.action)) {
+          if (!privateLookups && ['resolve', 'list', 'prepare-binding', 'create-group', 'add-members', 'history', 'status'].includes(input?.action)) {
             return fail('Chat lookup is available in the private Telegram Agent room.');
           }
           return telegramOfficeAction(input, await options());

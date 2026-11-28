@@ -187,7 +187,8 @@ async function reconcile({ recipientKey, getPinned, send, setPinned, save }, gro
 export function reconcilePins(matrix, links, state, options = {}) {
   const dashboard = shortcut(labels.dashboard, links.dashboard);
   const context = shortcut(labels.context, links.context);
-  const telegram = telegramShortcut(links.telegramBridge);
+  const telegram = links.telegramInControlRoom ? null : telegramShortcut(links.telegramBridge);
+  const archive = telegramShortcut(links.telegramArchive)?.url;
   const graphSteps = [context, 'Sign in as neo4j with your dedicated Context Intelligence password, then select Connect.'];
   if (options.graphPassword) graphSteps.push('Retrieve the stored password privately on the VPS if needed.',
     { code: options.graphPassword });
@@ -200,6 +201,9 @@ export function reconcilePins(matrix, links, state, options = {}) {
     { key: 'workspace-shortcuts', content: shortcuts, entries: Object.entries({ dashboard, context })
       .map(([key, { label, url }]) => [key, `${label} — ${url}`]) },
     { key: 'dot-setup', content: options.dot ? dotGuide(options) : null, entries: [['dot-setup', 'Connect Dot']] },
+    { key: 'telegram-setup',
+      content: links.telegramInControlRoom ? telegramGuide(options.command, archive && decodeURIComponent(new URL(archive).hash.slice(2))) : null,
+      entries: [['telegram-setup', 'Set up Telegram']] },
   ], state, { refreshDevices: false });
 }
 

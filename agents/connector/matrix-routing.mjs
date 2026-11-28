@@ -3,7 +3,7 @@ import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
 import { acceptedManaged, managedReply, replyLimit } from './managed-task.mjs';
 import { acceptsContact } from './agent-catalog.mjs';
 import { applyDispatch } from './capability-dispatch.mjs';
-import { telegramIntent, telegramMention, telegramTaskPayload } from './telegram-intent.mjs';
+import { explicitTelegramRequest, telegramIntent, telegramMention, telegramTaskPayload } from './telegram-intent.mjs';
 
 export { mentionMessage, replyLimit };
 
@@ -33,7 +33,7 @@ export function telegramOfficeAssignment(event, { owner, planner, userId, name }
     if (/\r|\n/u.test(text)) return null;
   }
   const intent = telegramIntent(text, { office: true });
-  if (!intent) return null;
+  if (!intent) return explicitTelegramRequest(text) ? { sender, text } : null;
   // Use forms understood by already running Telegram connectors.
   if (intent.type === 'direct' && /^@[a-z0-9_]{4,32}$/iu.test(intent.target)) {
     if (intent.action === 'open') text = 'Telegram: open ' + intent.target;

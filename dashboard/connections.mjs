@@ -140,9 +140,28 @@ function graphDiagram(nodes, edges) {
 let graphSignature;
 export function renderConnections(catalog) {
   const { nodes, edges, available } = connectionGraph(catalog);
-  const signature = JSON.stringify([available, nodes.map(({key, name, status, role}) => [key, name, status, role]), edges]);
+  const shortcut = catalog?.routingShortcuts?.['dot-telegram-send'];
+  const signature = JSON.stringify([available, nodes.map(({key, name, status, role}) => [key, name, status, role]), edges, shortcut]);
   if (signature === graphSignature) return;
   graphSignature = signature;
+  const route = document.getElementById('telegram-shortcut');
+  if (route) {
+    route.hidden = !shortcut;
+    route.replaceChildren();
+    if (shortcut) {
+      const specialist = nodes.find(node => node.key === 'telegram-agent');
+      route.append(document.createTextNode(shortcut.enabled ?
+        `Dot → Telegram Agent · Approved shortcut for explicit sends${specialist?.active ? '' : ' · Waiting for Telegram Agent'}` :
+        'Dot → Task Manager → Telegram Agent · Restored route'));
+      for (const [index, event] of (shortcut.evidence ?? []).entries()) {
+        if (!/^![^\s/]{1,254}$/u.test(shortcut.room) || !/^\$[^\s/]{1,254}$/u.test(event)) continue;
+        const link = document.createElement('a');
+        link.href = 'https://matrix.to/#/' + encodeURIComponent(shortcut.room) + '/' + encodeURIComponent(event);
+        link.textContent = 'Delivery ' + (index + 1);
+        route.append(' · ', link);
+      }
+    }
+  }
   const frame = document.getElementById('connection-graph');
   const board = document.getElementById('connection-board');
   const list = document.getElementById('connection-list');

@@ -47,6 +47,7 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
     return {
       members, audience: digest(members), name: content('m.room.name')?.name,
       names: new Map(active.map(event => [event.state_key, event.content.displayname])),
+      joinedHistory: content('m.room.history_visibility')?.history_visibility === 'joined',
       encrypted: content('m.room.encryption')?.algorithm === 'm.megolm.v1.aes-sha2',
       private: content('m.room.join_rules')?.join_rule === 'invite' && content('m.room.create')?.['m.federate'] === false,
       tombstone: Boolean(content('m.room.tombstone')),
@@ -56,6 +57,11 @@ export async function matrixConnection(config, path, { crypto: enableCrypto = tr
   async function verifyControl({ requireDot = false } = {}) {
     const state = await liveState(config.controlRoom);
     const members = new Map(state.members);
+    if (config.controlAudience) {
+      return state.encrypted && state.private && state.joinedHistory && !state.tombstone &&
+        members.size === config.controlAudience.length &&
+        config.controlAudience.every(member => members.get(member) === 'join');
+    }
     if (config.bridgeControl) {
       return state.encrypted && state.private && !state.tombstone && members.size === 3 &&
         [config.owner, config.agent, config.bridgeBot].every(member => members.get(member) === 'join');

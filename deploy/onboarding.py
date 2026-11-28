@@ -61,6 +61,15 @@ def guide(data, settings, command, passphrase):
                 print(f'Provider setup could not be completed. {error}')
             print(f'Resume setup with {command} setup-guide')
             return
+    if settings.get('control_runtime'):
+        from twin import setup as setup_twin
+        try:
+            setup_twin(data, onboarding=True)
+        except (KeyboardInterrupt, EOFError, OSError, ValueError, SubprocessError) as error:
+            if not isinstance(error, (KeyboardInterrupt, EOFError)):
+                print(f'Digital Twin setup could not be completed. {error}')
+            print(f'Resume setup with {command} setup-guide')
+            return
     if 'element' not in progress(path)['confirmed']:
         if confirm_element(*element_page(settings)) is None:
             print(f'\nResume setup with {command} setup-guide')

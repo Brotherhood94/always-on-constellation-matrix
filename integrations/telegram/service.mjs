@@ -211,9 +211,14 @@ async function run() {
   const delegation = TELEGRAM_MCP_SOCKET && createTelegramDelegation({ store, settings: { ...settings, officeRoom, officeFirst }, checkRoom, checkOffice,
     guide,
     getOfficeEvent: id => matrix.officeEvent(officeRoom, id),
-    recordOffice: (task, status, sent) => recordContext('telegram:office_result', task.id, {
-      request: task.id, handoff: task.handoff, result_event: sent, status,
-    }),
+    recordOffice: (task, status, sent) => {
+      recordContext('telegram:office_result', task.id, { request: task.id, handoff: task.handoff, result_event: sent, status });
+      const delivery = task.control_event && store.get("SELECT 1 FROM draft WHERE control_event=? AND state='bridge_confirmed'", task.control_event);
+      if (status === 'completed' && delivery) {
+        recordContext('telegram:office_delivery', task.id, { room: officeRoom, request: task.id,
+          thread: task.office_thread ?? task.id, result_event: sent, route: task.handoff ? 'task-manager' : task.origin === `@dot:${settings.domain}` ? 'dot-direct' : 'direct' });
+      }
+    },
     post: async (transaction, content) => {
       const ciphertext = await matrix.encryptEvent(settings.controlRoom, 'm.room.message', content);
       if (!await checkRoom()) throw new Error('Telegram Agent room changed');
@@ -424,7 +429,7 @@ async function run() {
     if (input.action === 'compose') {
       const recipient = `${name} (${isDirect(binding) ? 'private chat' : 'group'})`;
       if (pausedFile() || !(await matrix.verifyControl({ requireDot }))) return;
-      if (officeFirst && !input.explicitSend) {
+      if (officeFirst && !input.explicitSend && !input.requireApproval) {
         return result(`Draft for ${recipient}\n\n${input.text}`, [], binding, true);
       }
       if (!store.prepareControlDraft(request, binding, recipient, input.text, input.source, Date.now(), undefined,

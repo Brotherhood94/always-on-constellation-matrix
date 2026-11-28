@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { acceptedMessage, declaredOutcome, requestedAttachments, returnDelegatedReview, taskOutcomeKey, team, telegramOfficeAssignment,
   threadRelation, threadReply, turnKey } from './matrix-routing.mjs';
-import { createCatalog } from './agent-catalog.mjs';
+import { canDispatch, createCatalog } from './agent-catalog.mjs';
 import { mentionMessage, outcomeReplyText } from './matrix-format.mjs';
 import { decideDispatch, dynamicTurn, gapNotice, guidanceFor, needFromReply, routingFor } from './capability-dispatch.mjs';
 import { attachmentLimit, importAttachments, uploadAttachment } from './matrix-media.mjs';
@@ -208,7 +208,7 @@ async function deliver(client, event) {
   const processing = Date.now();
   const watch = performance.now();
   if (telegramHandoff && event.reply === null && event.id === event.request && !event.delegator &&
-      /\btelegram\b/iu.test(event.body)) {
+      /\b(?:telegram|teelgram)\b/iu.test(event.body)) {
     const original = await readEncryptedRoomMessage(client, roomId, event.id);
     const request = telegramOfficeAssignment(original, { owner: MATRIX_OWNER, planner: MATRIX_PLANNER, userId, name: AGENT_NAME });
     if (request) {
@@ -377,13 +377,18 @@ async function delegateTelegram(client, event, request) {
   await publishActivity(client, event.id);
   const specialist = { id: `@telegram-agent:${MATRIX_SERVER_NAME}`, name: 'Telegram Agent' };
   const joined = new Set(await client.getJoinedRoomMembers(roomId));
-  const handoff = joined.has(specialist.id) && await sendEncrypted(client, roomId, reactionTransaction('telegram-dispatch', event.id), {
+  await catalog.refresh();
+  const snapshot = catalog.current();
+  const registered = snapshot?.agents.find(agent => agent.id === specialist.id);
+  const eligible = joined.has(specialist.id) && (!catalog.configured ||
+    catalog.fresh() && registered && canDispatch(registered, joined));
+  const handoff = eligible && await sendEncrypted(client, roomId, reactionTransaction('telegram-dispatch', event.id), {
     ...mentionMessage('Please handle the Telegram request in this thread.', specialist),
     [telegramHandoffKey]: { request: event.id },
     'm.relates_to': threadRelation(event),
   });
   const dispatched = handoff && process.env.CONTEXT_INTELLIGENCE_URL &&
-    executionEvidence({ roomId, actor: userId, event, sent: handoff, target: specialist.id, flow: 'dispatch' });
+    executionEvidence({ roomId, actor: userId, event, sent: handoff, target: specialist.id, flow: 'dispatch', policyRevision: snapshot?.policyRevision });
   if (dispatched) store.db.prepare('INSERT OR IGNORE INTO context_outbox VALUES (?,?)').run(handoff, JSON.stringify(dispatched));
   const result = handoff ? await telegramRequest(event.id, 'submit', { ...request, handoff }) : { status: 'unavailable' };
   if (!handoff && !Object.hasOwn(telegramTaskStatus, result.status)) {

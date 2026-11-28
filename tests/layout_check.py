@@ -112,6 +112,34 @@ class LayoutTest(unittest.TestCase):
             request('PUT', room_route(space) + '/state/m.space.child/' + encoded(contact), {}, guide_token)
             self.assertEqual(reconcile_layout(*args, bridge_active=True, select=lambda _: None), migrated)
             self.assertEqual(children(space), {bridge, group})
+            monitor = login('the-architect', password)
+            join(rooms['alerts'], monitor['user_id'], monitor['access_token'])
+            audience = [owner['user_id'], monitor['user_id'], telegram_agent]
+            shared = dict(office=rooms['office'], bridge_active=True, select=lambda _: None,
+                          control=rooms['alerts'], audience=audience)
+            with sqlite3.connect(root / 'connector/telegram.sqlite3') as connection:
+                connection.execute('CREATE TABLE draft (state TEXT)')
+                connection.execute("INSERT INTO draft VALUES ('unknown')")
+            with self.assertRaisesRegex(ValueError, 'Reconcile unconfirmed'):
+                reconcile_layout(*args, **shared)
+            self.assertIn(bridge, children(space))
+            with sqlite3.connect(root / 'connector/telegram.sqlite3') as connection:
+                connection.execute("UPDATE draft SET state='bridge_confirmed'")
+            operator_pin = request('PUT', room_route(bridge) + '/send/m.room.encrypted/operator-pin', {
+                'algorithm': 'm.megolm.v1.aes-sha2', 'ciphertext': 'synthetic-envelope',
+            }, token)['event_id']
+            request('PUT', room_route(bridge) + '/state/m.room.pinned_events', {'pinned': [operator_pin]}, token)
+            moved = reconcile_layout(*args, **shared)
+            self.assertEqual(moved['control'], rooms['alerts'])
+            self.assertEqual(moved['archive'], bridge)
+            self.assertEqual(reconcile_layout(*args, **shared), moved)
+            self.assertNotIn(bridge, children(space))
+            self.assertIn(group, children(space))
+            self.assertEqual(set(request('GET', room_route(rooms['alerts']) + '/joined_members', token=token)['joined']),
+                             set(audience))
+            self.assertEqual(request('GET', room_route(bridge) + '/state/m.room.pinned_events', token=token)['pinned'],
+                             [operator_pin])
+            request('POST', room_route(rooms['alerts']) + '/kick', {'user_id': telegram_agent}, token)
 
     def test_idempotent_space_direct_chats_and_pin_power(self):
         server = os.environ['MATRIX_SERVER_NAME']

@@ -19,4 +19,9 @@ WHERE p.bridge_id='' AND p.parent_id IS NULL AND NOT (p.user_blocked OR p.messag
     AND p.metadata->'is_supergroup' = 'true'::jsonb AND p.metadata->'is_forum_general' IS DISTINCT FROM 'true'::jsonb));
 REVOKE ALL ON telegram_space_known_group FROM PUBLIC;
 GRANT SELECT ON telegram_space_known_group TO matrix_telegram_space;
+CREATE OR REPLACE VIEW telegram_space_login_status AS
+SELECT user_mxid AS owner, count(*) AS linked_accounts
+FROM user_login WHERE bridge_id='' GROUP BY user_mxid;
+REVOKE ALL ON telegram_space_login_status FROM PUBLIC;
+GRANT SELECT ON telegram_space_login_status TO matrix_telegram_space;
 COMMIT;

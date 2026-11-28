@@ -18,10 +18,10 @@ Start with six roles and add specialists as your work grows. Use the record of r
 | **Hiring Manager** | Groups recurring capability gaps across differently worded assignments and proposes new personas or retirements. | **Hiring Manager** private chat |
 | **Coach** | Reviews handoffs in Context Intelligence and revises working styles and permitted contacts through Persona Workshop. | **Coach** private chat |
 | **Scouter** | Researches skills, MCP servers, and tools for existing duties and has the target agent verify approved access. | **Scouter** private chat |
-| **TheArchitect** | Prepares host operations and tested workspace patches for an operator vote. Recovers explicitly opted-in connectors when they fail. | **Office** for requests, **Agents → Rooms → Control Room** for approval |
+| **The Architect** | Prepares host operations and tested workspace patches for an operator vote. Recovers explicitly opted-in connectors when they fail. | **Office** for requests, **Agents → Rooms → Control Room** for approval |
 | **Helper** | Answers setup and troubleshooting questions using the deployed guides and dashboard health. | **Agents → People → Helper** |
 
-Open the dashboard from **Agents → Control Room → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. **Team connections** shows the permitted directions. Follow an arrow to review that route’s changes and recent Office handoffs, or select **View connection changes** for the workspace log. [Team connections and history](docs/team.md#team-connections) · [Starting contact permissions and role examples](docs/team.md#first-interactions)
+Open the dashboard from **Agents → Control Room → Pinned messages → Workspace shortcuts**. Select **Persona and duties** on any roster entry to see what it owns, how it works, whom it can contact, and which tools it has verified. **Team connections** shows the permitted directions. Follow an arrow to review that route’s changes and recent Office handoffs, or select **View connection changes** for the workspace log. Coach can propose a direct Dot route after three bridge-confirmed Office deliveries. Review the proposal in Coach’s private chat. [Team connections and history](docs/team.md#team-connections) · [Starting contact permissions and role examples](docs/team.md#first-interactions)
 
 ![Constellation dashboard with CPU, memory and disk charts, Task Manager's contact routes, and the five-agent roster](assets/screenshots/dashboard.webp)
 
@@ -38,7 +38,9 @@ On a Linux VPS with Docker Engine and Compose, run setup as your regular user af
 
 1. Choose your network, operator, passwords, integrations, and starter team.
 2. Connect one provider and pick a model and reasoning effort. Reuse that connection for the team or choose exceptions. The installer checks the selected agents before showing the Element page.
-3. Sign in to Element with the displayed homeserver. Open **Agents → Rooms → Control Room** for the dashboard, Context Intelligence, and enabled integration guides. Finish Telegram QR sign-in in **Telegram Bridge** if you enabled it.
+3. Set up the optional Digital Twin and choose its provider, model, reasoning effort, and test agents. You can also set it up later with `./constellation_matrix twin setup`.
+
+4. Sign in to Element with the displayed homeserver. Open **Agents → Rooms → Control Room** for the dashboard, Context Intelligence, and enabled integration guides. If you enabled Telegram, finish its QR sign-in in the VPS terminal.
 
 Resume an interrupted setup with `./constellation_matrix setup-guide`. [Guided setup](docs/setup-guide.md)
 
@@ -60,7 +62,7 @@ Enabling **Telegram** installs **Telegram Agent** automatically. Telegram Agent 
 ### Finish in Element
 
 - **Agents → Control Room → Pinned messages.** Open **Workspace shortcuts** for the dashboard and Context Intelligence. If you enabled Dot, open **Connect Dot** to configure the private Constellation Office plugin.
-- **Telegram → Rooms → Telegram Bridge → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Telegram Agent verifies the destination and reports the result in the originating thread. Use a draft request to preview a message. [Telegram setup and examples](docs/telegram.md)
+- **Agents → Control Room → Pinned messages.** Open **Set up Telegram**. Telegram Agent manages the Telegram Space and joins Office as its Telegram specialist. Mention **@Telegram Agent** or **@Task Manager** in Office. Find contacts and groups under **Telegram → People**. Telegram Agent verifies the destination and reports the result in the originating thread. Use a draft request to preview a message. [Telegram setup and examples](docs/telegram.md)
 
 ### Send your first task
 
@@ -118,7 +120,7 @@ Context Intelligence records who handed off an assignment, whether the recipient
 
 *The same demo task in Neo4j Browser. The graph links Task Manager’s dispatch to Scouter’s acceptance and return, and records the verified outcome.*
 
-These management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving TheArchitect in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
+These management workflows become available as the relevant agents activate. The operator approves hires, retirements, tool grants, and changes to contacts involving The Architect in private chats. Coach can apply and undo ordinary working-style and contact changes. [Team workflows](docs/team.md#first-interactions)
 
 ## Architecture
 
@@ -195,8 +197,8 @@ For unattended provisioning, edit the example configuration, check it with `./co
 | Manage staffing | Ask **Hiring Manager** to hire or retire a teammate and review its exact proposal in the private chat. [Staffing](docs/team.md#first-interactions) |
 | Improve handoffs or tools | Ask **Coach** about an Office handoff, or **Scouter** about a missing tool. [Contacts and tool grants](docs/team.md) |
 | Upgrade an existing team | Preview with `./constellation_matrix agent migrate-team`. [Migration and recovery](docs/team.md#upgrade-an-existing-team) |
-| Ask for VPS maintenance | Mention **TheArchitect** in Office or ask Task Manager to delegate. Review the action in the private [Control Room chat](integrations/root/README.md). |
-| Release a workspace patch or recover a connector | Enable [TheArchitect maintenance](integrations/root/README.md#repository-maintenance-and-automatic-recovery) on the VPS. Vote on tested patches in Control Room and choose which connectors can restart automatically. |
+| Ask for VPS maintenance | Mention **The Architect** in Office or ask Task Manager to delegate. Review the action in the private [Control Room chat](integrations/root/README.md). |
+| Release a workspace patch or recover a connector | Enable [The Architect maintenance](integrations/root/README.md#repository-maintenance-and-automatic-recovery) on the VPS. Vote on tested patches in Control Room and choose which connectors can restart automatically. |
 | Trace an Office task | Open [Context Intelligence](integrations/context-execution/README.md) to see who handed off the work, whether the recipient accepted it, and how the original assignee closed the task. |
 | Get help with setup or a service | Open **Agents → People → Helper**. On an existing deployment, run `./constellation_matrix agent add --starter helper --configure`. [Helper guide](docs/team.md#ask-helper) |
 | Repair sidebar placement | Run `./constellation_matrix layout` on the VPS and sign in as the Matrix operator. [Layout migration](docs/telegram.md#repair-an-existing-workspace) |
@@ -220,13 +222,13 @@ Helper shares one tip per day in **Agents → People → Helper**, starting afte
 
 ### Control Room and operation timings
 
-**TheArchitect** accepts requests directly in **Control Room** and can receive verified handoffs from Task Manager in Office. The encrypted room contains workspace links, maintenance polls, receipts, and operational alerts. Send **Diagnose services** for a health overview, or **Diagnose <service>** for a targeted check.
+**The Architect** accepts requests directly in **Control Room** and can receive verified handoffs from Task Manager in Office. The encrypted room contains workspace links, maintenance polls, receipts, and operational alerts. Mention **@The Architect** and say **Diagnose services** for a health overview or **Diagnose <service>** for a targeted check. Dot can search the room’s decryptable history and relay requests from ChatGPT. Approvals are cast by the operator in Element.
 
 **Operation timings** shows measured work, queue and approval durations for the last seven or thirty days. A weekly Control Room summary identifies groups that consumed the most time in measured phases. [Maintenance and timing guide](integrations/root/README.md)
 
 ### Digital twins
 
-Ask TheArchitect to **start a digital twin**. Choose a connection, model, reasoning effort and agent roster in Control Room, then approve the start. `twin list`, `twin status <id>`, `twin access <id>` and `twin stop <id>` manage the separate test workspace. [Digital twin workflow](integrations/root/README.md#start-a-digital-twin)
+Choose the twin’s connection, model, reasoning effort and agent roster before Element sign-in, or run `./constellation_matrix twin setup` later. You can also ask The Architect to **start a digital twin** and vote in Control Room. The time-limited twin uses synthetic data, separate Matrix identities and storage, and scoped temporary provider access on the workspace’s Docker Engine. See its state on the dashboard under **Digital twins**. [Digital twin workflow](integrations/root/README.md#start-a-digital-twin)
 
 ## Planned features
 

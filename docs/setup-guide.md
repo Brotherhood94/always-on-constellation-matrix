@@ -29,7 +29,9 @@ Enter passwords, API keys, and verification codes in their destination app or pr
 
 - **Agents → Control Room → Pinned messages → Workspace shortcuts.** Open the dashboard to see resources and agent readiness. Open Context Intelligence to launch Neo4j Browser and sign in as `neo4j` with the dedicated password. The pin includes the command to retrieve the password privately on your VPS.
 - **Agents → Control Room → Pinned messages → Connect Dot.** Create the Secure MCP Tunnel and restricted runtime key, then connect it to the **Constellation Office** plugin. Ask Dot to run `list_agents`. Compare the roster with the agents you configured. [Dot setup](dot.md)
-- **Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.** Follow the QR sign-in steps when the terminal asks you to link Telegram. After setup, mention Task Manager in Office for Telegram work or Telegram Agent here for a private request. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
+- **Agents → Control Room → Pinned messages → Set up Telegram.** Follow the QR sign-in steps when the terminal asks you to link Telegram. After setup, mention Task Manager in Office for Telegram work or Telegram Agent here for a private request. Contacts and groups appear under **Telegram → People**. [Telegram setup](telegram.md)
+
+The Digital Twin step follows agent configuration. Choose its account, model, effort, agents and duration, or return later with `./constellation_matrix twin setup`.
 
 Control Room publishes its pins after you join and Element registers your first device’s encryption keys. Later sign-ins reuse the same pins. On a new device, restore your Matrix encryption keys if Element cannot show the original messages.
 

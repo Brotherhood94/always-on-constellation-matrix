@@ -3,13 +3,14 @@ import { createServer } from 'node:http';
 import { chmod, unlink } from 'node:fs/promises';
 import { digest } from './policy.mjs';
 import { controlThread, matrixLink, operatorNotice } from './control.mjs';
-import { matchTelegramName, telegramIntent, telegramMention, telegramTaskPayload } from '../../agents/connector/telegram-intent.mjs';
+import { explicitTelegramRequest, matchTelegramName, telegramIntent, telegramMention, telegramTaskPayload } from '../../agents/connector/telegram-intent.mjs';
 import { telegramHandoffKey, telegramReceiptKey, telegramTaskStatus, telegramTerminal } from '../../agents/connector/telegram-office.mjs';
 
+const dotPlanKey = 'net.matrix_agents.dot_plan';
 const eventId = /^\$[^\s\x00-\x1f]{1,254}$/u;
 const peerId = /^(?:user|chat|channel):[1-9][0-9]{0,18}$/u;
 const jobAge = 15 * 60_000;
-const toolFor = { list: 'list_rooms', lookup: 'resolve_chat', open: 'open_room', unlink: 'unlink_room',
+const toolFor = { status: 'bridge_status', list: 'list_rooms', lookup: 'resolve_chat', open: 'open_room', unlink: 'unlink_room',
   draft: 'prepare_draft', send: 'send_message', read: 'read_recent', create_group: 'create_group', add_members: 'add_members' };
 const status = { completed: { status: 'completed' }, blocked: { status: 'blocked' } };
 
@@ -87,7 +88,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
   if (!store.all('PRAGMA table_info(telegram_task)').some(({ name }) => name === 'control_event')) {
     store.db.exec('ALTER TABLE telegram_task ADD COLUMN control_event TEXT');
   }
-  for (const column of ['origin', 'handoff']) {
+  for (const column of ['origin', 'handoff', 'office_thread']) {
     if (!store.all('PRAGMA table_info(telegram_task)').some(row => row.name === column)) {
       store.db.exec(`ALTER TABLE telegram_task ADD COLUMN ${column} TEXT`);
     }
@@ -104,10 +105,15 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
   const grants = new Map();
   const load = id => store.get('SELECT * FROM telegram_task WHERE id=?', id);
   const queued = () => store.get("SELECT * FROM telegram_task WHERE phase IN ('queued','feedback') ORDER BY created LIMIT 1");
-  const submit = (id, office, intent, origin = null, handoff = null) => {
+  function officeThread(event) {
+    const relation = event.content?.['m.relates_to'];
+    if (!relation?.rel_type) return event.event_id;
+    return relation.rel_type === 'm.thread' && eventId.test(relation.event_id) ? relation.event_id : null;
+  }
+  const submit = (id, office, intent, origin = null, handoff = null, thread = null) => {
     const fingerprint = digest(intent);
-    store.run('INSERT OR IGNORE INTO telegram_task(id,office,created,fingerprint,intent,thread,origin,handoff) VALUES (?,?,?,?,?,?,?,?)',
-      id, Number(office), now(), fingerprint, JSON.stringify(intent), office ? null : id, origin, handoff);
+    store.run('INSERT OR IGNORE INTO telegram_task(id,office,created,fingerprint,intent,thread,origin,handoff,office_thread) VALUES (?,?,?,?,?,?,?,?,?)',
+      id, Number(office), now(), fingerprint, JSON.stringify(intent), office ? null : id, origin, handoff, thread);
     const row = load(id);
     if (row.fingerprint !== fingerprint || Boolean(row.office) !== office) return { status: 'conflict' };
     return receipt(row);
@@ -184,35 +190,51 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     const request = event.content?.[telegramHandoffKey]?.request;
     const relation = event.content?.['m.relates_to'];
     if (!coordinator(event.sender) || !recent(event) || !eventId.test(request ?? '') || relation?.rel_type !== 'm.thread' ||
-        relation.event_id !== request || telegramMention(event.content, settings.agent, 'Telegram Agent') === null ||
+        telegramMention(event.content, settings.agent, 'Telegram Agent') === null ||
         !await checkRoom() || !await checkOffice()) return false;
     if (load(request)?.origin) return true;
     const original = await getOfficeEvent(request).catch(() => null);
-    if (!recent(original) || ![settings.owner, dot].includes(original.sender) ||
-        original.content?.['m.relates_to'] || original.content?.['m.mentions']?.user_ids?.length !== 1 ||
-        original.content['m.mentions'].user_ids[0] !== event.sender) return false;
+    if (!recent(original) || ![settings.owner, dot].includes(original.sender)) return false;
+    const thread = officeThread(original);
+    if (!thread || thread !== relation.event_id ||
+        (thread !== request || relation['m.in_reply_to']) && relation['m.in_reply_to']?.event_id !== request ||
+        original.sender === dot && original.content?.['m.relates_to']) return false;
     const label = event.sender.startsWith('@task-manager:') ? 'Task Manager' : 'Manager';
     const text = telegramMention(original.content, event.sender, label);
     if (text === null) return false;
-    const plan = original.sender === dot && original.content['net.matrix_agents.dot_plan'];
+    const plan = original.sender === dot && original.content[dotPlanKey];
     if (original.sender === dot && !/^[a-z0-9_-]{8,80}$/iu.test(plan?.task_id ?? '')) return false;
     const structured = plan && telegramTaskPayload(plan.telegram);
+    if (plan && Object.hasOwn(plan, 'telegram') && !structured) return false;
+    const originalText = plan ? text.split('\n\n').slice(1).join('\n\n') : text;
     const intent = structured ? { action: 'send', ...structured } :
-      telegramIntent(plan ? text.split('\n\n').slice(1).join('\n\n') : text, { office: true });
+      telegramIntent(originalText, { office: true }) ?? (explicitTelegramRequest(originalText) && { action: 'clarify' });
     if (!intent) return false;
     store.atomic(() => {
-      const result = submit(request, true, intent, original.sender, event.event_id);
+      const result = submit(request, true, intent, original.sender, event.event_id, thread);
       if (result.status !== 'conflict') store.run('INSERT OR IGNORE INTO telegram_office_receipt(id) VALUES (?)', request);
     });
     return true;
   }
   async function directOffice(event) {
-    if (event.sender !== settings.owner || event.type !== 'm.room.message' || !eventId.test(event.event_id) ||
-        event.content?.['m.relates_to'] || event.content?.['org.matrixconstellation.telegram.request']) return false;
+    if (![settings.owner, dot].includes(event.sender) || event.type !== 'm.room.message' || !eventId.test(event.event_id) ||
+        event.content?.['org.matrixconstellation.telegram.request']) return false;
+    const thread = officeThread(event);
     const text = telegramMention(event.content, settings.agent, 'Telegram Agent');
-    if (text === null || !await checkOffice() || !await checkRoom()) return false;
+    if (!thread || text === null) return false;
+    let intent;
+    if (event.sender === dot) {
+      const plan = event.content[dotPlanKey];
+      const operation = telegramTaskPayload(plan?.telegram);
+      if (!officeFlow || !recent(event) || event.content['m.relates_to'] ||
+          !/^[a-z0-9_-]{8,80}$/iu.test(plan?.task_id ?? '') || !operation) return false;
+      intent = { action: 'send', ...operation };
+    } else {
+      intent = telegramIntent(text) ?? { action: 'clarify' };
+    }
+    if (!await checkOffice() || !await checkRoom()) return false;
     store.atomic(() => {
-      const result = submit(event.event_id, true, telegramIntent(text) ?? { action: 'clarify' }, officeFlow ? event.sender : null);
+      const result = submit(event.event_id, true, intent, officeFlow ? event.sender : null, null, thread);
       if (result.status !== 'conflict') store.run('INSERT OR IGNORE INTO telegram_office_receipt(id) VALUES (?)', event.event_id);
     });
     return true;
@@ -234,7 +256,7 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
       const sent = await postOffice(transaction(state), { ...(result.office && state !== 'pending'
         ? operatorNotice(task.origin, body) : { msgtype: 'm.text', body: [body, result.link].filter(Boolean).join('\n') }),
         ...(result.office && { [telegramReceiptKey]: { status: state, office: true, ...(result.terminal && { terminal: true }) } }),
-        'm.relates_to': controlThread(row.id, task.handoff ?? row.id) });
+        'm.relates_to': controlThread(task.office_thread ?? row.id, task.handoff ?? row.id) });
       if (result.office && terminal) {
         await recordOffice?.(task, state, sent);
         store.run('UPDATE telegram_task SET final_event=?,feedback=NULL WHERE id=?', sent, row.id);
@@ -248,17 +270,25 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     }
   }
   async function direct(event) {
-    if (event.sender !== settings.owner || event.type !== 'm.room.message' || !eventId.test(event.event_id)) return false;
+    const fromDot = event.sender === dot && settings.controlAudience?.includes(dot);
+    if ((!fromDot && event.sender !== settings.owner) || event.type !== 'm.room.message' || !eventId.test(event.event_id)) return false;
     const content = event.content;
     const relation = content?.['m.relates_to'];
-    if (await choose(event, false)) return true;
-    if (relation || content?.['org.matrixconstellation.telegram.request']) return false;
+    if (!fromDot && await choose(event, false)) return true;
+    if (content?.['org.matrixconstellation.telegram.request'] ||
+        relation && (!settings.controlAudience || relation.rel_type !== 'm.thread' || !eventId.test(relation.event_id))) return false;
     const text = telegramMention(content, settings.agent, 'Telegram Agent');
     if (text === null) return false;
-    const intent = telegramIntent(text);
+    const marker = content['net.matrix_agents.control_request'];
+    if (fromDot && !/^[a-z0-9_-]{8,80}$/iu.test(marker?.request_id ?? '')) return false;
+    const intent = fromDot ? telegramTaskPayload(marker.telegram) : telegramIntent(text);
     // Existing free-form updates and threaded follow-ups still use the original dispatcher when enabled.
     if (!intent && (settings.bridgeControl || settings.dot)) return false;
-    if (await checkRoom()) submit(event.event_id, false, intent ?? { action: 'clarify' });
+    const operation = fromDot ? { action: 'send', ...intent } : intent ?? { action: 'clarify' };
+    const result = await checkRoom() && submit(event.event_id, false, operation, fromDot ? dot : null);
+    if (result && relation && result.status !== 'conflict') {
+      store.run('UPDATE telegram_task SET thread=? WHERE id=? AND thread=id', relation.event_id, event.event_id);
+    }
     return true;
   }
   async function choose(event, office) {
@@ -269,9 +299,10 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     const choice = /^(?:telegram choose|scegli|choose) ([1-9]|10)$/iu.exec(body);
     if (!choice) return false;
     if (!await checkRoom()) return true;
-    const row = office
-      ? store.get("SELECT * FROM telegram_task WHERE id=? AND office=1 AND phase='choosing'", relation.event_id)
-      : store.get("SELECT * FROM telegram_task WHERE thread=? AND phase='choosing'", relation.event_id);
+    const rows = office
+      ? store.all("SELECT * FROM telegram_task WHERE COALESCE(office_thread,id)=? AND office=1 AND phase='choosing'", relation.event_id)
+      : store.all("SELECT * FROM telegram_task WHERE thread=? AND phase='choosing'", relation.event_id);
+    const row = rows.length === 1 ? rows[0] : null;
     const match = row && row.created + jobAge >= now() && JSON.parse(row.selection)[Number(choice[1]) - 1];
     if (match) store.atomic(() => {
       store.run("UPDATE telegram_task SET phase='queued',selection=?,feedback=NULL,outcome=NULL WHERE id=? AND phase='choosing'",
@@ -294,6 +325,10 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     return { matches: candidates(result.rooms, scope) };
   }
   async function perform(row, scope, tool) {
+    if (tool === 'bridge_status') {
+      const result = await guide({ id: row.id, action: 'status' });
+      return feedback(row, result?.message ?? 'Telegram Bridge status is unavailable.', result?.ok ? 'completed' : 'blocked');
+    }
     if (tool === 'list_rooms') {
       const result = await guide({ id: row.id, action: 'list' });
       if (!result?.ok) return feedback(row, result?.message ?? 'Telegram Bridge is unavailable.', 'blocked');
@@ -344,10 +379,13 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
     }
     store.atomic(() => {
       const input = { action: tool === 'read_recent' ? 'update' : 'compose', destination: binding.id,
-        ...(officeFlow && tool === 'send_message' && { explicitSend: true, operator: settings.owner }),
+        ...(officeFlow && row.office && tool === 'send_message' && { explicitSend: true, operator: settings.owner }),
+        ...(settings.controlAudience && !row.office && scope.action === 'send' && { requireApproval: true }),
+        ...(!row.office && row.thread && row.thread !== row.id && { thread: row.thread }),
         verifiedBinding: { id: binding.id, room: binding.room, generation: binding.generation, revision: binding.revision },
         chatType: destination.type, ...(tool === 'read_recent' ? { question: scope.question } : { text: scope.text }) };
-      const control = row.office && (officeFlow || ['send', 'draft'].includes(scope.action)) ? row.id : row.thread;
+      const control = settings.controlAudience || row.office && (officeFlow || ['send', 'draft'].includes(scope.action))
+        ? row.id : row.thread;
       if (!store.queueControl(control, input, now(), { requireDot: false, atomic: false })) {
         return feedback(row, 'The Telegram request could not be queued. Try again later.', 'blocked');
       }
@@ -423,8 +461,9 @@ export function createTelegramDelegation({ store, settings, checkRoom, checkOffi
         return;
       }
       const onlyOffice = row.office && scope.action === 'clarify';
+      const notice = row.origin ? operatorNotice(row.origin, row.feedback) : { msgtype: 'm.text', body: row.feedback };
       const id = onlyOffice ? null : await post('telegram-task-result-' + digest([row.id, row.outcome]), row.thread
-        ? { msgtype: 'm.text', body: row.feedback, 'm.relates_to': controlThread(row.thread) }
+        ? { ...notice, 'm.relates_to': controlThread(row.thread, row.id) }
         : operatorNotice(settings.owner, row.feedback));
       store.run('UPDATE telegram_task SET phase=?,feedback=NULL,thread=COALESCE(thread,?),final_event=?,intent=? WHERE id=?',
         row.outcome === 'needs_input' ? 'choosing' : 'done', id, id, row.outcome === 'needs_input' ? row.intent : null, row.id);

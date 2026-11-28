@@ -40,8 +40,9 @@ def element_locations(settings):
     if settings['dot']:
         lines.append('  • Agents → Control Room → Pinned messages → Connect Dot has the tunnel setup.')
     if settings['telegram']:
+        location = 'Agents → Control Room' if settings.get('control_runtime') else 'Telegram → Rooms → Telegram Bridge'
         lines.append('  • Enabling Telegram also installs Telegram Agent automatically.\n'
-                     '    In Element, see Telegram → Rooms → Telegram Bridge → Pinned messages → Set up Telegram.')
+                     f'    In Element, see {location} → Pinned messages → Set up Telegram.')
     return '\n'.join(lines)
 
 
@@ -100,7 +101,7 @@ def show_printable(settings, command):
     if settings['telegram']:
         print(f'\n{heading("📨 Telegram · API credentials")}\n\n{TELEGRAM_CREDENTIALS}')
         print(f'  On the VPS, start or resume Telegram setup.\n    {command} telegram setup')
-        print('  Scan the QR code in Element → Telegram → Rooms → Telegram Bridge.')
+        print('  Scan the QR code displayed in the VPS terminal with Telegram mobile.')
     print(f'\n{heading(WELCOME_TITLE)}\n{WELCOME_INSTRUCTIONS}')
     print(f'\n  • Resume the guided setup from an interactive terminal.\n    {command} setup-guide\n')
 

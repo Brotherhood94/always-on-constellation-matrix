@@ -16,7 +16,7 @@ from installer import RUNTIME_UID, directory, load, operator_lock, open_existing
 from layout import room_route
 from provision import MatrixError
 from agent_catalog import STARTER_ROLES
-from team_management import apply_tool, coach_change, coaching_id, tool_spec
+from team_management import apply_tool, coach_change, coaching_id, telegram_shortcut, tool_spec
 from roster import local_worker, reconcile_retirements, retire_locked
 import hiring
 
@@ -56,7 +56,7 @@ def validate(payload, key, now):
     operation = json.loads(proposal)
     actor = payload.get('actor', 'chief-of-staff')
     allowed = {'chief-of-staff': {'add', 'retire'}, 'hiring-manager': {'add', 'retire'},
-               'scouter': {'tool'}, 'coach': {'coach', 'undo'}}
+               'scouter': {'tool'}, 'coach': {'coach', 'undo', 'route', 'route-undo'}}
     if not isinstance(operation, dict) or operation.get('kind') not in allowed.get(actor, set()):
         raise ValueError('Choose an add or retire operation')
     key = operation.get('agent')
@@ -92,6 +92,17 @@ def validate(payload, key, now):
             raise ValueError('A new specialist starts through Task Manager')
     elif not isinstance(key, str) or not re.fullmatch('[a-z0-9][a-z0-9_-]{0,35}', key):
         raise ValueError('Invalid agent target')
+    elif operation['kind'] in {'route', 'route-undo'}:
+        if key != 'telegram-agent':
+            raise ValueError('Unsupported route target')
+        if operation['kind'] == 'route':
+            evidence = operation.get('evidence')
+            if (set(operation) != {'kind', 'agent', 'evidence'} or not isinstance(evidence, list)
+                    or len(evidence) != 3 or not all(isinstance(event, str) and EVENT_ID.fullmatch(event) for event in evidence)
+                    or len(set(evidence)) != 3):
+                raise ValueError('Supply three distinct Telegram delivery receipts')
+        elif set(operation) != {'kind', 'agent', 'revision'} or not re.fullmatch('[a-f0-9]{64}', str(operation.get('revision'))):
+            raise ValueError('Select the currently approved route revision')
     elif operation['kind'] == 'tool':
         if set(operation) != {'kind', 'agent', 'tool'}:
             raise ValueError('Invalid tool assignment')
@@ -252,6 +263,8 @@ def handle(data, payload, *, now=None):
             status = apply_tool(data, settings, registry, operation, identifier)
         elif operation['kind'] in {'coach', 'undo'}:
             status = coach_change(data, settings, registry, operation, approved=True, approval=identifier)
+        elif operation['kind'] in {'route', 'route-undo'}:
+            status = telegram_shortcut(data, settings, registry, operation, identifier)
         else:
             status = retire_locked(data, settings, registry, key, actor=actor, approval=identifier)
         save(path, {'status': 'pending' if status in {'draining', 'checking'} else status, 'receipt': receipt})

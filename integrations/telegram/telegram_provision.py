@@ -144,7 +144,7 @@ def bootstrap(root):
     device = 'TELEGRAM_CONNECTOR'
     token = device_token(root, directory / 'matrix-token', domain, device, 'Telegram Connector')
     layout = load(root / 'layout.json')
-    space, control = layout['space'], layout['bridge']
+    space, control = layout['space'], layout['control']
     out = directory / 'config.json'
     current = load(out) if out.exists() else {}
     model = os.environ.get('TELEGRAM_MODEL', 'gpt-6.2-sol')
@@ -158,6 +158,12 @@ def bootstrap(root):
     current.update(domain=domain, owner=owner, agent=agent, device=device, matrixUrl='http://synapse:8008',
                    bridgeBot=f'@telegrambot:{domain}', controlRoom=control, bridgeControl=True, space=space, model=model,
                    auditDatabase=database_uri(root, 'matrix_telegram_audit'), engine=engine)
+    if layout.get('shared'):
+        current['controlAudience'] = layout['audience']
+    else:
+        current.pop('controlAudience', None)
+    if layout.get('legacy'):
+        current['legacyControlRoom'] = layout['legacy']
     write(out, current, uid=991)
 
 
@@ -258,7 +264,8 @@ def verify_cutover(root, previous, bridge):
             raise ValueError('Reconcile unconfirmed Telegram deliveries before moving approvals to Telegram Bridge.')
 
 
-def reconcile_layout(root, domain, owner, operator, agents, *, office=None, bridge_active, select):
+def reconcile_layout(root, domain, owner, operator, agents, *, office=None, bridge_active, select,
+                     control=None, audience=None):
     agent = f'@telegram-agent:{domain}'
     agent_token = device_token(root, root / 'connector/matrix-token', domain, 'TELEGRAM_CONNECTOR', 'Telegram Connector')
     space = telegram_space(root, domain, owner, agent_token)
@@ -267,28 +274,41 @@ def reconcile_layout(root, domain, owner, operator, agents, *, office=None, brid
     config_path = root / 'connector/config.json'
     config = load(config_path) if config_path.exists() else {}
     old_control = config.get('controlRoom') or previous.get('control')
-    bridge = bridge_dm(domain, owner, operator, previous.get('bridge'), select=select, active=bridge_active)
-    if bridge is None:
+    bridge = previous.get('bridge') if control else bridge_dm(
+        domain, owner, operator, previous.get('bridge'), select=select, active=bridge_active)
+    destination = control or bridge
+    if not destination:
         raise ValueError('Select a Telegram Bridge room to continue the layout repair.')
-    verify_cutover(root, old_control, bridge)
-    legacy = previous.get('legacy') or (old_control if old_control != bridge else None)
+    verify_cutover(root, old_control, destination)
+    legacy = (old_control if old_control and old_control != destination else
+              config.get('legacyControlRoom') or previous.get('legacy'))
+    archive = (old_control if old_control and old_control != destination else
+               previous.get('archive') or (bridge if bridge != destination else None))
     join(space, owner, operator)
-    join(bridge, agent, agent_token)
-    route = room_route(bridge) + '/state/'
-    levels = request('GET', route + 'm.room.power_levels', token=operator)
-    users = levels.setdefault('users', {})
-    events = levels.setdefault('events', {})
-    before = (users.get(agent), events.get('m.room.pinned_events'))
-    users[agent] = max(users.get(agent, 0), 10)
-    events['m.room.pinned_events'] = 10
-    if before != (users[agent], events['m.room.pinned_events']):
-        request('PUT', route + 'm.room.power_levels', levels, operator)
-    if (missing(route + 'm.room.name', operator) or {}).get('name') != 'Telegram Bridge':
-        request('PUT', route + 'm.room.name', {'name': 'Telegram Bridge'}, operator)
+    if control:
+        active = {key for (kind, key), event in read_room_state(room_route(control), operator).items()
+                  if kind == 'm.room.member' and event['content'].get('membership') in {'join', 'invite'}}
+        if not audience or agent not in audience or active - set(audience):
+            raise ValueError('Control Room contains an unexpected participant.')
+        invite(control, agent, operator)
+        join(control, agent, agent_token)
+    else:
+        join(bridge, agent, agent_token)
+        route = room_route(bridge) + '/state/'
+        levels = request('GET', route + 'm.room.power_levels', token=operator)
+        users = levels.setdefault('users', {})
+        events = levels.setdefault('events', {})
+        before = (users.get(agent), events.get('m.room.pinned_events'))
+        users[agent] = max(users.get(agent, 0), 10)
+        events['m.room.pinned_events'] = 10
+        if before != (users[agent], events['m.room.pinned_events']):
+            request('PUT', route + 'm.room.power_levels', levels, operator)
+        if (missing(route + 'm.room.name', operator) or {}).get('name') != 'Telegram Bridge':
+            request('PUT', route + 'm.room.name', {'name': 'Telegram Bridge'}, operator)
     if office:
         state = read_room_state(room_route(office), operator)
         content = {kind: event['content'] for (kind, key), event in state.items() if not key}
-        if (office in {agents, space, bridge, legacy} or content.get('m.room.create', {}).get('m.federate') is not False
+        if (office in {agents, space, destination, legacy} or content.get('m.room.create', {}).get('m.federate') is not False
                 or content.get('m.room.join_rules', {}).get('join_rule') != 'invite'
                 or content.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2'
                 or 'm.room.tombstone' in content or membership(office, owner, operator) != 'join'):
@@ -297,38 +317,52 @@ def reconcile_layout(root, domain, owner, operator, agents, *, office=None, brid
         join(office, agent, agent_token)
     guide = root / 'guide'
     device_token(root, guide / 'token', domain, 'TELEGRAM_SETUP', 'Telegram Setup Guide')
-    if legacy and legacy != bridge:
-        clear_space_link(space, 'child', legacy, agent_token)
-        clear_space_link(agents, 'child', legacy, operator)
-        clear_space_link(legacy, 'parent', agents, agent_token)
-        clear_space_link(legacy, 'parent', space, agent_token)
-        source = (missing(room_route(legacy) + '/state/m.room.pinned_events', agent_token) or {}).get('pinned', [])
+    for earlier in dict.fromkeys(room for room in (legacy, bridge if control else None)
+                                 if room and room != destination):
+        clear_space_link(space, 'child', earlier, agent_token)
+        clear_space_link(agents, 'child', earlier, operator)
+        clear_space_link(earlier, 'parent', agents, operator)
+        clear_space_link(earlier, 'parent', space, operator)
+        source = (missing(room_route(earlier) + '/state/m.room.pinned_events', operator) or {}).get('pinned', [])
         receipt_path = guide / 'shortcut-pins.json'
         receipt = load(receipt_path) if receipt_path.exists() else {}
         entry = receipt.get('entries', {}).get('telegram-setup', {})
         pins = {entry.get('event'), *receipt.get('replaced', [])}
         remaining = [event for event in source if event not in pins]
         if remaining != source:
-            request('PUT', room_route(legacy) + '/state/m.room.pinned_events', {'pinned': remaining}, agent_token)
+            request('PUT', room_route(earlier) + '/state/m.room.pinned_events', {'pinned': remaining}, operator)
+    if legacy and legacy != destination:
         write(guide / 'legacy-room-id', (legacy + '\n').encode(), uid=991)
+    audience_path = guide / 'control-audience.json'
+    if control:
+        write(audience_path, audience, uid=991)
+    else:
+        audience_path.unlink(missing_ok=True)
     if previous.get('bridge') and previous['bridge'] != bridge:
         clear_space_link(space, 'child', previous['bridge'], agent_token)
-    write(guide / 'room-id', (bridge + '\n').encode(), uid=991)
+    write(guide / 'room-id', (destination + '\n').encode(), uid=991)
     write(guide / 'space-id', (space + '\n').encode(), uid=991)
-    for room in dict.fromkeys([bridge, *binding_rooms(root)]):
+    for room in dict.fromkeys([*([bridge] if not control else []), *binding_rooms(root)]):
         space_child(space, room, agent_token, domain, preserve_removal=room != bridge)
         clear_space_link(agents, 'child', room, operator)
     clear_space_link(agents, 'child', space, operator)
     clear_space_link(space, 'parent', agents, agent_token)
-    clear_space_link(bridge, 'parent', agents, operator)
+    if not control:
+        clear_space_link(bridge, 'parent', agents, operator)
     classify_telegram_rooms(space, owner, operator, [], bridge=bridge, legacy=legacy)
     if config:
-        config.update(controlRoom=bridge, bridgeControl=True, space=space)
+        config.update(controlRoom=destination, bridgeControl=True, space=space)
         config.pop('dot', None)
-        if legacy and legacy != bridge:
+        if control:
+            config['controlAudience'] = audience
+        else:
+            config.pop('controlAudience', None)
+        if legacy and legacy != destination:
             config['legacyControlRoom'] = legacy
         write(config_path, config, uid=991)
-    result = {'space': space, 'control': bridge, 'bridge': bridge, **({'legacy': legacy} if legacy else {})}
+    result = {'space': space, 'control': destination, 'bridge': bridge,
+              **({'legacy': legacy} if legacy else {}), **({'archive': archive} if control and archive else {}),
+              **({'shared': True, 'audience': audience} if control else {})}
     write(path, result)
     return result
 

@@ -1,3 +1,8 @@
+export function explicitTelegramRequest(text) {
+  return /^(?:telegram\s*[:,-]|(?:ask|chiedi|delega)\s+(?:(?:to|a|al)\s+)?telegram\s+(?:agent|agente)\b)/iu.test(text) ||
+    /^(?:scrivi|invia|manda|send|write|prepara|draft|aggiungi|add|apri|open|leggi|read|riassumi|summarize)\b[^\n]{0,300}\b(?:on|su|via)\s+telegram\b/iu.test(text);
+}
+
 const compact = value => value.trim().replace(/[ \t]+/gu, ' ');
 const normalize = value => compact(value).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
 export const matchTelegramName = (candidate, target) => normalize(candidate) === normalize(target);
@@ -9,7 +14,8 @@ export function telegramMention(content, user, name) {
       typeof content.body !== 'string') return null;
   const label = [name, user, user.split(':', 1)[0]].map(value => value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'));
   const prefix = new RegExp(`^@?(?:${label.join('|')})[,:]?\\s+`, 'iu');
-  return prefix.test(content.body) ? content.body.replace(prefix, '') : content.body;
+  const body = content.body.replace(/^(?:>[^\n]*\n)+\n/u, '');
+  return body.replace(prefix, '');
 }
 
 function destination(value, type) {
@@ -58,7 +64,7 @@ export function telegramTaskPayload(input) {
     const message = telegramSendPayload(input);
     return message && { ...(input.action && { action }), ...message };
   }
-  if (action === 'list') return { action };
+  if (['list', 'status'].includes(action)) return { action };
   if (!['open', 'unlink', 'lookup', 'read', 'create_group', 'add_members'].includes(action) ||
       typeof input.target !== 'string' ||
       (input.type !== undefined && !['direct', 'group'].includes(input.type))) return null;
@@ -84,6 +90,9 @@ export function telegramIntent(body, { office = false } = {}) {
   if (typeof body !== 'string' || Buffer.byteLength(body) > 4800 || /^\s*[>`]/u.test(body)) return null;
   let input = body.trim();
   if (office && !/\btelegram\b/iu.test(input)) return null;
+  if (/^(?:telegram[ :]+(?:bridge )?status|(?:check|show|verifica|mostra)\s+(?:the |lo )?(?:telegram bridge status|stato (?:del bridge )?telegram))[.!?]?$/iu.test(input)) {
+    return { action: 'status' };
+  }
   const legacyDraft = /^telegram\s+draft\s+(direct|group)\s+"([^"\r\n]+)"\s*:\s*([\s\S]+)$/iu.exec(input);
   if (legacyDraft) return telegramTaskPayload({ action: 'draft', type: legacyDraft[1].toLowerCase(),
     target: legacyDraft[2], text: legacyDraft[3] });

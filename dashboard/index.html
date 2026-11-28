@@ -25,6 +25,7 @@
       <a href="#connections-heading">Team connections</a>
       <a href="#agents-heading">Agents</a>
       <a href="#integrations-heading">Integrations</a>
+      <a href="#twins-heading">Digital twins</a>
       <a href="#timings-heading">Operation timings</a>
     </nav>
     <section class="panel resources-panel" aria-labelledby="resources-heading">
@@ -40,6 +41,7 @@
         <a class="action" href="#/connections">View connection changes <span aria-hidden="true">↗</span></a>
       </div>
       <p id="connection-state">Loading team connections…</p>
+      <p id="telegram-shortcut" class="timestamp" hidden></p>
       <div class="connection-board" id="connection-board" hidden>
         <div class="connection-toolbar">
           <p id="connection-count"></p>
@@ -59,6 +61,13 @@
       </div>
       <div class="table-frame" tabindex="0" role="region" aria-label="Agent inventory">
         <table><thead><tr><th scope="col">Name</th><th scope="col">Health</th><th scope="col">Host</th><th scope="col">Model</th><th scope="col">Profile</th></tr></thead><tbody id="agents"></tbody></table>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="twins-heading">
+      <div class="section-heading"><h2 id="twins-heading">Digital twins</h2></div>
+      <p id="twins-freshness" class="timestamp"></p>
+      <div class="table-frame" tabindex="0" role="region" aria-label="Digital Twin workspaces">
+        <table><thead><tr><th scope="col">Workspace ID</th><th scope="col">Status</th><th scope="col">Agents</th><th scope="col">Model</th><th scope="col">Expires</th></tr></thead><tbody id="twin-jobs"></tbody></table>
       </div>
     </section>
     <section class="panel" aria-labelledby="timings-heading">

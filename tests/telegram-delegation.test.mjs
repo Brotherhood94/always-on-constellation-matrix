@@ -67,7 +67,7 @@ test('the pinned requests and Italian Telegram requests have bounded intents', (
     { action: 'read', target: 'Sam', type: 'direct', question: 'Cosa è successo oggi nel privato Sam?' });
 });
 
-function fixture({ officeFirst = false } = {}) {
+function fixture({ officeFirst = false, controlAudience } = {}) {
   const store = new TelegramStore(':memory:');
   const effects = [];
   const originalEvents = new Map();
@@ -79,7 +79,7 @@ function fixture({ officeFirst = false } = {}) {
   let prepareError;
   let clock = 1_000;
   const resolved = [{ peer: 'user:1001', name: 'Sam Example', room: '!sam:sample.test' }];
-  const settings = { domain, owner, agent, officeRoom, controlRoom, officeFirst };
+  const settings = { domain, owner, agent, officeRoom, controlRoom, officeFirst, controlAudience };
   const options = { store, settings, now: () => clock, checkRoom: async () => true,
     checkOffice: async () => true,
     getOfficeEvent: async id => originalEvents.get(id),
@@ -549,4 +549,51 @@ test('the connector resumes verification of a recent encrypted handoff after del
   await f.broker().office(input);
   await f.broker().tick();
   assert.equal(f.store.all('SELECT event FROM control_request').length, 1);
+});
+
+test('a threaded Telegram handoff must reply to the verified owner assignment', async () => {
+  const f = fixture({ officeFirst: true });
+  const id = '$threaded-message';
+  const root = '$office-thread';
+  const handoff = officeHandoff(f, id, 'Telegram: read the chat with Sam Example');
+  f.originalEvents.get(id).content['m.relates_to'] = { rel_type: 'm.thread', event_id: root };
+  handoff.content['m.relates_to'].event_id = root;
+  assert.equal(await f.broker().receiveOffice(handoff), false);
+  handoff.content['m.relates_to']['m.in_reply_to'] = { event_id: id };
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  assert.equal(await f.broker().receiveOffice(handoff), true);
+  await f.broker().publishOffice();
+  assert.equal([...f.officeMessages.values()][0]['m.relates_to'].event_id, root);
+  assert.equal(f.store.get('SELECT count(*) AS n FROM telegram_task').n, 1);
+});
+
+test('direct Dot Office assignments require a verified typed Telegram request', async () => {
+  const f = fixture({ officeFirst: true });
+  const request = { ...direct('$dot-direct', 'Telegram operation', '@dot:sample.test'), origin_server_ts: 1000 };
+  assert.equal(await f.broker().directOffice(request), false);
+  request.content[dotPlanKey] = { task_id: 'fixture-direct', telegram: { action: 'list' } };
+  assert.equal(await f.broker().directOffice(request), true);
+  assert.equal(await f.broker().directOffice(request), true);
+  await f.broker().tick();
+  await f.broker().tick();
+  await f.broker().publishOffice();
+  const reply = [...f.officeMessages.values()].at(-1);
+  assert.equal(reply['m.relates_to'].event_id, request.event_id);
+  assert.deepEqual(reply['m.mentions'].user_ids, [request.sender]);
+});
+
+test('Control Room sends need a separate approval and retain distinct request IDs in a shared thread', async () => {
+  const f = fixture({ officeFirst: true, controlAudience: [owner, agent, '@the-architect:sample.test'] });
+  const event = direct('$control-request', 'send a private message to Sam saying "See you soon."');
+  event.content['m.relates_to'] = { rel_type: 'm.thread', event_id: '$control-root' };
+  assert.equal(await f.broker().direct(event), true);
+  assert.equal(await f.broker().direct(event), true);
+  await f.broker().tick();
+  const request = f.store.get('SELECT * FROM control_request');
+  const payload = JSON.parse(request.payload);
+  assert.equal(request.event, event.event_id);
+  assert.equal(request.thread_root, '$control-root');
+  assert.equal(payload.requireApproval, true);
+  assert.equal(payload.explicitSend, undefined);
+  assert.equal(payload.text, 'See you soon.');
 });

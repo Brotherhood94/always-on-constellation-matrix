@@ -233,7 +233,7 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       row.operation = JSON.stringify(operation);
       update('UPDATE roster_requests SET operation=? WHERE request=?', row.operation, row.request);
     }
-    const action = {add:'Hire', retire:'Retire', tool:'Enable tool for', coach:'Change protected contacts for', undo:'Restore contacts for'}[operation.kind];
+    const action = {add:'Hire', retire:'Retire', tool:'Enable tool for', coach:'Change protected contacts for', undo:'Restore contacts for', route:'Enable the Dot shortcut to', 'route-undo':'Undo the Dot shortcut to'}[operation.kind];
     const target = action + ' ' + operation.agent;
     if (!row.proposal) {
       const content = operation.kind === 'add' ? JSON.stringify(operation.profile, null, 2) :
@@ -300,7 +300,9 @@ export function createRosterApproval({ db, client, room, owner, checkDestination
       enabled: 'The target verified the tool. It is enabled for ' + operation.agent + '.',
       failed: 'The target could not verify this tool. Its previous tools remain available.',
       credentials: 'The target needs its private tool credential. Reconnect it on that host and retry.',
-      applied: operation.kind === 'undo' ? 'The previous persona and contact list are active.' :
+      applied: operation.kind === 'route' ? 'The Dot shortcut is active. To restore the previous route, send: undo telegram route' :
+        operation.kind === 'route-undo' ? 'Task Manager is again the default route for Dot Telegram sends.' :
+        operation.kind === 'undo' ? 'The previous persona and contact list are active.' :
         'The approved persona and contact list are active. To restore the previous agreement, send: undo ' + operation.agent,
       retry: 'The VPS could not finish ' + target.toLowerCase() + ' yet. The approved operation will retry.',
     };

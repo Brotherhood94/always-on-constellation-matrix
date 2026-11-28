@@ -26,3 +26,7 @@ Select Dot during the [workspace install](runbook.md#initial-setup). The termina
 If you enable Telegram Agent access for Dot later, refresh the app’s tool list to use the draft and update tools. Drafts provide a preview. Explicit sends through Task Manager go to the verified Telegram chat. [Telegram Agent](telegram.md#dot-and-chat-updates)
 
 To route a Telegram task through Office, ask “Dot, ask Task Manager in Office to send a private Telegram message to Sam Example saying «Hello».” Dot uses `publish_telegram_task` to pass the request to Task Manager and reports the result from the original Office thread. The same tool can open a chat, manage a group or request a conversation summary. The chat type is optional. After an upgrade, refresh the app’s tool list if the new tool is missing. [Telegram from Office](telegram.md#use-telegram-from-office)
+
+## Control Room
+
+Ask Dot to search the encrypted Control Room history or request an operation from The Architect or Telegram Agent. Dot reads messages it can decrypt and identifies gaps when encryption keys are unavailable. Use Element to cast approvals. For Telegram delivery, ask Dot to send the task to Office and name Telegram Agent explicitly if you want to address it directly.

@@ -1,4 +1,4 @@
-"""Host-side staging, releases and scoped Docker recovery for TheArchitect."""
+"""Host-side staging, releases and scoped Docker recovery for The Architect."""
 
 from contextlib import contextmanager
 from difflib import unified_diff

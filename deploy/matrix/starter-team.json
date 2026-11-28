@@ -129,7 +129,7 @@
     }
   },
   "the-architect": {
-    "name": "TheArchitect",
+    "name": "The Architect",
     "model": "gpt-6.2-sol",
     "effort": "xhigh",
     "profile": {

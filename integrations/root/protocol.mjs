@@ -44,7 +44,7 @@ export function requestText(event, root, maximumBytes = 1800, direct = false) {
   const relation = content['m.relates_to'];
   if (relation && (relation.rel_type !== 'm.thread' || !eventId.test(relation.event_id))) return null;
   const text = content.body.replace(/^(?:>[^\n]*\n)+\n/u, '')
-    .replace(/^\s*@?(?:the-architect|TheArchitect|root)(?::[a-z0-9.-]+)?[,:\s]+/iu, '').trim();
+    .replace(/^\s*@?(?:the-architect|The ?Architect|root)(?::[a-z0-9.-]+)?[,:\s]+/iu, '').trim();
   const limit = reviewLine(text) === null ? maximumBytes : maximumReviewRequestBytes;
   return text && Buffer.byteLength(text) <= limit ? text : null;
 }

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { requestTelegramService } from './telegram-office.mjs';
 
 const requestField = 'org.matrixconstellation.telegram.request';
-const event = /^$[^\s\x00-\x1f]{1,254}$/u;
+const event = /^\$[^\s\x00-\x1f]{1,254}$/u;
 const hash = value => createHash('sha256').update(value).digest('hex');
 const html = value => value.replace(/[&<>]/gu, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[char]);
 

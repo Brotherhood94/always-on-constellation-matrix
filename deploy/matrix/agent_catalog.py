@@ -215,6 +215,7 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
             if row['key'] in ('task-manager', 'manager'):
                 row['contacts'] = sorted(set(row['contacts']) | {'telegram-agent'})
         abilities = [
+            ('telegram-bridge-status', 'Check the Telegram bridge account-link status.'),
             ('telegram-chat-link', 'Find, open, bind and unlink Telegram contacts and groups.'),
             ('telegram-group-management', 'Create groups and add verified participants.'),
             ('telegram-draft', 'Prepare a preview or send an explicitly requested message to a verified chat.'),
@@ -225,7 +226,7 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
                            status='Available' if ready else 'Telegram setup pending', active=ready, contacts=[],
                            capabilities=[dict(code=code, description=description, resources=['workspace:telegram', 'telegram:*'])
                                          for code, description in abilities],
-                           limits='Use the verified operator or Dot task routed by Task Manager.',
+                           limits='Accept verified operator or Dot requests and Task Manager handoffs.',
                            persona={'purpose': 'Manage Telegram chats from Office.', 'duties': [description for _, description in abilities],
                                     'working_style': 'Use verified recipients, ask about ambiguous matches, and report the outcome in the original thread.'},
                            tools=['Scoped Telegram MCP'], model=status.get('agent', {}).get('model'),
@@ -235,7 +236,8 @@ def document(registry, inventory, server_name, now, workshop=None, *, data=None)
         specialist['active'] = specialist['status'] == 'Available'
         result.append(specialist)
     return dict(version=1, contactPolicy=governed, time=now, telegramPlacement=integration, dynamicHandoffs=registry.get('dynamic_handoffs') is True,
-                agents=result, **({'policyRevision': revision} if revision else {}))
+                agents=result, routingShortcuts=registry.get('routingShortcuts', {}),
+                **({'policyRevision': revision} if revision else {}))
 
 
 def main():

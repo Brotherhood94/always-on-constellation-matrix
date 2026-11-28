@@ -1,20 +1,20 @@
-# TheArchitect
+# The Architect
 
-Select **TheArchitect** when configuring your team. In **Agents → Rooms → Control Room**, request **Diagnose services** or a scoped change. The same room has workspace shortcuts, diagnostics, alerts, and native Element approval polls. Task Manager can forward a verified Office request. Office receives status and a link to the private receipt.
+Select **The Architect** when configuring your team. In **Agents → Rooms → Control Room**, request **Diagnose services** or a scoped change. The same room has workspace shortcuts, diagnostics, alerts, and native Element approval polls. Task Manager can forward a verified Office request. Office receives status and a link to the private receipt.
 
 Review the exact operation before voting. On approval, the control service executes the permitted action and confirms its outcome. It records maintenance time in Context Intelligence with separate approval and execution durations.
 
 ## Diagnose workspace services
 
-1. In **Office**, mention **TheArchitect**. Ask **Diagnose services** for a local health overview or name a target such as **Diagnose synapse**, **Diagnose Context Intelligence**, **Diagnose Dot**, **Diagnose Telegram**, or **Diagnose backup.timer**. You can also describe the issue in the thread.
+1. In **Office**, mention **The Architect**. Ask **Diagnose services** for a local health overview or name a target such as **Diagnose synapse**, **Diagnose Context Intelligence**, **Diagnose Dot**, **Diagnose Telegram**, or **Diagnose backup.timer**. You can also describe the issue in the thread.
 2. Review and vote **Accept** in **Control Room**. The broker inspects the deployment’s local Compose services and any supported legacy units. A targeted check counts recognized signals in the last 30 minutes of logs, within the limits shown in the review. The private receipt records the findings. Office receives the operation ID and a link to the receipt.
-3. If the receipt points to a fault, mention TheArchitect again in the same thread with `operation <id>` and ask for a repair. Review the repair and its verification in a new poll. For a blocked Telegram draft, use Task Manager to repeat the draft after the repair. An upstream service or an engine on a worker needs a check in its own environment.
+3. If the receipt points to a fault, mention The Architect again in the same thread with `operation <id>` and ask for a repair. Review the repair and its verification in a new poll. For a blocked Telegram draft, use Task Manager to repeat the draft after the repair. An upstream service or an engine on a worker needs a check in its own environment.
 
-If Amplifier produces an incomplete proposal, TheArchitect asks it to correct the validation error once before reporting a failure. The service overview and direct diagnostic requests use the same typed check without a model-generated shell script.
+If Amplifier produces an incomplete proposal, The Architect asks it to correct the validation error once before reporting a failure. The service overview and direct diagnostic requests use the same typed check without a model-generated shell script.
 
 ## Repository maintenance and automatic recovery
 
-From a committed checkout on the VPS with TheArchitect active, enable maintenance and choose which local Office connectors it may recover. The first command opens a checklist. The second enables a single connector by ID. Use `--no-auto-restarts` to enable repository releases alone.
+From a committed checkout on the VPS with The Architect active, enable maintenance and choose which local Office connectors it may recover. The first command opens a checklist. The second enables a single connector by ID. Use `--no-auto-restarts` to enable repository releases alone.
 
 ```bash
 ./constellation_matrix maintenance enable
@@ -25,8 +25,8 @@ For unattended installs, set `maintenance: true` and optionally supply `maintena
 
 ### Release a repository change
 
-1. In **Agents → Office**, mention **TheArchitect** and ask it to propose a small dashboard or Office connector change. For example, “Change the dashboard page title to Office status.”
-2. TheArchitect edits a per-request copy of the deployed source. The broker checks the diff and runs connector and dashboard tests in a container with networking disabled. The release supports edits to existing dashboard HTML, CSS and JavaScript or Office connector JavaScript, up to 5,000 bytes of diff. Installer, Compose, permissions, dependencies, and host service changes go through the VPS terminal.
+1. In **Agents → Office**, mention **The Architect** and ask it to propose a small dashboard or Office connector change. For example, “Change the dashboard page title to Office status.”
+2. The Architect edits a per-request copy of the deployed source. The broker checks the diff and runs connector and dashboard tests in a container with networking disabled. The release supports edits to existing dashboard HTML, CSS and JavaScript or Office connector JavaScript, up to 5,000 bytes of diff. Installer, Compose, permissions, dependencies, and host service changes go through the VPS terminal.
 3. In **Control Room**, review the exact diff, revision, and affected services. Vote **Accept** to apply it. The broker verifies replacement connectors and attempts to restore their previous images and dashboard if verification fails. If the active revision changed while you were reviewing, start a new request.
 4. Read the Office receipt and check the active revision on the dashboard. Use the operation ID from the receipt to export the diff for a normal Git review.
 
@@ -49,7 +49,7 @@ The broker checks the same container twice, at least 30 seconds apart, for a Doc
 ./constellation_matrix maintenance resume-recovery
 ```
 
-The host broker uses standard Docker. TheArchitect’s connector receives a draft directory and a dedicated approval connection. The operator runs the installer from a Linux account with Docker access. Docker group membership grants that account root-equivalent access. TheArchitect requests scoped operations through the broker.
+The host broker uses standard Docker. The Architect’s connector receives a draft directory and a dedicated approval connection. The operator runs the installer from a Linux account with Docker access. Docker group membership grants that account root-equivalent access. The Architect requests scoped operations through the broker.
 
 ### Adjust slow startup or memory limits
 
@@ -65,7 +65,7 @@ Run `bash integrations/root/tests/run` for the disposable encrypted Matrix appro
 
 ## Start a digital twin
 
-In **Control Room**, ask TheArchitect to **start a digital twin**. Follow the response to list models for a connected account. Send the `twin create` command with the selected model, reasoning effort, and comma-delimited agent IDs. The approval shows the snapshot revision and duration. The twin starts with a separate Matrix workspace and temporary provider grants.
+In **Control Room**, ask The Architect to **start a digital twin**. Follow the response to list models for a connected account. Send the `twin create` command with the selected model, reasoning effort, and comma-delimited agent IDs. The approval shows the snapshot revision and duration. The twin starts with a separate Matrix workspace and temporary provider grants.
 
 ```sh
 ./constellation_matrix twin list

@@ -1,4 +1,5 @@
 """Operations authorized for the Coach and Scouter bridges. No host commands come from a model."""
+from datetime import datetime, timedelta, timezone
 from functools import partial
 from hashlib import sha256
 import json
@@ -98,6 +99,38 @@ def apply_tool(data, settings, registry, operation, change):
 
 def coaching_id(operation):
     return sha256(json.dumps(operation, sort_keys=True).encode()).hexdigest()
+
+
+def telegram_shortcut(data, settings, registry, operation, approval):
+    routes = registry.setdefault('routingShortcuts', {})
+    prior = routes.get('dot-telegram-send', {})
+    if prior.get('approval') == approval:
+        publish_inventory(settings, data, registry)
+        return 'applied'
+    if operation['kind'] == 'route-undo':
+        if not prior.get('enabled') or operation['revision'] != prior.get('approval'):
+            raise ValueError('The Telegram shortcut changed after this undo was proposed.')
+        route = {**prior, 'enabled': False}
+    else:
+        if prior.get('enabled') or not settings['dot'] or not settings['telegram']:
+            raise ValueError('This shortcut requires an enabled Dot and Telegram integration and no active shortcut.')
+        room = load(data / 'rooms.json')['office']
+        since = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+        rows = graph(data, 'coach', 'telegram-deliveries', {'room': room, 'since': since})
+        verified = {}
+        for row in rows:
+            item = json.loads(row['data'])
+            if item.get('room') == room and item.get('route') == 'task-manager':
+                verified[item['result_event']] = item['request']
+        evidence = operation['evidence']
+        if not all(event in verified for event in evidence) or len({verified[event] for event in evidence}) != 3:
+            raise ValueError('Three distinct bridge-confirmed Office deliveries are required.')
+        route = {'enabled': True, 'evidence': evidence, 'source': 'dot', 'target': 'telegram-agent',
+                 'action': 'send', 'room': room}
+    routes['dot-telegram-send'] = {**route, 'approval': approval, 'time': datetime.now(timezone.utc).isoformat()}
+    commit_registry(data / 'agents.json', registry, actor='coach', reason=operation['kind'], approval=approval)
+    publish_inventory(settings, data, registry)
+    return 'applied'
 
 
 def coach_change(data, settings, registry, operation, *, approved=False, approval=None):

@@ -1,14 +1,16 @@
 # Telegram integration
 
-The optional integration creates a private, top-level **Telegram** Space. **Rooms → Telegram Bridge** contains account setup, bridge commands, and private requests. **People** contains bridged contacts and groups. Only the operator, `@telegrambot`, and `@telegram-agent` join Telegram Bridge. Open its **Set up Telegram** pin to get started.
+The optional integration creates a private, top-level **Telegram** Space for bridged contacts and groups under **People**. The **Set up Telegram** pin and private Telegram requests live in **Agents → Control Room** on the Docker control runtime. The room includes the operator, The Architect, Telegram Agent, and Dot when enabled. Telegram sign-in runs in the VPS terminal.
+
+Older deployments may still show **Telegram → Rooms → Telegram Bridge**. After upgrading, `./constellation_matrix layout` restores the managed layout and keeps the old room’s encrypted history available.
 
 Telegram Agent also joins **Agents → Office** as the Telegram specialist. Its dedicated Constellation Instance runs Amplifier over scoped ACP. [Acceptance scenarios](acceptance.md#7-verify-optional-integrations)
 
-Already set up? [Search for a Telegram user](#search-for-a-telegram-user), [use Telegram from Office](#use-telegram-from-office), [open a contact or group in Telegram Bridge](#add-a-telegram-contact-or-group), or [send a message](#write-to-a-contact-or-group).
+Already set up? [Search for a Telegram user](#search-for-a-telegram-user), [use Telegram from Office](#use-telegram-from-office), [open a contact or group](#add-a-telegram-contact-or-group), or [send a message](#write-to-a-contact-or-group).
 
 ## Ask Telegram Agent
 
-In **Agents → Office**, choose **@Task Manager** from Element’s mention picker and add one request. Task Manager mentions Telegram Agent in the same thread. Telegram Agent works through the bridge and mentions you with the outcome. You can also mention **@Telegram Agent** directly in **Telegram → Rooms → Telegram Bridge** for a private request.
+In **Agents → Office**, choose **@Task Manager** from Element’s mention picker and add one request. Task Manager mentions Telegram Agent in the same thread. Telegram Agent works through the bridge and mentions you with the outcome. You can also mention **@Telegram Agent** directly in Office. Use **Agents → Control Room** for a private request or to check **Telegram status**. A send requested there produces a poll for the operator’s approval.
 
 ## Use Telegram from Office
 
@@ -29,7 +31,7 @@ Group creation uses Telegram’s standard group type and needs at least one part
 
 ### Dot and chat updates
 
-Ask “Dot, ask Task Manager in Office to send a Telegram message to Project Room saying «Hello»” or “Dot, summarize what happened today in Project Room on Telegram through Office.” Dot uses `publish_telegram_task` and reads its own result with `get_task`. Telegram Agent tags Dot in the original Office thread. Office members can read summaries posted in the room. Requests made in Telegram Bridge receive their summary there.
+Ask “Dot, ask Task Manager in Office to send a Telegram message to Project Room saying «Hello»” or “Dot, summarize what happened today in Project Room on Telegram through Office.” Dot uses `publish_telegram_task` and reads its own result with `get_task`. Telegram Agent tags Dot in the original Office thread. Office members can read summaries posted in the room. Requests made in Control Room receive their summary there. To skip Task Manager for an explicit task, ask Dot to address Telegram Agent directly.
 
 ## Get the Telegram API credentials
 
@@ -77,7 +79,7 @@ A registration from Office verifies the bridge portal, joins the configured oper
 
 Use `./constellation_matrix telegram layout` to update the bridge, Synapse admission module, Telegram Agent and initial instructions while retaining the existing Telegram login and room IDs. The operator authenticates this configuration change during the command. Daily tasks use the running connector. To add Telegram Agent to a legacy bridge-only deployment, run `./constellation_matrix telegram setup --enable-agent`.
 
-An upgrade preserves delivery receipts and reconciles in-flight messages. Existing unapproved previews require a new explicit send request. If Telegram reports an uncertain send or group creation, check the receipt and the destination before issuing a new task.
+An upgrade preserves delivery receipts and stops the room migration while an in-flight delivery is unconfirmed. Eligible pending drafts move to new approval polls in Control Room. If Telegram reports an uncertain send or group creation, check the receipt and the destination before issuing a new task.
 
 ## Recovery and monitoring
 

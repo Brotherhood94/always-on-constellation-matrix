@@ -39,6 +39,7 @@ SERVER = re.compile(r'(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](
 OWNER = re.compile(r'[a-z0-9][a-z0-9._-]{0,63}')
 MODEL = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{2,79}')
 PROJECT = re.compile(r'[a-z][a-z0-9-]{0,38}')
+ARCHITECT_NAME = 'The Architect'
 RUNTIME_UID = 991
 ROOT_UID = 992
 RESERVED = {'monitor', 'dot', 'postgres', 'synapse', 'context', 'neo4j', 'persona-workshop',
@@ -492,6 +493,7 @@ def prepare_agent_state(data, key, entry, rooms, owner_token, settings):
     join(rooms['office'], peer, token)
     room = rooms['office']
     if is_architect:
+        request('PUT', f'{CLIENT}/profile/{encoded(peer)}/displayname', {'displayname': ARCHITECT_NAME}, token)
         room = rooms['alerts']
         invite(room, peer, owner_token)
         join(room, peer, token)
@@ -539,6 +541,53 @@ def close_office_setup_notice(data):
         save(path, {'room': office, 'pending': False}, uid=RUNTIME_UID)
 
 
+def control_audience(settings, rooms):
+    server = settings['server_name']
+    keys = ['the-architect']
+    if settings['dot']:
+        keys.append('dot')
+    if settings['telegram']:
+        keys.append('telegram-agent')
+    return [rooms['owner'], *(f'@{key}:{server}' for key in keys)]
+
+
+def provision_control(settings, data, rooms, token):
+    if not settings.get('control_runtime') or settings.get('twin'):
+        return
+    from layout import reconcile_direct_account_data, room_route
+    room = rooms['alerts']
+    audience = control_audience(settings, rooms)
+    state = request('GET', room_route(room) + '/state', token=token)
+    shared = {event['type']: event['content'] for event in state if not event['state_key']}
+    if (shared.get('m.room.create', {}).get('m.federate') is not False or
+            shared.get('m.room.join_rules', {}).get('join_rule') != 'invite' or
+            shared.get('m.room.history_visibility', {}).get('history_visibility') != 'joined' or
+            shared.get('m.room.encryption', {}).get('algorithm') != 'm.megolm.v1.aes-sha2' or
+            'm.room.tombstone' in shared):
+        raise ValueError('Control Room must be local, invite-only and encrypted with joined history.')
+    previous_path = data / 'bot/control-audience.json'
+    previous = load(previous_path) if previous_path.exists() else []
+    members = {event['state_key'] for event in state if event['type'] == 'm.room.member'
+               and event['content'].get('membership') in {'invite', 'join'}}
+    if members - set(audience) - set(previous):
+        raise ValueError('Control Room contains an unexpected participant.')
+    for peer in members - set(audience):
+        request('POST', room_route(room) + '/kick', {'user_id': peer}, token)
+    if settings['dot']:
+        peer = f"@dot:{settings['server_name']}"
+        invite(room, peer, token)
+        join(room, peer, (data / 'state/dot/matrix/matrix-token').read_text().strip())
+        save(data / 'state/dot/matrix/control-room-id', room + '\n', uid=RUNTIME_UID)
+        save(data / 'state/dot/matrix/control-audience.json', audience, uid=RUNTIME_UID)
+    reconcile_direct_account_data(rooms['owner'], {room: None}, token)
+    save(previous_path, audience, uid=RUNTIME_UID)
+    config_path = data / 'state/the-architect/config.json'
+    if config_path.exists():
+        config = load(config_path)
+        if config.get('control_audience') != audience:
+            save(config_path, {**config, 'control_audience': audience}, mode=0o444)
+
+
 def provision_layout(settings, data, registry, passphrase, *, unattended=False, office_setup=False):
     from roster import prepare_management
 
@@ -554,6 +603,7 @@ def provision_layout(settings, data, registry, passphrase, *, unattended=False, 
             prepare_agent_state(data, key, entry, rooms, token, settings)
         if settings['dot']:
             prepare_agent_state(data, 'dot', {'name': 'Dot'}, rooms, token, settings)
+        provision_control(settings, data, rooms, token)
         if settings['telegram']:
             provision_telegram_layout(settings, data, rooms, token, unattended=unattended, join_office=not office_setup)
         save(data / 'rooms.json', rooms)
@@ -634,8 +684,12 @@ def publish_dashboard(settings, data):
             save(data / 'dashboard' / name, (SOURCE / 'dashboard' / name).read_text(), mode=0o644)
     bridge_room = data / 'telegram/guide/room-id'
     bridge = bridge_room.read_text().strip() if settings['telegram'] and bridge_room.is_file() else None
+    layout_path = data / 'telegram/layout.json'
+    telegram_layout = load(layout_path) if bridge and layout_path.is_file() else {}
     save(data / 'dashboard/links.json', {'dashboard': settings['dashboard_url'], 'context': settings['context_url'],
                                          'telegramAgent': telegram_agent_selected(settings),
+                                         **({'telegramInControlRoom': True, 'telegramArchive': 'https://matrix.to/#/' + encoded(telegram_layout['archive']) if telegram_layout.get('archive') else None}
+                                            if telegram_layout.get('shared') else {}),
                                          **({'telegramBridge': 'https://matrix.to/#/' + encoded(bridge)}
                                             if bridge and re.fullmatch(r'![^\s/]{1,240}', bridge) else {})}, mode=0o644)
 
@@ -886,6 +940,8 @@ def install(data, args, *, entered=None):
         registry = load(registry_path) if registry_path.exists() else {
             'local_server': settings['server_name'], 'dynamic_handoffs': True, 'agents': {},
             'team_version': 1 if set(settings['agents']).intersection({'chief-of-staff', 'manager'}) else 2}
+        if 'the-architect' in registry['agents']:
+            registry['agents']['the-architect']['name'] = ARCHITECT_NAME
         if any(entry.get('retirement') for entry in registry['agents'].values()):
             raise ValueError('Resume the pending agent removal before reinstalling')
         if current and current.get('maintenance'):
@@ -1235,15 +1291,18 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
 
     owner = rooms['owner']
     config = root / 'connector/config.json'
-    migrating = config.is_file() and not load(config).get('bridgeControl')
+    shared = rooms['alerts'] if settings.get('control_runtime') and not settings.get('twin') else None
+    migrating = config.is_file() and (not load(config).get('bridgeControl') or
+                                      shared and load(config).get('controlRoom') != shared)
     if migrating:
         run_telegram(data, 'quiesce-layout')
     try:
         office = rooms['office'] if join_office and telegram_agent_selected(settings) else None
         layout = reconcile_layout(root, settings['server_name'], owner, token, rooms['space'],
-                                  office=office, bridge_active=active, select=select)
+                                  office=office, bridge_active=active, select=select, control=shared,
+                                  audience=control_audience(settings, rooms) if shared else None)
     except BaseException:
-        if migrating and not load(config).get('bridgeControl'):
+        if migrating:
             run_telegram(data, 'resume-layout')
         raise
     if active and (root / 'guide/space-db').is_file():
@@ -1251,14 +1310,14 @@ def provision_telegram_layout(settings, data, rooms, token, bridge_room=None, *,
                           '-U', 'synapse', '-d', 'matrix_telegram', '--set', f'owner={owner}',
                           input="SELECT room, peer FROM telegram_space_sent_portal WHERE owner = :'owner';\n",
                           capture_output=True, text=True).stdout.splitlines()
-        classify_telegram_rooms(layout['space'], owner, token, [row.split('|', 1) for row in portals], bridge=layout['bridge'])
+        classify_telegram_rooms(layout['space'], owner, token, [row.split('|', 1) for row in portals], bridge=layout['control'])
     if settings['dot']:
         root_state = data / 'state/dot/matrix'
         prior_config = root_state / 'telegram-control.json'
         previous = load(prior_config) if prior_config.is_file() else {}
         legacy = previous.get('legacy') or (previous.get('room') if not previous.get('local') else None)
-        save(prior_config, {'room': layout['bridge'], 'owner': owner, 'local': True,
-                            **({'legacy': legacy} if legacy and legacy != layout['bridge'] else {})}, uid=RUNTIME_UID)
+        save(prior_config, {'room': layout['control'], 'owner': owner, 'local': True,
+                            **({'legacy': legacy} if legacy and legacy != layout['control'] else {})}, uid=RUNTIME_UID)
     return layout
 
 
@@ -1272,6 +1331,18 @@ def workspace_layout(data, args, *, token=None):
     try:
         verify_operator(rooms, token)
         with operator_lock(data):
+            settings, registry = open_existing(data)
+            provision_control(settings, data, rooms, token)
+            if 'the-architect' in registry['agents']:
+                entry = registry['agents']['the-architect']
+                if entry['name'] != ARCHITECT_NAME:
+                    gateway = data / 'state/the-architect/gateway-credentials/matrix-token'
+                    peer = f"@the-architect:{settings['server_name']}"
+                    request('PUT', f'{CLIENT}/profile/{encoded(peer)}/displayname',
+                            {'displayname': ARCHITECT_NAME}, gateway.read_text().strip())
+                    entry['name'] = ARCHITECT_NAME
+                    commit_registry(data / 'agents.json', registry, actor=settings['owner'], reason='display name')
+                    publish_inventory(settings, data, registry)
             for key in ('the-architect', 'root'):
                 path = data / 'state' / key / 'matrix/room-id'
                 if path.is_file():
@@ -1280,6 +1351,10 @@ def workspace_layout(data, args, *, token=None):
                         reconcile_direct_account_data(rooms['owner'], {room: None}, token)
         if settings['telegram']:
             telegram(data, ['layout'], operator_token=token)
+        if settings.get('control_runtime'):
+            compose(data, 'up', '-d', '--no-deps', '--build', 'monitor')
+            if not settings['telegram'] and registry['agents'].get('the-architect', {}).get('active'):
+                compose(data, '--profile', 'agents', 'up', '-d', '--no-deps', '--force-recreate', 'the-architect')
     finally:
         if owns_token:
             request('POST', CLIENT + '/logout', {}, token)
@@ -1342,8 +1417,11 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None, owner
                 compose_config(settings, data, registry)
                 if action == 'activate':
                     run_telegram(data, action)
+                provision_control(settings, data, workspace, token)
                 rooms = provision_telegram_layout(settings, data, workspace, token, options.bridge_room)
                 publish_dashboard(settings, data)
+                if settings.get('control_runtime') and registry['agents'].get('the-architect', {}).get('active'):
+                    compose(data, '--profile', 'agents', 'up', '-d', '--no-deps', '--force-recreate', 'the-architect')
                 guide_args = ('--refresh-bridge',) if action == 'layout' else ()
                 run_telegram(data, 'start-guide', *guide_args)
                 coordinator = telegram_office_agent(registry)
@@ -1356,9 +1434,10 @@ def telegram(data, args, owner_password_file=None, *, operator_token=None, owner
             finally:
                 if operator_token is None:
                     request('POST', CLIENT + '/logout', {}, token)
-        print('In Element, open Telegram → Rooms → Telegram Bridge → Pinned messages.')
-        if rooms['bridge']:
-            print('Telegram Bridge is linked under Telegram.')
+        if settings.get('control_runtime') and rooms['control'] == workspace['alerts']:
+            print('In Element, open Agents → Control Room → Pinned messages.')
+        else:
+            print('In Element, open Telegram → Rooms → Telegram Bridge → Pinned messages.')
         return
     run_telegram(data, *args)
     if args[0] == 'prepare-agent':
@@ -1431,7 +1510,7 @@ def main():
     hiring = commands.add_parser('hiring', help='Manage the Office hiring tool catalog').add_subparsers(dest='action', required=True)
     hiring.add_parser('connect', help='Connect a reusable provider account')
     hiring.add_parser('tools', help='Replace the approved hiring catalog with a JSON file').add_argument('manifest', type=Path)
-    maintenance = commands.add_parser('maintenance', help='Configure scoped TheArchitect maintenance').add_subparsers(
+    maintenance = commands.add_parser('maintenance', help='Configure scoped The Architect maintenance').add_subparsers(
         dest='action', required=True)
     maintenance_enable = maintenance.add_parser('enable')
     maintenance_enable.add_argument('--restart-service', action='append', metavar='CONNECTOR')
@@ -1490,6 +1569,7 @@ def main():
                          help='Permanently delete the deployment data, backups, and project volumes.')
     twins = commands.add_parser('twin').add_subparsers(dest='action', required=True)
     twins.add_parser('list')
+    twins.add_parser('setup', help='Choose a provider, model and roster for a test workspace')
     for action in ('status', 'stop', 'access'):
         twins.add_parser(action).add_argument('id')
     context = commands.add_parser('context').add_subparsers(dest='action', required=True)

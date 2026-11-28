@@ -71,9 +71,9 @@ def setup(data, arguments=(), *, install_agent=True, owner_passphrase=None):
             if stage == 'ready':
                 run_telegram(data, 'metrics')
                 if install_agent:
-                    print('Telegram Agent is running. Mention @Telegram Agent in Office or Telegram Bridge.')
+                    print('Telegram Agent is running. Mention @Telegram Agent in Office or Control Room.')
                 else:
-                    print('Your Telegram account is linked in Telegram Bridge.')
+                    print('Your Telegram account is linked.')
                 return
             if stage == previous:
                 print(f'Telegram setup is still pending. Resume with:\n  {command}')

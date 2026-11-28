@@ -3413,6 +3413,10 @@ _OFFICE_REVIEWS = {
     "participation": ({"room", "event", "user"},
         "MATCH (e:Event {workspace:$workspace,office_reply:$event,office_room:$room}) "
         "WHERE e.office_actor=$user OR e.office_to=$user RETURN e.office_request AS request LIMIT 1"),
+    "telegram-deliveries": ({"room", "since"},
+        "MATCH (e:Event {workspace:'telegram',created_by:'telegram-agent'}) "
+        "WHERE e.event_name='telegram:office_delivery' AND e.telegram_office_room=$room AND e.occurred_at>=datetime($since) "
+        "RETURN e.data AS data,e.occurred_at AS at ORDER BY e.occurred_at DESC LIMIT 100"),
     "tool-check": ({"actor", "prefix"},
         "MATCH (e:OfficeToolCheckEvent {workspace:$workspace,created_by:$actor}) "
         "WHERE e.node_id STARTS WITH $prefix RETURN e.data AS data LIMIT 1"),
@@ -3429,6 +3433,8 @@ _OFFICE_REVIEWS = {
 async def office_review(report: str, body: dict[str, str], request: Request) -> Response:
     """Return a bounded Office report to a contributor holding read access to that workspace."""
     require_workspace_access(request, "agents-team", "data:read")
+    if report == "telegram-deliveries" and request.scope.get("state", {}).get("contributor_id") != "coach":
+        raise HTTPException(status_code=403, detail="Telegram route evidence is only available to Coach")
     query = _OFFICE_REVIEWS.get(report)
     if query is None or set(body) != query[0] or not all(0 < len(value) <= 512 for value in body.values()):
         raise HTTPException(status_code=422, detail="Invalid Office report or parameters")

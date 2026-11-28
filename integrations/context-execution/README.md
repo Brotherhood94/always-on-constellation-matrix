@@ -38,6 +38,6 @@ RETURN task.office_thread AS thread, task.office_request AS request,
 LIMIT 80
 ```
 
-`created_by` identifies the authenticated contributor. Late events can fill in earlier missing handoff steps. Retries preserve the original event identity. Office receives only the sanitized TheArchitect receipt, whose `office_operation` matches `vps_operation_id` on audit events in the separate `root-operations` workspace. These Office relationships apply to new activity after the upgrade.
+`created_by` identifies the authenticated contributor. Late events can fill in earlier missing handoff steps. Retries preserve the original event identity. Office receives only the sanitized The Architect receipt, whose `office_operation` matches `vps_operation_id` on audit events in the separate `root-operations` workspace. These Office relationships apply to new activity after the upgrade.
 
 Run `bash tests/isolated` in this directory for the disposable Context Intelligence and Neo4j check.

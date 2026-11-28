@@ -226,11 +226,39 @@ def verify_matrix_evidence(path):
     print('Evidence from two encrypted Matrix tasks projected through Neo4j with the original direction and outcomes.')
 
 
+def verify_telegram_delivery_evidence():
+    room = '!office:fixture.test'
+    since = '2026-11-24T15:00:00Z'
+    timestamp = '2026-11-24T15:02:00Z'
+    for index, target_room in enumerate((room, room, '!different:fixture.test')):
+        payload = {'event': 'telegram:office_delivery', 'workspace': 'telegram', 'idempotency_key': f'receipt-{index}',
+                   'data': {'session_id': f'telegram-fixture-{index}', 'timestamp': timestamp, 'room': target_room,
+                            'request': f'$send-{index}', 'thread': '$thread', 'result_event': f'$receipt-{index}',
+                            'route': 'task-manager'}}
+        post('events', payload, 'fixture-telegram')
+        post('events', payload, 'fixture-telegram')
+    params = {'room': room, 'since': since}
+    report = 'office/review/telegram-deliveries'
+    for _ in range(60):
+        results = post(report, params, 'fixture-coach')['results']
+        if len(results) == 2:
+            break
+        time.sleep(0.15)
+    assert {json.loads(row['data'])['result_event'] for row in results} == {'$receipt-0', '$receipt-1'}, results
+    assert post(report, {**params, 'since': '2026-11-24T15:03:00Z'}, 'fixture-coach')['results'] == []
+    try:
+        post(report, params, 'fixture-desk-reader')
+        raise AssertionError('Scouter unexpectedly viewed Telegram routing evidence')
+    except urllib.error.HTTPError as error:
+        assert error.code == 403, error
+    print('Only Coach can read deduplicated Telegram delivery evidence for the requested Office and time window.')
+
+
 if __name__ == '__main__':
     if sys.argv[1:] == ['config']:
         ids = {**{token: f'writer-{name}' if name in ('first', 'second') else name
                   for name, token in writers.items()}, reader: 'reader', 'fixture-desk-reader':'scouter',
-               publisher: 'office-topology@deployment'}
+               publisher: 'office-topology@deployment', 'fixture-coach': 'coach', 'fixture-telegram': 'telegram-agent'}
         print(json.dumps({'auth_mode': 'static', 'allow_unauthenticated': False,
                           'access_control_mode': 'scoped', 'neo4j_url': 'bolt://neo4j:7687',
                           'api_keys_store_path': '/data/identity/api-keys.json',
@@ -238,8 +266,8 @@ if __name__ == '__main__':
                                        for token, identity in ids.items()},
                           'contributor_grants': {identity: ({'all_workspaces': True, 'capabilities': ['data:read']}
                               if identity == 'reader' else {'workspaces': ['root-operations' if identity == 'the-architect-ops'
-                                                                         else workspace], 'capabilities': ['data:read','live:write']
-                                                                         if identity in {'scouter', 'office-topology@deployment'} else ['live:write']})
+                                                                         else 'telegram' if identity == 'telegram-agent' else workspace], 'capabilities': ['data:read','live:write']
+                                                                         if identity in {'scouter', 'coach', 'office-topology@deployment'} else ['live:write']})
                               for identity in ids.values()}}))
         raise SystemExit(0)
     asyncio.run(verify())
@@ -260,6 +288,7 @@ if __name__ == '__main__':
     print('Chronological steps, ordered tasks, independent traces, authenticated authors and cutoff verified.')
     verify_office()
     verify_topology()
+    verify_telegram_delivery_evidence()
     matrix_evidence = Path('/tmp/office-evidence.json')
     if matrix_evidence.is_file():
         verify_matrix_evidence(matrix_evidence)

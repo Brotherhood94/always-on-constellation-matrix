@@ -42,7 +42,7 @@ docker exec -e MATRIX_SERVER_NAME=fixture.test -e MATRIX_LOCAL_PORT=8008 \
   -e MATRIX_REGISTRATION_SECRET=synthetic-test-registration-secret -e PYTHONPATH=/deploy:/telegram \
   "$name" python -B /test.py
 office_connector_mounts=()
-for module in connector matrix-routing matrix-session telegram-intent telegram-office staffing-office capability-dispatch matrix-media store; do
+for module in connector dot-control matrix-routing matrix-session telegram-intent telegram-office staffing-office capability-dispatch matrix-media store; do
   office_connector_mounts+=(-v "$src/agents/connector/$module.mjs:/app/$module.mjs:ro")
 done
 if [[ ${MATRIX_OPERATIONS_SMOKE:-0} == 1 ]]; then
