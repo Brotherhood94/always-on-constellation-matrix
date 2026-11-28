@@ -167,7 +167,7 @@ export async function openDesk({client, db, catalog, office, owner, planner, act
     const jobs = improvementJobs(actor, rows, roster);
     if (staffing) staffingBatch = {examples:staffingExamples(rows, roster), exact:jobs};
     else for (const [id,job] of jobs) queue(id,job);
-    if (actor === 'coach' && enabled && roster.some(agent => agent.key === 'telegram-agent' && agent.active)) {
+    if (actor === 'coach' && enabled && planner && roster.some(agent => agent.key === 'telegram-agent' && agent.active)) {
       const after = Date.now() - 30 * 86400_000;
       const result = await contextRequest('/office/review/telegram-deliveries', token, { room: office, since: new Date(after).toISOString() });
       const shortcut = catalog.current().routingShortcuts?.['dot-telegram-send'];
