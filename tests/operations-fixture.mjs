@@ -11,6 +11,7 @@ import { WebSocketServer } from 'ws';
 import matrix from '@vector-im/matrix-bot-sdk';
 import { openRoomClient, sendEncrypted } from './matrix-session.mjs';
 import { mentionMessage } from './matrix-format.mjs';
+import { telegramHandoffKey } from './telegram-office.mjs';
 import { createRosterApproval } from './chief-of-staff/direct/roster-approval.mjs';
 
 const url = 'http://synapse:8008';
@@ -178,7 +179,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   const ws = new WebSocketServer({ server, path: '/api/v1/acp' });
   const records = [];
   const telegramSocket = join(base, 'telegram-fixture.sock');
-  const telegramMessage = { target: 'Sample Contact', type: 'direct', text: 'Exact «fixture» text.\nSecond line.' };
+  const telegramMessage = { action: 'draft', target: 'Sample Contact', type: 'direct', text: 'Exact «fixture» text.\nSecond line.' };
   const telegramLink = 'https://matrix.to/#/!private%3Afixture.test/%24approval';
   let telegramStatus = 'awaiting_approval';
   const telegramSubmissions = [];
@@ -204,6 +205,8 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     status: 'Available', capabilities: [{ code: 'welcome-tip', description: 'Write one welcome tip.', resources: ['task:*'] }] };
   const manager = { id: '@manager:' + domain, key: 'manager', name: 'Manager', role: 'coordinator',
     limits: 'Fixture', status: 'Available', capabilities: [] };
+  const specialist = { id: '@telegram-agent:' + domain, key: 'telegram-agent', name: 'Telegram Agent', role: 'worker',
+    limits: 'Fixture', status: 'Available', capabilities: [], contacts: [] };
   const handoff = { agent: 'analyst', capability: 'welcome-tip', resource: 'task:welcome' };
   const policyRevision = 'a'.repeat(32);
   let turn = 0;
@@ -242,7 +245,7 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
   try {
     await writeFile(catalog, JSON.stringify({ version: 1, time: Math.floor(Date.now() / 1000),
       dynamicHandoffs: true, contactPolicy: true, policyRevision, agents: [
-        {...manager, contacts:[analyst.key]}, {...analyst, contacts:[]}] }));
+        {...manager, contacts:[analyst.key, specialist.key]}, {...analyst, contacts:[]}, specialist] }));
     for (const agent of [manager, analyst]) {
       const agentState = join(base, 'welcome-' + agent.key);
       await mkdir(agentState);
@@ -346,8 +349,11 @@ async function welcomeFixture(office, chiefRoom, ownerToken, pins, tool, catalog
     });
     assert.equal(waiting.outcome, null);
     assert.equal(waiting.telegram.bridge_thread_url, telegramLink);
+    const dispatch = await eventually(() => findMessage(item => item.sender === manager.id &&
+      item.content[telegramHandoffKey]?.request === requestId));
+    assert.deepEqual(dispatch.content['m.mentions'].user_ids, [specialist.id]);
     assert.deepEqual(telegramSubmissions, [{ method: 'submit', id: requestId, room: office, actor: manager.id,
-      sender: '@dot:' + domain, telegram: telegramMessage }]);
+      sender: '@dot:' + domain, telegram: telegramMessage, handoff: dispatch.event_id }]);
     const duplicate = (await tool('publish_telegram_task', telegramTask)).result.structuredContent;
     assert.equal(duplicate.thread_url, published.thread_url);
     const changed = await tool('publish_telegram_task', { ...telegramTask, text: 'Different text' });
